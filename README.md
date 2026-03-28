@@ -20,11 +20,11 @@
 ```mermaid
 flowchart LR
     A["Raw Medical Datasets<br/>(WESAD, VitalDB, v.v)"] -->|etl_pipeline| B["Normalized Artifacts<br/>(.parquet)"]
-    B -->|O(1) Hash Map| C["DatasetRegistry<br/>(simulator_core)"]
+    B -->|Fast Hash Map| C["DatasetRegistry<br/>(simulator_core)"]
     C -->|Simulate Tick| D["Generators<br/>(Vitals, Motion, Fall)"]
     D --> E["FastAPI Runtime<br/>(port 8090)"]
     E <--> F["React Dashboard<br/>(port 5173)"]
-    E -->|MQTT / HTTP POST| G["HealthGuard Backend"]
+    E -->|MQTT - HTTP POST| G["HealthGuard Backend"]
 ```
 
 ---
