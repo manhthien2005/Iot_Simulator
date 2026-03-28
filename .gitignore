@@ -1,0 +1,64 @@
+# Python cache and test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Node.js dependencies and build outputs
+node_modules/
+dist/
+build/
+.vite/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Logs and local runtime files
+*.log
+*.pid
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local planning artifacts
+task_plan.md
+findings.md
+progress.md
+
+# Local test artifact folders
+normalized_artifacts_runtime_test/
+normalized_artifacts_test/
+
+# Dataset files — large binary data, distributed via Drive/Kaggle instead
+# See datasets/DATASET_MANIFEST.md and datasets/DOWNLOAD_GUIDE.md for download instructions
+datasets/**/*.zip
+datasets/**/*.gz
+datasets/**/*.dat
+datasets/**/*.pkl
+datasets/**/*.pkl.gz
+datasets/**/*.edf
+datasets/**/*.rec
+datasets/**/*.csv
+datasets/**/Raw/
+datasets/**/normalized/
+datasets/**/etl/
+
+# Normalized ETL artifacts — rebuilt locally by running etl_pipeline/normalize.py
+normalized_artifacts/
