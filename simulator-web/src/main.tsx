@@ -6,14 +6,21 @@ import { Toaster } from "sonner";
 import App from "./App";
 import "./index.css";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    },
+  },
+});
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <App />
-        <Toaster position="top-right" richColors theme="dark" duration={4000} />
+        <Toaster position="bottom-right" richColors theme="dark" duration={4000} />
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>

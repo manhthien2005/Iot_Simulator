@@ -11,6 +11,7 @@ class Persona:
     age: int = 70
     weight_kg: float = 65.0
     height_cm: float = 165.0
+    gender: str | None = None
     seed: int = 7
 
 

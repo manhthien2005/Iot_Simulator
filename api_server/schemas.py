@@ -40,6 +40,7 @@ class PersonaConfig(BaseModel):
     age: int = 70
     weight_kg: float = 65.0
     height_cm: float = 165.0
+    gender: str | None = None
     seed: int = 7
 
 
@@ -227,3 +228,22 @@ class RiskTriggerRequest(BaseModel):
 class ApplyScenarioRequest(BaseModel):
     device_id: str
     scenario_id: str
+
+
+class AdminCreateDeviceSimRequest(BaseModel):
+    """Request body khi tạo device qua Simulator Admin UI."""
+
+    device_name: str
+    device_type: str = "smartwatch"
+    serial_number: str | None = None
+    user_email: str | None = None
+
+
+class AdminAssignUserRequest(BaseModel):
+    """Request body khi bind device cho user."""
+
+    user_email: str
+
+
+class BatchActivateRequest(BaseModel):
+    device_ids: list[int]

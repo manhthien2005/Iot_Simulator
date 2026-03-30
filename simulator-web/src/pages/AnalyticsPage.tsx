@@ -1,19 +1,24 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { Suspense, lazy, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { type ColumnDef, type Table, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import ReactECharts from "echarts-for-react";
 import { Moon, ShieldAlert, Watch } from "lucide-react";
-import { HypnogramChart } from "../components/charts/HypnogramChart";
-import { RiskHistoryChart } from "../components/charts/RiskHistoryChart";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Skeleton } from "../components/ui/Skeleton";
 import { useDevices } from "../hooks/useDevices";
-import { getRiskScore, getSleepSession, injectRiskScore, triggerRiskCalculation } from "../services/analyticsApi";
+import { getRiskScore, getSleepSession, injectRiskScore, pushSleepSession, triggerRiskCalculation } from "../services/analyticsApi";
 import type { RiskContribution, RiskLevel, RiskType, SleepHistoryRow } from "../types/analytics";
 import { notify } from "../utils/toast";
+
+const LazyReactECharts = lazy(() => import("echarts-for-react"));
+const LazyHypnogramChart = lazy(() =>
+  import("../components/charts/HypnogramChart").then((module) => ({ default: module.HypnogramChart }))
+);
+const LazyRiskHistoryChart = lazy(() =>
+  import("../components/charts/RiskHistoryChart").then((module) => ({ default: module.RiskHistoryChart }))
+);
 
 type AnalyticsTab = "sleep" | "risk";
 
@@ -33,6 +38,9 @@ export function AnalyticsPage() {
   const [riskType, setRiskType] = useState<RiskType>("general");
   const [riskLevel, setRiskLevel] = useState<RiskLevel>("MEDIUM");
   const [injectScore, setInjectScore] = useState<string>("0.72");
+  const pushSleepMutation = useMutation({
+    mutationFn: async () => pushSleepSession(deviceId),
+  });
 
   useEffect(() => {
     if (!devices.length) {
@@ -187,6 +195,19 @@ export function AnalyticsPage() {
     notify.success("Đã tiêm rủi ro và tạo XAI.");
   };
 
+  const onPushSleep = async () => {
+    if (!deviceId) {
+      notify.error("Cần chọn thiết bị trước khi đẩy dữ liệu.");
+      return;
+    }
+    try {
+      await pushSleepMutation.mutateAsync();
+      notify.success("Đã đẩy dữ liệu giấc ngủ lên backend mobile.");
+    } catch {
+      notify.error("Không thể đẩy dữ liệu giấc ngủ lên backend mobile.");
+    }
+  };
+
   if (devicesLoading) {
     return (
       <section style={{ display: "grid", gap: "12px" }}>
@@ -247,6 +268,18 @@ export function AnalyticsPage() {
             {sleepQuery.data?.banner ?? fallbackBanner}
           </div>
 
+          <Card>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}>
+              <div style={{ display: "grid", gap: "4px" }}>
+                <strong>Đẩy dữ liệu giấc ngủ</strong>
+                <small style={{ color: "var(--text-secondary)" }}>Gửi phiên Sleep hiện tại qua endpoint push riêng, không cần gọi GET có side effect.</small>
+              </div>
+              <Button variant="primary" onClick={onPushSleep} loading={pushSleepMutation.isPending} disabled={!deviceId || sleepQuery.isLoading}>
+                Đẩy dữ liệu
+              </Button>
+            </div>
+          </Card>
+
           {sleepQuery.isLoading ? (
             <Skeleton style={{ height: "240px" }} />
           ) : (
@@ -262,7 +295,9 @@ export function AnalyticsPage() {
           )}
 
           <Card header={<strong>Biểu đồ hypnogram</strong>}>
-            <HypnogramChart phases={sleepQuery.data?.phases ?? []} />
+            <Suspense fallback={<ChartFallback height={260} />}>
+              <LazyHypnogramChart phases={sleepQuery.data?.phases ?? []} />
+            </Suspense>
           </Card>
 
           <Card header={<strong>Lịch sử giấc ngủ (7 đêm)</strong>}>
@@ -276,7 +311,9 @@ export function AnalyticsPage() {
           ) : (
             <Card>
               <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: "12px", alignItems: "center" }}>
-                <ReactECharts option={gaugeOption} style={{ height: "220px", width: "100%" }} />
+                <Suspense fallback={<ChartFallback height={220} />}>
+                  <LazyReactECharts option={gaugeOption} style={{ height: "220px", width: "100%" }} />
+                </Suspense>
                 <div style={{ display: "grid", gap: "8px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <strong>Mức rủi ro</strong>
@@ -329,7 +366,9 @@ export function AnalyticsPage() {
           </Card>
 
           <Card header={<strong>Lịch sử rủi ro (30 ngày)</strong>}>
-            <RiskHistoryChart points={riskQuery.data?.history ?? []} />
+            <Suspense fallback={<ChartFallback height={260} />}>
+              <LazyRiskHistoryChart points={riskQuery.data?.history ?? []} />
+            </Suspense>
           </Card>
         </div>
       )}
@@ -344,6 +383,10 @@ function SleepMetric(props: { title: string; value: string }) {
       <div style={{ marginTop: "6px", fontFamily: "var(--font-mono)", fontSize: "18px", fontWeight: 700 }}>{props.value}</div>
     </div>
   );
+}
+
+function ChartFallback(props: { height: number }) {
+  return <Skeleton style={{ height: `${props.height}px` }} />;
 }
 
 function formatDuration(totalMinutes: number) {

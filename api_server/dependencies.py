@@ -6,15 +6,17 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from threading import RLock
+from threading import Event, RLock, Thread
 from time import monotonic
 from typing import Any
 from uuid import uuid4
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from Iot_Simulator.api_server.backend_admin_client import BackendAdminClient
+from Iot_Simulator.api_server.db import session_scope
 from Iot_Simulator.api_server.schemas import (
     AlertEvent,
     CreateDeviceRequest,
@@ -32,6 +34,7 @@ from Iot_Simulator.api_server.schemas import (
     VerificationResult,
     VitalsSample,
 )
+from Iot_Simulator.api_server.sim_admin_service import SimAdminService
 from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
 from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
 from Iot_Simulator.transport import HttpPublisher, MqttPublisher, TransportRouter
@@ -39,6 +42,63 @@ from Iot_Simulator.transport import HttpPublisher, MqttPublisher, TransportRoute
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _coerce_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _derive_age(value: Any, default: int = 35) -> int:
+    dob = _coerce_date(value)
+    if dob is None:
+        return default
+    today = datetime.now(timezone.utc).date()
+    years = today.year - dob.year
+    if (today.month, today.day) < (dob.month, dob.day):
+        years -= 1
+    return max(years, 0)
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        cast = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(cast) or math.isinf(cast):
+        return default
+    return cast
+
+
+def _normalize_gender(value: Any) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"male", "m", "man", "nam"}:
+        return "male"
+    if normalized in {"female", "f", "woman", "nu", "nữ"}:
+        return "female"
+    return normalized
+
+
+def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> dict[str, Any]:
+    return {
+        "age": _derive_age(device_info.get("date_of_birth")),
+        "weight_kg": _coerce_float(device_info.get("weight_kg"), 70.0),
+        "height_cm": _coerce_float(device_info.get("height_cm"), 170.0),
+        "gender": _normalize_gender(device_info.get("gender")),
+        "seed": db_device_id % 97,
+    }
 
 
 @dataclass
@@ -130,6 +190,49 @@ class RiskSnapshot:
     algorithm: str = "ONNX RF+LGBM"
 
 
+@dataclass
+class PendingTickPublish:
+    messages: list[dict[str, Any]]
+    clear_count: int
+
+
+@dataclass
+class PendingHeartbeatUpdate:
+    db_device_id: int
+    battery_level: int
+
+
+@dataclass
+class PendingAlertCall:
+    sim_device_id: str
+    event_type: str
+    severity: str
+    metadata: dict[str, Any] | None = None
+
+
+@dataclass
+class PreparedAlertPush:
+    sim_device_id: str
+    signature: tuple[str, str, str]
+    event_type: str
+    severity: str
+    timestamp: str
+    payload_json: str
+
+
+@dataclass
+class SessionSideEffects:
+    pending_publish: PendingTickPublish | None = None
+    pending_heartbeats: list[PendingHeartbeatUpdate] = field(default_factory=list)
+    pending_alerts: list[PendingAlertCall] = field(default_factory=list)
+
+    def extend(self, other: "SessionSideEffects") -> None:
+        if self.pending_publish is None and other.pending_publish is not None:
+            self.pending_publish = other.pending_publish
+        self.pending_heartbeats.extend(other.pending_heartbeats)
+        self.pending_alerts.extend(other.pending_alerts)
+
+
 class LogHub:
     def __init__(self) -> None:
         self._history: dict[str, list[dict[str, Any]]] = {}
@@ -181,8 +284,10 @@ class SimulatorRuntime:
             self._push_interval = 5
         self._tick_buffer: list[dict[str, Any]] = []
         self._last_push_time = 0.0
+        self._publish_in_flight = False
         self._health_backend_url = self._resolve_backend_base_url()
         self.backend_base_url = self._health_backend_url
+        self.admin_client = BackendAdminClient(self._health_backend_url)
         mqtt = MqttPublisher(topic_prefix="devices/sim", client=lambda topic, payload: True)
         http = HttpPublisher(
             endpoint=self._telemetry_ingest_endpoint(self._health_backend_url),
@@ -191,6 +296,14 @@ class SimulatorRuntime:
         self.transport_router = TransportRouter(mqtt, http)
         self._bp_last_observed: dict[str, float] = {}
         self._last_alert_pushes: dict[tuple[str, str, str], float] = {}
+        self._alert_pushes_in_flight: set[tuple[str, str, str]] = set()
+        self._db_device_active_cache: dict[int, bool] = {}
+        try:
+            self._background_tick_interval = max(0.1, float(os.environ.get("SIM_TICK_INTERVAL_SECONDS", "1")))
+        except ValueError:
+            self._background_tick_interval = 1.0
+        self._background_tick_stop = Event()
+        self._background_tick_thread: Thread | None = None
 
     @staticmethod
     def _resolve_artifacts_dir() -> Path:
@@ -237,11 +350,12 @@ class SimulatorRuntime:
 
     def _publish_device_log(self, sim_device_id: str, *, level: str, message: str, timestamp: str | None = None) -> None:
         ts = timestamp or _utc_now_iso()
-        session_ids = [
-            session.id
-            for session in self.sessions.values()
-            if sim_device_id in session.device_ids
-        ]
+        with self._lock:
+            session_ids = [
+                session.id
+                for session in self.sessions.values()
+                if sim_device_id in session.device_ids
+            ]
         if not session_ids:
             session_ids = ["system"]
         for session_id in session_ids:
@@ -256,25 +370,28 @@ class SimulatorRuntime:
                 },
             )
 
-    def _push_alert_to_backend(
+    def _prepare_alert_push_locked(
         self,
         sim_device_id: str,
         event_type: str,
         severity: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> PreparedAlertPush | None:
         device = self.devices.get(sim_device_id)
         if device is None or device.bound_db_device_id is None:
-            return
+            return None
 
         normalized_event_type = str(event_type or "").strip().lower() or "generic_alert"
         normalized_severity = str(severity or "").strip().lower() or "warning"
         signature = (sim_device_id, normalized_event_type, normalized_severity)
+        if signature in self._alert_pushes_in_flight:
+            return None
+
         now = monotonic()
         cooldown_seconds = max(float(self._push_interval), 10.0)
         last_sent_at = self._last_alert_pushes.get(signature)
         if last_sent_at is not None and now - last_sent_at < cooldown_seconds:
-            return
+            return None
 
         alert_metadata = dict(metadata or {})
         timestamp = str(
@@ -291,34 +408,136 @@ class SimulatorRuntime:
             "timestamp": timestamp,
             "metadata": alert_metadata,
         }
+        self._alert_pushes_in_flight.add(signature)
+        return PreparedAlertPush(
+            sim_device_id=sim_device_id,
+            signature=signature,
+            event_type=normalized_event_type,
+            severity=normalized_severity,
+            timestamp=timestamp,
+            payload_json=_json.dumps(payload),
+        )
+
+    def _push_alert_to_backend(
+        self,
+        sim_device_id: str,
+        event_type: str,
+        severity: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            prepared = self._prepare_alert_push_locked(
+                sim_device_id,
+                event_type=event_type,
+                severity=severity,
+                metadata=metadata,
+            )
+        if prepared is None:
+            return
         endpoint = self._telemetry_alert_endpoint(self._health_backend_url)
         try:
-            status_code = self._http_sender(endpoint, _json.dumps(payload))
+            status_code = self._http_sender(endpoint, prepared.payload_json)
         except Exception as exc:
+            with self._lock:
+                self._alert_pushes_in_flight.discard(prepared.signature)
             self._publish_device_log(
-                sim_device_id,
+                prepared.sim_device_id,
                 level="ERROR",
-                message=f"alert push failed: {normalized_event_type}/{normalized_severity} ({exc})",
-                timestamp=timestamp,
+                message=f"alert push failed: {prepared.event_type}/{prepared.severity} ({exc})",
+                timestamp=prepared.timestamp,
             )
             return
 
-        if 200 <= status_code < 300:
-            self._last_alert_pushes[signature] = now
+        with self._lock:
+            self._alert_pushes_in_flight.discard(prepared.signature)
+            if 200 <= status_code < 300:
+                self._last_alert_pushes[prepared.signature] = monotonic()
+                publish_ok = True
+            else:
+                publish_ok = False
+
+        if publish_ok:
             self._publish_device_log(
-                sim_device_id,
+                prepared.sim_device_id,
                 level="INFO",
-                message=f"alert push OK: {normalized_event_type}/{normalized_severity} -> HTTP {status_code}",
-                timestamp=timestamp,
+                message=f"alert push OK: {prepared.event_type}/{prepared.severity} -> HTTP {status_code}",
+                timestamp=prepared.timestamp,
             )
             return
 
         self._publish_device_log(
-            sim_device_id,
+            prepared.sim_device_id,
             level="ERROR",
-            message=f"alert push failed: {normalized_event_type}/{normalized_severity} -> HTTP {status_code}",
-            timestamp=timestamp,
+            message=f"alert push failed: {prepared.event_type}/{prepared.severity} -> HTTP {status_code}",
+            timestamp=prepared.timestamp,
         )
+
+    def _update_device_heartbeat(self, db_device_id: int, battery_level: int) -> None:
+        try:
+            with session_scope() as db:
+                SimAdminService.update_heartbeat(
+                    db_device_id,
+                    db,
+                    battery_level=battery_level,
+                    signal_strength=None,
+                )
+        except Exception:
+            return
+
+    def _execute_pending_tick_publish(self, pending_publish: PendingTickPublish | None) -> None:
+        if pending_publish is None:
+            return
+
+        publish_started = monotonic()
+        publish_result = None
+        try:
+            publish_result = self.transport_router.publish(pending_publish.messages, mode="http")
+        except Exception:
+            publish_result = None
+        publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
+
+        publish_ok = False
+        ack_count = 0
+        message_count = len(pending_publish.messages)
+        if publish_result is not None:
+            publish_ok = publish_result.primary.ok or (
+                publish_result.fallback is not None and publish_result.fallback.ok
+            )
+            ack_count = publish_result.primary.ack_count + (
+                publish_result.fallback.ack_count if publish_result.fallback else 0
+            )
+            message_count = publish_result.primary.message_count
+
+        with self._lock:
+            self._publish_in_flight = False
+            for session in self.sessions.values():
+                if session.status == "running":
+                    session.last_publish_ok = publish_ok
+                    session.last_publish_ack_count = ack_count
+                    session.last_publish_count = message_count
+                    session.last_publish_latency_ms = publish_latency_ms
+            if publish_ok:
+                del self._tick_buffer[: pending_publish.clear_count]
+                self._last_push_time = monotonic()
+                self._refresh_pending_sync_flags()
+
+    def _run_session_side_effects(self, effects: SessionSideEffects) -> None:
+        self._execute_pending_tick_publish(effects.pending_publish)
+
+        if effects.pending_heartbeats:
+            latest_heartbeats: dict[int, int] = {}
+            for item in effects.pending_heartbeats:
+                latest_heartbeats[item.db_device_id] = item.battery_level
+            for db_device_id, battery_level in latest_heartbeats.items():
+                self._update_device_heartbeat(db_device_id, battery_level)
+
+        for alert in effects.pending_alerts:
+            self._push_alert_to_backend(
+                alert.sim_device_id,
+                event_type=alert.event_type,
+                severity=alert.severity,
+                metadata=alert.metadata,
+            )
 
     def _push_sleep_to_backend(
         self,
@@ -326,8 +545,10 @@ class SimulatorRuntime:
         sleep_resp: SleepSessionResponse,
         user_id: int = 1,
     ) -> None:
-        device = self.devices.get(sim_device_id)
-        if device is None or device.bound_db_device_id is None:
+        with self._lock:
+            device = self.devices.get(sim_device_id)
+            bound_db_device_id = device.bound_db_device_id if device is not None else None
+        if bound_db_device_id is None:
             return
 
         phases_dict: dict[str, int] = {}
@@ -349,7 +570,7 @@ class SimulatorRuntime:
         end_time = start_time + timedelta(hours=8)
 
         payload = {
-            "db_device_id": device.bound_db_device_id,
+            "db_device_id": bound_db_device_id,
             "user_id": user_id,
             "date": sleep_resp.date,
             "score": sleep_resp.score,
@@ -384,11 +605,13 @@ class SimulatorRuntime:
             )
 
     def _trigger_risk_inference(self, sim_device_id: str) -> int | None:
-        device = self.devices.get(sim_device_id)
-        if device is None or device.bound_db_device_id is None:
+        with self._lock:
+            device = self.devices.get(sim_device_id)
+            bound_db_device_id = device.bound_db_device_id if device is not None else None
+        if bound_db_device_id is None:
             return None
 
-        payload = {"device_id": device.bound_db_device_id}
+        payload = {"device_id": bound_db_device_id}
         endpoint = self._risk_calculate_endpoint(self._health_backend_url)
         try:
             status_code = self._http_sender(
@@ -447,6 +670,7 @@ class SimulatorRuntime:
             for session in self.sessions.values():
                 if device_id in session.device_ids:
                     session.device_ids = [item for item in session.device_ids if item != device_id]
+            self._rebuild_db_device_active_cache_locked()
             self._record_event(
                 device_id=device_id,
                 event_type="device_deleted",
@@ -461,6 +685,7 @@ class SimulatorRuntime:
             device.bind_status = "bound"
             if device.state in {"draft", "provisioned", "bindable", "bound"}:
                 device.state = "bound"
+            self._rebuild_db_device_active_cache_locked()
             return device
 
     def unbind_device(self, sim_device_id: str) -> DeviceRecord:
@@ -472,7 +697,190 @@ class SimulatorRuntime:
                 device.state = "bindable"
             self._tick_buffer = [payload for payload in self._tick_buffer if payload.get("device_id") != sim_device_id]
             self._refresh_pending_sync_flags()
+            self._rebuild_db_device_active_cache_locked()
             return device
+
+    # ===========================================================================
+    # Admin Methods — Device Management via Backend DB
+    # ===========================================================================
+
+    def admin_list_db_devices(self) -> list[dict[str, Any]]:
+        """Load toàn bộ devices từ backend DB."""
+        return self.admin_client.list_devices()
+
+    def admin_find_user(self, email: str) -> dict[str, Any] | None:
+        """Tìm user theo email. Dùng trước khi bind."""
+        return self.admin_client.find_user_by_email(email)
+
+    def admin_create_db_device(
+        self,
+        device_name: str,
+        device_type: str = "smartwatch",
+        serial_number: str | None = None,
+        user_email: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Tạo device mới trong backend DB.
+        Auto-gen serial_number và mqtt_client_id nếu không truyền.
+        """
+        suffix = str(int(time.time()))[-6:]
+        safe_name = "".join(ch if ch.isalnum() else "-" for ch in device_name.lower()).strip("-") or "device"
+        auto_mqtt = f"sim-{safe_name}-{suffix}"
+        auto_serial = serial_number or f"SIM-{auto_mqtt.upper()[:12]}"
+        return self.admin_client.create_device(
+            device_name=device_name,
+            device_type=device_type,
+            serial_number=auto_serial,
+            mqtt_client_id=auto_mqtt,
+            user_email=user_email,
+        )
+
+    def admin_assign_db_device(self, device_id: int, user_email: str) -> dict[str, Any]:
+        """Bind device (đã có trong DB) cho user bằng email."""
+        return self.admin_client.assign_device(device_id, user_email)
+
+    def admin_activate_db_device(self, device_id: int) -> dict[str, Any]:
+        """
+        Kích hoạt device trong DB (is_active=True, single-active rule).
+        Tự động tạo SimDevice + Session cho device này nếu chưa có.
+        """
+        result = self.admin_client.activate_device(device_id)
+        self._ensure_sim_session_for_db_device(device_id, result)
+        return result
+
+    def admin_deactivate_db_device(self, device_id: int) -> dict[str, Any]:
+        """Tắt device. Dừng session simulator đang chạy."""
+        result = self.admin_client.deactivate_device(device_id)
+        self._stop_sim_session_for_db_device(device_id)
+        return result
+
+    def admin_delete_db_device(self, device_id: int) -> None:
+        """Xóa device khỏi DB (soft delete). Dừng session nếu đang chạy."""
+        self._stop_sim_session_for_db_device(device_id)
+        self.admin_client.delete_device(device_id)
+
+    # ── Admin Helpers ────────────────────────────────────────────────────────────
+
+    def _find_sim_id_for_db_device(self, db_device_id: int) -> str | None:
+        """Tìm sim_device_id đang map với db_device_id."""
+        for sim_id, device in self.devices.items():
+            if device.bound_db_device_id == db_device_id:
+                return sim_id
+        return None
+
+    def _find_running_session_for_sim_device(self, sim_id: str) -> SessionRecord | None:
+        """Tìm session đang running có chứa sim_id."""
+        for record in self.sessions.values():
+            if sim_id in record.device_ids and record.status == "running":
+                return record
+        return None
+
+    def _rebuild_db_device_active_cache_locked(self) -> None:
+        active_db_device_ids: dict[int, bool] = {}
+        for record in self.sessions.values():
+            if record.status != "running":
+                continue
+            for sim_id in record.device_ids:
+                device = self.devices.get(sim_id)
+                if device is None or device.bound_db_device_id is None:
+                    continue
+                active_db_device_ids[device.bound_db_device_id] = True
+        self._db_device_active_cache = active_db_device_ids
+
+    def list_running_db_device_ids(self) -> set[int]:
+        with self._lock:
+            return set(self._db_device_active_cache)
+
+    def is_db_device_sim_running(self, db_device_id: int) -> bool:
+        """
+        Returns True nếu có SimDevice bound với db_device_id này
+        VÀ đang có session running push vitals.
+        Thread-safe — dùng self._lock.
+        Không gọi DB — chỉ đọc in-memory state.
+        """
+        with self._lock:
+            return self._db_device_active_cache.get(db_device_id, False)
+
+    def _ensure_sim_session_for_db_device(self, db_device_id: int, device_info: dict[str, Any]) -> None:
+        """
+        Khi DB device được activate:
+        1. Stop các running sessions của các DB devices KHÁC cùng user.
+           Lý do: DB đã apply single-active rule trong phạm vi user hiện tại,
+           nên runtime chỉ được stop session của những device cùng user đó.
+        2. Tìm hoặc tạo SimDevice với bound_db_device_id = db_device_id.
+        3. Start session mới nếu chưa có session running.
+        """
+        same_user_other_db_device_ids: set[int] = set()
+        user_id_raw = device_info.get("user_id")
+        try:
+            user_id = int(user_id_raw) if user_id_raw is not None else None
+        except (TypeError, ValueError):
+            user_id = None
+
+        if user_id is not None:
+            with session_scope() as db:
+                same_user_devices = SimAdminService.list_all_devices(db, user_id=user_id)
+            same_user_other_db_device_ids = {
+                int(device["id"])
+                for device in same_user_devices
+                if int(device["id"]) != db_device_id
+            }
+
+        persona = _build_db_device_persona(device_info, db_device_id)
+
+        session_id_to_start: str | None = None
+        with self._lock:
+            # ── Step 1: Stop các running sessions của device KHÁC cùng user ──────
+            # Chỉ stop những SimDevices đang bound với DB devices khác cùng user.
+            # Không đụng đến session của user khác đang chạy trong cùng process.
+            for sim_id_other, dev_record in list(self.devices.items()):
+                bound_db_device_id = dev_record.bound_db_device_id
+                if bound_db_device_id is None or bound_db_device_id not in same_user_other_db_device_ids:
+                    continue
+                running = self._find_running_session_for_sim_device(sim_id_other)
+                if running is not None:
+                    self.stop_session(running.id)
+
+            # ── Step 2: Tìm hoặc tạo SimDevice ───────────────────────────────────
+            sim_id = self._find_sim_id_for_db_device(db_device_id)
+            if sim_id is None:
+                request = CreateDeviceRequest(
+                    name=str(device_info.get("device_name") or f"DBDevice-{db_device_id}"),
+                    type=str(device_info.get("device_type") or "smartwatch"),
+                    persona_config=persona,
+                )
+                sim_device_schema = self.create_device(request)
+                sim_id = sim_device_schema.id
+                sim_record = self.bind_device(sim_id, db_device_id)
+            else:
+                sim_record = self._require_device(sim_id)
+                if sim_record.bound_db_device_id != db_device_id:
+                    sim_record = self.bind_device(sim_id, db_device_id)
+
+            sim_record.persona_config = dict(persona)
+
+            # ── Step 3: Start session nếu chưa có ────────────────────────────────
+            if self._find_running_session_for_sim_device(sim_id) is None:
+                session = self.create_session([sim_id], speed=5)
+                session_id_to_start = session.get("id")
+                if session_id_to_start is None:
+                    raise RuntimeError(f"Khong the tao session cho db_device_id={db_device_id}")
+        if session_id_to_start is not None:
+            self.start_session(session_id_to_start)
+
+    def _stop_sim_session_for_db_device(self, db_device_id: int) -> None:
+        """Dừng session simulator đang chạy cho db_device_id."""
+        with self._lock:
+            sim_id = self._find_sim_id_for_db_device(db_device_id)
+            if sim_id is None:
+                return
+            session_ids = [
+                record.id
+                for record in self.sessions.values()
+                if sim_id in record.device_ids and record.status == "running"
+            ]
+            for session_id in session_ids:
+                self.stop_session(session_id)
 
     def list_sessions(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -531,6 +939,7 @@ class SimulatorRuntime:
                         age=int(config.get("age", 35)),
                         weight_kg=float(config.get("weight_kg", 70.0)),
                         height_cm=float(config.get("height_cm", 170.0)),
+                        gender=str(config.get("gender")) if config.get("gender") is not None else None,
                         seed=int(config.get("seed", 7)),
                         data_binding=sim_binding,
                     )
@@ -555,6 +964,7 @@ class SimulatorRuntime:
             }
 
     def start_session(self, session_id: str) -> None:
+        effects = SessionSideEffects()
         with self._lock:
             record = self._require_session(session_id)
             record.simulator.start()
@@ -563,13 +973,15 @@ class SimulatorRuntime:
                 if device_id in self.devices:
                     self.devices[device_id].state = "streaming"
                     self.devices[device_id].is_online = True
+            self._rebuild_db_device_active_cache_locked()
             self._record_event(
                 device_id=record.device_ids[0] if record.device_ids else "system",
                 event_type="session_started",
                 severity="normal",
                 message=f"Session {record.id} started",
             )
-            self._tick_session_locked(record, force=True)
+            effects = self._tick_session_locked(record, force=True)
+        self._run_session_side_effects(effects)
 
     def stop_session(self, session_id: str) -> None:
         with self._lock:
@@ -579,6 +991,8 @@ class SimulatorRuntime:
             for device_id in record.device_ids:
                 if device_id in self.devices:
                     self.devices[device_id].state = "bound" if self.devices[device_id].bound_db_device_id is not None else "bindable"
+                    self.devices[device_id].is_online = False
+            self._rebuild_db_device_active_cache_locked()
             self._record_event(
                 device_id=record.device_ids[0] if record.device_ids else "system",
                 event_type="session_stopped",
@@ -600,6 +1014,7 @@ class SimulatorRuntime:
             "high_risk_cardiac",
             "medium_risk_general",
         }
+        effects = SessionSideEffects()
         with self._lock:
             self._require_device(device_id)
             if scenario_id not in known:
@@ -621,7 +1036,7 @@ class SimulatorRuntime:
                 self.devices[device_id].state = self._scenario_state_hint(scenario_id)
             for record in self.sessions.values():
                 if record.status == "running" and device_id in record.device_ids:
-                    self._tick_session_locked(record, force=True)
+                    effects.extend(self._tick_session_locked(record, force=True))
             self._record_event(
                 device_id=device_id,
                 event_type="scenario_applied",
@@ -629,14 +1044,54 @@ class SimulatorRuntime:
                 message=f"Scenario applied: {scenario_id}",
                 metadata={"scenario_id": scenario_id},
             )
+        self._run_session_side_effects(effects)
 
     def tick_active(self) -> None:
+        effects = SessionSideEffects()
         with self._lock:
             for record in self.sessions.values():
                 if record.status == "running":
-                    self._tick_session_locked(record, force=False)
+                    effects.extend(self._tick_session_locked(record, force=False))
+        self._run_session_side_effects(effects)
+
+    def start_background_tick(self) -> None:
+        with self._lock:
+            if self._background_tick_thread is not None and self._background_tick_thread.is_alive():
+                return
+            self._background_tick_stop.clear()
+            self._background_tick_thread = Thread(
+                target=self._background_tick_loop,
+                name="iot-simulator-runtime-tick",
+                daemon=True,
+            )
+            self._background_tick_thread.start()
+
+    def shutdown(self, *, timeout: float = 1.0) -> None:
+        with self._lock:
+            thread = self._background_tick_thread
+            self._background_tick_thread = None
+            self._background_tick_stop.set()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+
+    def _background_tick_loop(self) -> None:
+        while not self._background_tick_stop.wait(self._background_tick_interval):
+            try:
+                self.tick_active()
+            except Exception as exc:
+                self.logs.publish(
+                    "system",
+                    {
+                        "level": "ERROR",
+                        "session_id": "system",
+                        "device_id": "system",
+                        "message": f"Background tick failed: {exc}",
+                        "ts": _utc_now_iso(),
+                    },
+                )
 
     def inject_event(self, device_id: str, event_type: str, variant: str | None) -> None:
+        effects = SessionSideEffects()
         with self._lock:
             for record in self.sessions.values():
                 if device_id in record.device_ids:
@@ -666,20 +1121,24 @@ class SimulatorRuntime:
                         metadata={"variant": variant or ""},
                     )
                     if event_type == "fall_detected":
-                        self._push_alert_to_backend(
-                            device_id,
-                            event_type="fall_detected",
-                            severity="critical",
-                            metadata={
-                                "variant": variant or "",
-                                "source": "inject_event",
-                                "timestamp": _utc_now_iso(),
-                            },
+                        effects.pending_alerts.append(
+                            PendingAlertCall(
+                                sim_device_id=device_id,
+                                event_type="fall_detected",
+                                severity="critical",
+                                metadata={
+                                    "variant": variant or "",
+                                    "source": "inject_event",
+                                    "timestamp": _utc_now_iso(),
+                                },
+                            )
                         )
                     if record.status == "running":
-                        self._tick_session_locked(record, force=True)
-                    return
-        raise KeyError(f"Device not found in active sessions: {device_id}")
+                        effects.extend(self._tick_session_locked(record, force=True))
+                    break
+            else:
+                raise KeyError(f"Device not found in active sessions: {device_id}")
+        self._run_session_side_effects(effects)
 
     def recent_events(self, limit: int = 10) -> list[AlertEvent]:
         with self._lock:
@@ -726,16 +1185,22 @@ class SimulatorRuntime:
                 "version": "simulator-api-0.3.0",
             }
 
+    def _build_sleep_session_locked(self, device_id: str) -> SleepSessionResponse:
+        self._require_device(device_id)
+        if self.registry.has_sleep_sessions():
+            raw = self.registry.sample_sleep_session()
+            return self._real_sleep_session_from_registry(device_id=device_id, raw=raw)
+        return self._fallback_sleep_session(device_id=device_id)
+
     def sleep_session(self, device_id: str) -> SleepSessionResponse:
         with self._lock:
-            self._require_device(device_id)
-            if self.registry.has_sleep_sessions():
-                raw = self.registry.sample_sleep_session()
-                result = self._real_sleep_session_from_registry(device_id=device_id, raw=raw)
-            else:
-                result = self._fallback_sleep_session(device_id=device_id)
-            self._push_sleep_to_backend(sim_device_id=device_id, sleep_resp=result)
-            return result
+            return self._build_sleep_session_locked(device_id)
+
+    def push_sleep_session(self, device_id: str) -> SleepSessionResponse:
+        with self._lock:
+            result = self._build_sleep_session_locked(device_id)
+        self._push_sleep_to_backend(sim_device_id=device_id, sleep_resp=result)
+        return result
 
     def risk_score(self, device_id: str) -> RiskScoreResponse:
         with self._lock:
@@ -796,18 +1261,20 @@ class SimulatorRuntime:
     def trigger_risk_calculation(self, request: RiskTriggerRequest) -> None:
         with self._lock:
             self._require_device(request.device_id)
-            status_code = self._trigger_risk_inference(request.device_id)
-            metadata: dict[str, str] = {}
-            if status_code is not None:
-                metadata["http_status"] = str(status_code)
 
-            if status_code is not None and 200 <= status_code < 300:
-                severity = "normal"
-                message = "Backend risk inference requested"
-            else:
-                severity = "warning"
-                message = "Backend risk inference request failed"
+        status_code = self._trigger_risk_inference(request.device_id)
+        metadata: dict[str, str] = {}
+        if status_code is not None:
+            metadata["http_status"] = str(status_code)
 
+        if status_code is not None and 200 <= status_code < 300:
+            severity = "normal"
+            message = "Backend risk inference requested"
+        else:
+            severity = "warning"
+            message = "Backend risk inference request failed"
+
+        with self._lock:
             self._record_event(
                 device_id=request.device_id,
                 event_type="risk_inference_triggered",
@@ -818,7 +1285,6 @@ class SimulatorRuntime:
 
     def latest_vitals(self, device_id: str) -> VitalsSample:
         with self._lock:
-            self.tick_active()
             for record in self.sessions.values():
                 for payload in reversed(record.last_tick_outputs):
                     if payload.get("device_id") == device_id:
@@ -860,7 +1326,6 @@ class SimulatorRuntime:
 
     def verification(self, session_id: str) -> VerificationResult:
         with self._lock:
-            self.tick_active()
             record = self._require_session(session_id)
             device_id = record.device_ids[0] if record.device_ids else "unknown"
             status = "PENDING"
@@ -884,13 +1349,14 @@ class SimulatorRuntime:
             raise KeyError(f"Session not found: {session_id}")
         return self.sessions[session_id]
 
-    def _tick_session_locked(self, record: SessionRecord, force: bool) -> None:
+    def _tick_session_locked(self, record: SessionRecord, force: bool) -> SessionSideEffects:
+        effects = SessionSideEffects()
         if record.status != "running":
-            return
+            return effects
         target_interval = float(max(record.speed, 1))
         now = monotonic()
         if not force and now - record.last_tick_monotonic < target_interval:
-            return
+            return effects
         outputs = record.simulator.tick()
         buffered_messages: list[dict[str, Any]] = []
         for payload in outputs:
@@ -913,17 +1379,25 @@ class SimulatorRuntime:
         if buffered_messages:
             self._tick_buffer.extend(buffered_messages)
         self._refresh_pending_sync_flags()
-        self._publish_tick_buffer_locked(now=now, force=force)
+        effects.pending_publish = self._publish_tick_buffer_locked(now=now, force=force)
         for payload in outputs:
             device_id = payload.get("device_id")
             if device_id in self.devices:
+                device = self.devices[device_id]
                 state = payload.get("state") or {}
                 scenario_id = self.device_scenarios.get(str(device_id), "normal_rest")
-                self.devices[device_id].battery_level = int(state.get("battery_level", self.devices[device_id].battery_level))
-                self.devices[device_id].is_online = bool(state.get("is_online", True))
-                self.devices[device_id].last_seen_at = payload.get("emitted_at")
-                if self.devices[device_id].state not in {"fall_countdown", "offline"}:
-                    self.devices[device_id].state = self._scenario_state_hint(scenario_id)
+                device.battery_level = int(state.get("battery_level", device.battery_level))
+                device.is_online = bool(state.get("is_online", True))
+                device.last_seen_at = payload.get("emitted_at")
+                if device.state not in {"fall_countdown", "offline"}:
+                    device.state = self._scenario_state_hint(scenario_id)
+                if device.bound_db_device_id is not None:
+                    effects.pending_heartbeats.append(
+                        PendingHeartbeatUpdate(
+                            db_device_id=device.bound_db_device_id,
+                            battery_level=device.battery_level,
+                        )
+                    )
             self.logs.publish(
                 record.id,
                 {
@@ -943,15 +1417,17 @@ class SimulatorRuntime:
                     severity="critical",
                     message="Fall-like motion detected during session tick",
                 )
-                self._push_alert_to_backend(
-                    str(device_id),
-                    event_type="fall_detected",
-                    severity="critical",
-                    metadata={
-                        "variant": str(state.get("fall_variant") or ""),
-                        "source": "tick",
-                        "timestamp": emitted_at,
-                    },
+                effects.pending_alerts.append(
+                    PendingAlertCall(
+                        sim_device_id=str(device_id),
+                        event_type="fall_detected",
+                        severity="critical",
+                        metadata={
+                            "variant": str(state.get("fall_variant") or ""),
+                            "source": "tick",
+                            "timestamp": emitted_at,
+                        },
+                    )
                 )
                 continue
 
@@ -965,45 +1441,37 @@ class SimulatorRuntime:
                 device_id=str(device_id),
             )
             if vitals_sample.severity in {"warning", "critical"}:
-                self._push_alert_to_backend(
-                    str(device_id),
-                    event_type="vitals_out_of_range",
-                    severity=vitals_sample.severity,
-                    metadata={
-                        "source": "tick",
-                        "timestamp": emitted_at,
-                        "heart_rate": vitals_sample.heartRate,
-                        "spo2": vitals_sample.spo2,
-                        "temperature": vitals_sample.temperature,
-                        "blood_pressure_sys": vitals_sample.bloodPressureSys,
-                        "blood_pressure_dia": vitals_sample.bloodPressureDia,
-                        "respiratory_rate": vitals_sample.respiratoryRate,
-                        "activity_label": vitals_sample.activityLabel,
-                        "scenario_id": self.device_scenarios.get(str(device_id), "normal_rest"),
-                    },
+                effects.pending_alerts.append(
+                    PendingAlertCall(
+                        sim_device_id=str(device_id),
+                        event_type="vitals_out_of_range",
+                        severity=vitals_sample.severity,
+                        metadata={
+                            "source": "tick",
+                            "timestamp": emitted_at,
+                            "heart_rate": vitals_sample.heartRate,
+                            "spo2": vitals_sample.spo2,
+                            "temperature": vitals_sample.temperature,
+                            "blood_pressure_sys": vitals_sample.bloodPressureSys,
+                            "blood_pressure_dia": vitals_sample.bloodPressureDia,
+                            "respiratory_rate": vitals_sample.respiratoryRate,
+                            "activity_label": vitals_sample.activityLabel,
+                            "scenario_id": self.device_scenarios.get(str(device_id), "normal_rest"),
+                        },
+                    )
                 )
+        return effects
 
-    def _publish_tick_buffer_locked(self, now: float, force: bool) -> None:
+    def _publish_tick_buffer_locked(self, now: float, force: bool) -> PendingTickPublish | None:
         if not self._tick_buffer:
-            return
+            return None
+        if self._publish_in_flight:
+            return None
         if not force and now - self._last_push_time < float(self._push_interval):
-            return
+            return None
         messages = list(self._tick_buffer)
-        publish_started = monotonic()
-        result = self.transport_router.publish(messages, mode="http")
-        publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
-        publish_ok = result.primary.ok or (result.fallback is not None and result.fallback.ok)
-        ack_count = result.primary.ack_count + (result.fallback.ack_count if result.fallback else 0)
-        for session in self.sessions.values():
-            if session.status == "running":
-                session.last_publish_ok = publish_ok
-                session.last_publish_ack_count = ack_count
-                session.last_publish_count = result.primary.message_count
-                session.last_publish_latency_ms = publish_latency_ms
-        if publish_ok:
-            self._tick_buffer.clear()
-            self._last_push_time = now if force else time.monotonic()
-            self._refresh_pending_sync_flags()
+        self._publish_in_flight = True
+        return PendingTickPublish(messages=messages, clear_count=len(messages))
 
     def _refresh_pending_sync_flags(self) -> None:
         pending_ids = {
@@ -1626,9 +2094,12 @@ def get_runtime() -> SimulatorRuntime:
     global _runtime_singleton
     if _runtime_singleton is None:
         _runtime_singleton = SimulatorRuntime()
+    _runtime_singleton.start_background_tick()
     return _runtime_singleton
 
 
 def reset_runtime_for_tests() -> None:
     global _runtime_singleton
+    if _runtime_singleton is not None:
+        _runtime_singleton.shutdown()
     _runtime_singleton = SimulatorRuntime()

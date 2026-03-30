@@ -8,6 +8,10 @@ export async function getSleepSession(deviceId: string): Promise<SleepSessionRes
   return response.data;
 }
 
+export async function pushSleepSession(deviceId: string): Promise<void> {
+  await apiClient.post(`/api/sim/analytics/sleep/${deviceId}/push`);
+}
+
 export async function getRiskScore(deviceId: string): Promise<RiskScoreResponse> {
   const response = await apiClient.get<RiskScoreResponse>("/api/sim/analytics/risk", {
     params: { deviceId },

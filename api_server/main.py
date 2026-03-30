@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+# Load repo-local environment before importing the API stack.
+from pathlib import Path
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+
+_ENV_CANDIDATES = [
+    Path(__file__).resolve().parents[1] / ".env",
+    Path(__file__).resolve().parents[2] / ".env",
+]
+for _env_path in _ENV_CANDIDATES:
+    if _env_path.exists():
+        load_dotenv(_env_path, override=False)
+        break
 
 from Iot_Simulator.api_server.dependencies import get_runtime
 from Iot_Simulator.api_server.routers.analytics import router as analytics_router

@@ -6,6 +6,7 @@ export function useDashboardSummary() {
     queryKey: ["dashboard", "summary"],
     queryFn: fetchDashboardSummary,
     refetchInterval: 5000,
+    refetchIntervalInBackground: false,
+    retry: false,
   });
 }
-

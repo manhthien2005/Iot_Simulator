@@ -1,13 +1,14 @@
-import type { ReactElement } from "react";
+import { lazy, type ReactElement } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppShell } from "./components/layout/AppShell";
-import { AnalyticsPage } from "./pages/AnalyticsPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { DevicesPage } from "./pages/DevicesPage";
-import { ScenariosPage } from "./pages/ScenariosPage";
-import { SessionRunnerPage } from "./pages/SessionRunnerPage";
-import { VerificationPage } from "./pages/VerificationPage";
+
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
+const DevicesPage = lazy(() => import("./pages/DevicesPage").then((module) => ({ default: module.DevicesPage })));
+const ScenariosPage = lazy(() => import("./pages/ScenariosPage").then((module) => ({ default: module.ScenariosPage })));
+const SessionRunnerPage = lazy(() => import("./pages/SessionRunnerPage").then((module) => ({ default: module.SessionRunnerPage })));
+const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
+const VerificationPage = lazy(() => import("./pages/VerificationPage").then((module) => ({ default: module.VerificationPage })));
 
 function NotFoundPage() {
   return (

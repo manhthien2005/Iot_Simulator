@@ -24,6 +24,17 @@ def get_sleep_session(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
+@router.post("/analytics/sleep/{device_id}/push", response_model=SleepSessionResponse)
+def push_sleep_session(
+    device_id: str,
+    runtime: SimulatorRuntime = Depends(get_runtime),
+) -> SleepSessionResponse:
+    try:
+        return runtime.push_sleep_session(device_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.get("/analytics/risk", response_model=RiskScoreResponse)
 def get_risk_score(
     device_id: str = Query(..., alias="deviceId"),
