@@ -4,11 +4,11 @@ import { DeviceAssignPanel } from "../components/domain/DeviceAssignPanel";
 import { FallLab } from "../components/domain/FallLab";
 import { MotionPreviewPanel } from "../components/domain/MotionPreviewPanel";
 import { SessionVitalsPanel } from "../components/domain/SessionVitalsPanel";
-import { SessionToolbar } from "../components/domain/SessionToolbar";
+
 import { useDevices } from "../hooks/useDevices";
 import { useSessions } from "../hooks/useSessions";
 import { applyScenarioPreset, fetchScenarios } from "../services/scenarioApi";
-import { createSession, startSession, stopSession } from "../services/sessionApi";
+
 import { useSessionVitalsStore } from "../stores/sessionVitalsStore";
 import { useSessionStore } from "../stores/sessionStore";
 import type { ScenarioOption } from "../types/scenario";
@@ -19,13 +19,13 @@ export function SessionRunnerPage() {
   const [searchParams] = useSearchParams();
   const preselectedDeviceId = searchParams.get("deviceId") ?? searchParams.get("device");
   const preselectedScenarioId = searchParams.get("scenario");
-  const { data: devices = [] } = useDevices(1000);
+  const { data: devices = [] } = useDevices(2000);
   const { data: sessions = [], refetch: refetchSessions } = useSessions();
   const [scenarios, setScenarios] = useState<ScenarioOption[]>([]);
   const [scenarioByDevice, setScenarioByDevice] = useState<Record<string, string>>({});
   const [monitorDeviceId, setMonitorDeviceId] = useState<string>("");
 
-  const { activeSessionId, setActiveSession, selectedDeviceIds, toggleDeviceSelection, setSelectedDeviceIds, streamSpeed, setSpeed, isPaused, setPaused } = useSessionStore();
+  const { activeSessionId, setActiveSession, streamSpeed, setSpeed, isPaused, setPaused } = useSessionStore();
 
   useEffect(() => {
     fetchScenarios().then(setScenarios).catch(() => setScenarios([]));
@@ -45,29 +45,7 @@ export function SessionRunnerPage() {
     return scenario.id;
   };
 
-  useEffect(() => {
-    const validIds = selectedDeviceIds.filter((id) => devices.some((device) => device.id === id));
-    if (validIds.length !== selectedDeviceIds.length) {
-      setSelectedDeviceIds(validIds);
-      return;
-    }
 
-    if (!devices.length) {
-      if (selectedDeviceIds.length > 0) {
-        setSelectedDeviceIds([]);
-      }
-      return;
-    }
-
-    if (preselectedDeviceId && devices.some((device) => device.id === preselectedDeviceId) && !selectedDeviceIds.includes(preselectedDeviceId)) {
-      setSelectedDeviceIds([preselectedDeviceId, ...selectedDeviceIds]);
-      return;
-    }
-
-    if (!preselectedDeviceId && selectedDeviceIds.length === 0) {
-      setSelectedDeviceIds([devices[0].id]);
-    }
-  }, [devices, preselectedDeviceId, selectedDeviceIds, setSelectedDeviceIds]);
 
   useEffect(() => {
     if (!preselectedDeviceId || !preselectedScenarioId) return;
@@ -86,11 +64,10 @@ export function SessionRunnerPage() {
     if (validCurrent) return;
 
     const fallback =
-      selectedDeviceIds.find((id) => devices.some((device) => device.id === id))
-      ?? (preselectedDeviceId && devices.some((device) => device.id === preselectedDeviceId) ? preselectedDeviceId : null)
+      (preselectedDeviceId && devices.some((device) => device.id === preselectedDeviceId) ? preselectedDeviceId : null)
       ?? devices[0].id;
     setMonitorDeviceId(fallback);
-  }, [devices, monitorDeviceId, preselectedDeviceId, selectedDeviceIds]);
+  }, [devices, monitorDeviceId, preselectedDeviceId]);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions.find((session) => session.status === "running") ?? null,
@@ -104,46 +81,7 @@ export function SessionRunnerPage() {
     return state.streamData[state.streamData.length - 1] ?? null;
   }) as VitalsSample | null;
 
-  const start = async () => {
-    const target = selectedDeviceIds.length
-      ? selectedDeviceIds.filter((id) => devices.some((device) => device.id === id))
-      : [monitorDeviceId || devices[0]?.id].filter(Boolean) as string[];
-    if (!target.length) {
-      notify.error("Hãy thêm ít nhất một thiết bị trước khi chạy.");
-      return;
-    }
-    const created = await createSession(target, streamSpeed);
-
-    const applyResults = await Promise.allSettled(
-      target.map((deviceId) => {
-        const selectedScenarioId = normalizeScenarioId(
-          scenarioByDevice[deviceId]
-          ?? (deviceId === preselectedDeviceId ? preselectedScenarioId : undefined)
-          ?? defaultScenarioId
-        );
-        return applyScenarioPreset(deviceId, selectedScenarioId);
-      })
-    );
-    const failedCount = applyResults.filter((result) => result.status === "rejected").length;
-    if (failedCount > 0) {
-      notify.warning("Một số kịch bản chưa áp dụng được đầy đủ.");
-    }
-
-    setActiveSession(created.id);
-    await startSession(created.id);
-    setPaused(false);
-    await refetchSessions();
-    notify.success("Đã bắt đầu phiên mô phỏng");
-  };
-
-  const stop = async () => {
-    if (!activeSession) return;
-    await stopSession(activeSession.id);
-    setPaused(false);
-    setActiveSession(null);
-    await refetchSessions();
-    notify.success("Đã dừng phiên mô phỏng");
-  };
+  // Removing obsolete start/stop logic since sessions are managed per device from the DevicesPage
 
   const changeScenario = async (deviceId: string, scenarioId: string) => {
     setScenarioByDevice((prev) => ({ ...prev, [deviceId]: scenarioId }));
@@ -156,39 +94,39 @@ export function SessionRunnerPage() {
     }
   };
 
+  const activeDevices = useMemo(() => devices.filter((d) => d.isOnline), [devices]);
+
+  if (!activeDevices.length) {
+    return (
+      <section style={{ display: "grid", gap: "14px", placeItems: "center", minHeight: "60vh", opacity: 0.8 }}>
+        <div style={{ textAlign: "center", display: "grid", gap: "8px" }}>
+          <h2 style={{ color: "var(--text-primary)", fontSize: "1.2rem" }}>Chưa có thiết bị nào được bật SIM</h2>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.95rem", maxWidth: "400px", lineHeight: 1.5 }}>
+            Bạn cần sang tab <strong>Thiết bị</strong> và chọn <strong>Bật SIM</strong> cho thiết bị muốn mô phỏng. Sau đó, danh sách sẽ hiển thị tại đây để bạn điều khiển kịch bản.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section style={{ display: "grid", gap: "14px" }}>
       <div>
         <h1 className="page-title">Phiên mô phỏng</h1>
-        <p className="page-subtitle">Điều khiển trạng thái phiên, gán kịch bản theo thiết bị và chạy mô phỏng té ngã.</p>
+        <p className="page-subtitle">Điều khiển trạng thái phiên, gán kịch bản và chạy té ngã cho các thiết bị đang bật SIM.</p>
       </div>
 
-      <SessionToolbar
-        hasSession={Boolean(devices.length)}
-        running={running}
-        paused={isPaused}
-        sessionId={activeSession?.id ?? null}
-        speed={streamSpeed}
-        onStart={start}
-        onStop={stop}
-        onPause={() => setPaused(true)}
-        onResume={() => setPaused(false)}
-        onSpeedChange={setSpeed}
-      />
-
       <DeviceAssignPanel
-        devices={devices}
+        devices={activeDevices}
         scenarios={scenarios}
         scenarioByDevice={scenarioByDevice}
-        selectedDeviceIds={selectedDeviceIds}
-        onToggleDevice={toggleDeviceSelection}
         onScenarioChange={changeScenario}
       />
 
-      <SessionVitalsPanel devices={devices} deviceId={monitorDeviceId} onDeviceChange={setMonitorDeviceId} />
+      <SessionVitalsPanel devices={activeDevices} deviceId={monitorDeviceId} onDeviceChange={setMonitorDeviceId} />
 
-      <FallLab devices={devices} />
-      <MotionPreviewPanel selectedDevice={devices.find((item) => item.id === monitorDeviceId) ?? null} currentVitals={currentVitals} />
+      <FallLab devices={activeDevices} />
+      <MotionPreviewPanel selectedDevice={activeDevices.find((item) => item.id === monitorDeviceId) ?? null} currentVitals={currentVitals} />
     </section>
   );
 }

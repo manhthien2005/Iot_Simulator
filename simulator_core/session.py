@@ -107,10 +107,17 @@ def build_device(
     age: int = 35,
     weight_kg: float = 70.0,
     height_cm: float = 170.0,
+    gender: str | None = None,
     seed: int = 7,
     data_binding: DataBinding | None = None,
 ) -> DeviceContext:
-    persona = Persona(age=age, weight_kg=weight_kg, height_cm=height_cm, seed=seed)
+    persona = Persona(
+        age=age,
+        weight_kg=weight_kg,
+        height_cm=height_cm,
+        gender=gender,
+        seed=seed,
+    )
     return DeviceContext(
         device_id=device_id,
         engine=PersonaEngine(persona),

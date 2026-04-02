@@ -18,7 +18,7 @@ export interface SleepHistoryRow {
 export interface SleepSessionResponse {
   deviceId: string;
   date: string;
-  realismMode: "fallback" | "edf";
+  realismMode: "fallback" | "real" | "edf";
   score: number;
   efficiency: number;
   durationMinutes: number;
@@ -27,6 +27,17 @@ export interface SleepSessionResponse {
   phases: SleepStageSegment[];
   history: SleepHistoryRow[];
   banner: string;
+}
+
+export interface DbSleepHistoryRow {
+  date: string;
+  score: number;
+  efficiency: number;
+  durationMinutes: number;
+  wakeCount: number;
+  phases: Record<string, number>;
+  startTime: string;
+  endTime: string;
 }
 
 export type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -60,4 +71,34 @@ export interface RiskInjectPayload {
   risk_type: RiskType;
   risk_level: RiskLevel;
   score: number;
+}
+
+export interface BackfillSleepRequest {
+  device_id: string;
+  days_behind: number;
+  scenario_id?: string;
+}
+
+export interface BackfillSleepResponse {
+  pushed: number;
+  skipped: number;
+  errors: string[];
+  total_days: number;
+}
+
+export interface PushSleepDateRequest {
+  device_id: string;
+  target_date: string;
+  scenario_id?: string;
+}
+
+export interface PushSleepDateResponse {
+  success: boolean;
+  target_date: string;
+  scenario_id: string;
+  duration_minutes: number;
+  sleep_score: number;
+  disorder_tags: string[];
+  was_overwritten: boolean;
+  message: string;
 }

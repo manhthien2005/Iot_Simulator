@@ -9,6 +9,30 @@ from .dataset_registry import DatasetRegistry
 from .persona_engine import DeviceState, Persona
 
 
+SLEEP_PHASE_VITALS: dict[str, dict[str, float]] = {
+    "light": {
+        "hr_delta": -8.0,
+        "rr_delta": -2.0,
+        "temp_delta": -0.3,
+    },
+    "deep": {
+        "hr_delta": -18.0,
+        "rr_delta": -4.0,
+        "temp_delta": -0.8,
+    },
+    "rem": {
+        "hr_delta": -5.0,
+        "rr_delta": -1.0,
+        "temp_delta": -0.5,
+    },
+    "awake": {
+        "hr_delta": 2.0,
+        "rr_delta": 0.0,
+        "temp_delta": 0.0,
+    },
+}
+
+
 def _is_missing_numeric(value: Any) -> bool:
     return value is None or (isinstance(value, float) and isnan(value))
 
@@ -116,6 +140,20 @@ class VitalsGenerator:
         if binding is not None and binding.source_mode == "replay":
             return self._generate_replay(device_context, sim_time)
         payload = self.generate(state, persona)
+        if state.activity_state == "sleeping":
+            sleep_phase = state.sleep_phase or "light"
+            deltas = SLEEP_PHASE_VITALS.get(sleep_phase, {})
+            heart_rate = payload.get("heart_rate")
+            if heart_rate is not None:
+                payload["heart_rate"] = round(max(35.0, float(heart_rate) + deltas.get("hr_delta", 0.0)), 2)
+            respiratory_rate = payload.get("respiratory_rate")
+            if respiratory_rate is not None:
+                payload["respiratory_rate"] = round(max(8.0, float(respiratory_rate) + deltas.get("rr_delta", 0.0)), 1)
+            temperature = payload.get("temperature")
+            if temperature is not None:
+                payload["temperature"] = round(float(temperature) + deltas.get("temp_delta", 0.0), 2)
+            payload["sleep_phase"] = sleep_phase
+            payload["activity_label"] = "sleeping"
         if sim_time is not None:
             payload["sim_time"] = sim_time
         return payload

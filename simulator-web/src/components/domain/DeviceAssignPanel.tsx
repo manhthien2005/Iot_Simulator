@@ -7,12 +7,10 @@ interface DeviceAssignPanelProps {
   devices: SimulatedDevice[];
   scenarios: ScenarioOption[];
   scenarioByDevice: Record<string, string>;
-  selectedDeviceIds: string[];
-  onToggleDevice: (deviceId: string) => void;
   onScenarioChange: (deviceId: string, scenarioId: string) => void;
 }
 
-export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, selectedDeviceIds, onToggleDevice, onScenarioChange }: DeviceAssignPanelProps) {
+export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, onScenarioChange }: DeviceAssignPanelProps) {
   const vitalsScenarios = scenarios.filter((scenario) => scenario.category !== "fall");
   const fallScenarios = scenarios.filter((scenario) => scenario.category === "fall");
   const defaultScenarioId = vitalsScenarios[0]?.id ?? "";
@@ -25,7 +23,7 @@ export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, select
             key={device.id}
             style={{
               display: "grid",
-              gridTemplateColumns: "auto 1fr 220px auto",
+              gridTemplateColumns: "1fr 220px auto",
               gap: "10px",
               alignItems: "center",
               border: "1px solid var(--border-default)",
@@ -33,13 +31,6 @@ export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, select
               padding: "10px",
             }}
           >
-            <input
-              type="checkbox"
-              checked={selectedDeviceIds.includes(device.id)}
-              onChange={() => onToggleDevice(device.id)}
-              title="Chọn thiết bị cho phiên mô phỏng"
-              style={{ width: "16px", height: "16px", accentColor: "var(--accent-cyan)" }}
-            />
             <div>
               <strong>{device.name}</strong>
               <p style={{ margin: "4px 0 0", color: "var(--text-secondary)", fontSize: "12px" }}>{device.serialNumber}</p>

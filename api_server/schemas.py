@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date as Date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -40,6 +41,7 @@ class PersonaConfig(BaseModel):
     age: int = 70
     weight_kg: float = 65.0
     height_cm: float = 165.0
+    gender: str | None = None
     seed: int = 7
 
 
@@ -176,6 +178,17 @@ class SleepHistoryRow(BaseModel):
     minSpo2: float
 
 
+class DbSleepHistoryRow(BaseModel):
+    date: str
+    score: int
+    efficiency: float
+    durationMinutes: int
+    wakeCount: int
+    phases: dict[str, int]
+    startTime: str
+    endTime: str
+
+
 class SleepSessionResponse(BaseModel):
     deviceId: str
     date: str
@@ -227,3 +240,56 @@ class RiskTriggerRequest(BaseModel):
 class ApplyScenarioRequest(BaseModel):
     device_id: str
     scenario_id: str
+
+
+class BackfillSleepRequest(BaseModel):
+    """Request để bơm dữ liệu sleep lịch sử N ngày về trước."""
+
+    device_id: str
+    days_behind: int = Field(default=30, ge=1, le=90)
+    scenario_id: str = Field(default="good_sleep_night")
+
+
+class BackfillSleepResponse(BaseModel):
+    """Kết quả sau khi backfill sleep data."""
+
+    pushed: int
+    skipped: int
+    errors: list[str]
+    total_days: int
+
+
+class PushSleepDateRequest(BaseModel):
+    device_id: str
+    target_date: Date
+    scenario_id: str = Field(default="good_sleep_night")
+
+
+class PushSleepDateResponse(BaseModel):
+    success: bool
+    target_date: str
+    scenario_id: str
+    duration_minutes: int
+    sleep_score: int
+    disorder_tags: list[str]
+    was_overwritten: bool
+    message: str
+
+
+class AdminCreateDeviceSimRequest(BaseModel):
+    """Request body khi tạo device qua Simulator Admin UI."""
+
+    device_name: str
+    device_type: str = "smartwatch"
+    serial_number: str | None = None
+    user_email: str | None = None
+
+
+class AdminAssignUserRequest(BaseModel):
+    """Request body khi bind device cho user."""
+
+    user_email: str
+
+
+class BatchActivateRequest(BaseModel):
+    device_ids: list[int]

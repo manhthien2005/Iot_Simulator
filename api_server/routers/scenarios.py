@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from typing import Literal
 
 from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
-from Iot_Simulator.api_server.schemas import ApplyScenarioRequest
+from Iot_Simulator.api_server.schemas import (
+    ApplyScenarioRequest,
+    BackfillSleepRequest,
+    BackfillSleepResponse,
+    PushSleepDateRequest,
+    PushSleepDateResponse,
+)
 
 router = APIRouter(tags=["scenarios"])
 
@@ -75,15 +83,31 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
         id="good_sleep_night",
         name="Đêm ngủ tốt",
         category="sleep",
-        description="Phân bổ ngủ nông/ngủ sâu/REM cân bằng với hiệu suất cao.",
-        expectedOutcome="Điểm giấc ngủ duy trì tốt, số lần thức giấc thấp.",
+        description=(
+            "Chu kỳ NREM+REM theo chuẩn AASM: Light(35') → Deep(60') → REM(25') "
+            "lặp lại 2-3 chu kỳ. Tổng ~410 phút, Deep ≥28%, REM ≥19%, "
+            "Awake <5%. Nhịp tim giảm xuống 40-55 bpm khi ngủ sâu, "
+            "SpO2 duy trì 95-99%, hô hấp 11-14 lần/phút."
+        ),
+        expectedOutcome=(
+            "Điểm giấc ngủ ≥85, hiệu suất ≥85%, sinh hiệu giảm chuẩn AASM. "
+            "activityLabel = 'sleeping', heart_rate ≈ 47-55 bpm lúc Deep sleep."
+        ),
     ),
     ScenarioOption(
         id="fragmented_sleep",
         name="Ngủ phân mảnh",
         category="sleep",
-        description="Thức giấc nhiều lần và tỷ lệ ngủ sâu giảm.",
-        expectedOutcome="Điểm giấc ngủ giảm và xu hướng lịch sử xấu đi.",
+        description=(
+            "Nhiều micro-arousal xen kẽ: Light → Awake → Light → Awake → REM "
+            "lặp lại không đều. Tổng ~220 phút, Awake >20%, Deep <10% (~7%), "
+            "REM <15%. Mô phỏng rối loạn giấc ngủ (insomnia-like pattern)."
+        ),
+        expectedOutcome=(
+            "Điểm giấc ngủ <70, hiệu suất ~72%, wake_count cao ≥4. "
+            "Nhịp tim dao động bất thường khi chuyển phase. "
+            "Phù hợp test AI risk scoring với sleep quality thấp."
+        ),
     ),
     # Risk
     ScenarioOption(
@@ -118,3 +142,79 @@ def apply_scenario(
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/scenarios/sleep/backfill", response_model=BackfillSleepResponse)
+def backfill_sleep_history(
+    request: BackfillSleepRequest,
+    runtime: SimulatorRuntime = Depends(get_runtime),
+) -> BackfillSleepResponse:
+    """
+    Bơm dữ liệu giấc ngủ lịch sử N ngày về trước vào Backend DB.
+    Mỗi ngày: sample_sleep_session() → override date → push lên Backend.
+    Dùng để cung cấp đủ data lịch sử cho AI risk scoring.
+
+    - days_behind: số ngày muốn backfill (1-90)
+    - scenario_id: kịch bản giấc ngủ để truyền xuống runtime
+    """
+    pushed = 0
+    skipped = 0
+    errors: list[str] = []
+    today = datetime.now(timezone.utc).date()
+
+    for offset in range(request.days_behind, 0, -1):
+        target_date = today - timedelta(days=offset)
+        try:
+            result = runtime.push_sleep_session_for_date(
+                device_id=request.device_id,
+                target_date=target_date,
+                scenario_id=request.scenario_id,
+            )
+            if result.get("success"):
+                pushed += 1
+            else:
+                skipped += 1
+                errors.append(f"{target_date}: {result.get('message', 'push failed')}")
+        except KeyError as exc:
+            skipped += 1
+            errors.append(f"{target_date}: device not found — {exc}")
+        except Exception as exc:
+            skipped += 1
+            errors.append(f"{target_date}: {type(exc).__name__}: {exc}")
+
+    return BackfillSleepResponse(
+        pushed=pushed,
+        skipped=skipped,
+        errors=errors,
+        total_days=request.days_behind,
+    )
+
+
+@router.post("/scenarios/sleep/push-date", response_model=PushSleepDateResponse)
+def push_sleep_for_date(
+    request: PushSleepDateRequest,
+    runtime: SimulatorRuntime = Depends(get_runtime),
+) -> PushSleepDateResponse:
+    today = datetime.now(timezone.utc).date()
+    if request.target_date >= today:
+        raise HTTPException(
+            status_code=422,
+            detail="Không thể push dữ liệu cho ngày hôm nay hoặc tương lai. Chọn ngày <= hôm qua.",
+        )
+
+    if (today - request.target_date).days > 365:
+        raise HTTPException(
+            status_code=422,
+            detail="Không thể push dữ liệu cũ hơn 1 năm.",
+        )
+
+    try:
+        result = runtime.push_sleep_session_for_date(
+            device_id=request.device_id,
+            target_date=request.target_date,
+            scenario_id=request.scenario_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return PushSleepDateResponse(**result)

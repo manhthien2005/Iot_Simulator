@@ -5,8 +5,11 @@ export function useSessions(enabled = true) {
   return useQuery({
     queryKey: ["sessions"],
     queryFn: fetchSessions,
-    refetchInterval: enabled ? 2000 : false,
+    refetchInterval: enabled ? 3000 : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
     enabled,
   });
 }
-

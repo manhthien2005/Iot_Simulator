@@ -39,11 +39,32 @@ flowchart LR
 
 ---
 
-## 3. Dữ Liệu & Nguyên Tắc Y Sinh
+## 3. Danh Sách Field Simulator Cung Cấp
+
+> 📋 **Xem đầy đủ tại: [docs/FEATURE_SPEC.md](docs/FEATURE_SPEC.md)**
+
+Tài liệu `FEATURE_SPEC.md` là tham chiếu chính xác duy nhất cho mọi developer cần biết field nào simulator **thực sự phát ra**. Mỗi field được ghi rõ:
+- Tên field chính xác trong payload
+- Đơn vị đo
+- Dataset nguồn
+- Trạng thái phát sinh: **Luôn có** / **Có điều kiện** / **Backend tự tính** / **Chưa implement**
+- Mô tả điều kiện và fallback cụ thể
+
+| Domain | Số field luôn có | Xem chi tiết |
+|--------|----------------|-------------|
+| Sinh Hiệu — real-time @ 1 Hz | 10 field | [Mục 1 — Vital Signs](docs/FEATURE_SPEC.md#1-domain-sinh-hiệu-vital-signs) |
+| Giấc Ngủ — per session | 18 field | [Mục 2 — Sleep](docs/FEATURE_SPEC.md#2-domain-giấc-ngủ-sleep) |
+| Té Ngã — motion window @ 50 Hz | 7 field | [Mục 3 — Fall Detection](docs/FEATURE_SPEC.md#3-domain-té-ngã-fall-detection) |
+| Té Ngã — fall event | 11 field | [Mục 3.2 — Fall Event](docs/FEATURE_SPEC.md#32-fall-event----sim_event_v1-phát-tại-thời-điểm-phát-hiện-ngã) |
+
+---
+
+
+## 4. Dữ Liệu & Nguyên Tắc Y Sinh
 
 Hệ thống được thiết kế bằng việc **kết hợp chéo** các tập dữ liệu, trong đó mỗi tập chỉ đảm nhiệm đúng domain y khoa thế mạnh của nó.
 
-### 3.1. Danh Sách Tập Dữ Liệu Lõi (Core Datasets)
+### 4.1. Danh Sách Tập Dữ Liệu Lõi (Core Datasets)
 
 | Tên Dataset | Chất Lượng | Domain Y Tế | Tín Hiệu Cung Cấp | Vai trò trong Giả lập |
 |---|---|---|---|---|
@@ -56,7 +77,7 @@ Hệ thống được thiết kế bằng việc **kết hợp chéo** các tậ
 | **VitalDB** | ⭐⭐⭐ | Clinical Vitals | C. SpO2, Huyết Áp | Mang số đo thực tế từ phòng ICU vào simulator thay vì tham số 98% tĩnh cứng. |
 | **BIDMC** | ⭐⭐⭐⭐ | Respiration | Nhịp thở (RR) | Nguồn dữ liệu hô hấp trích xuất nhịp thở từ PPG cực chuẩn. |
 
-### 3.2. Bảng Tiêu Chuẩn Y Tế Áp Dụng (Medical Constraints)
+### 4.2. Bảng Tiêu Chuẩn Y Tế Áp Dụng (Medical Constraints)
 
 Mọi tín hiệu sinh tồn khi bật ra khỏi API đều bị chặn theo khung tiêu chuẩn **Hard Boundaries** của các tổ chức Y khoa thế giới. Bất cứ mức nào nằm ngoài "Normal" đều trigger cờ Warning/Critical xuống Backend.
 
@@ -70,23 +91,29 @@ Mọi tín hiệu sinh tồn khi bật ra khỏi API đều bị chặn theo khu
 
 ---
 
-## 4. Changelog (Lịch sử Cập Nhật)
+## 5. Changelog (Lịch sử Cập Nhật)
 
+- **2026-04-02 (Sleep AI Integration):**
+  - Tích hợp `SleepAIClient` → gọi HealthGuard AI ONNX API (`http://localhost:8001`) để chấm điểm giấc ngủ AI-driven.
+  - Xây dựng `SleepVitalsEnricher` → sinh đủ 19 features/session cho 4 kịch bản ngủ (good/fragmented/apnea-mild/apnea-severe).
+  - Bổ sung `BackfillSleep` API → inject lịch sử giấc ngủ N ngày (1-90) để nạp đủ data cho AI Risk Scoring.
+  - Tạo `docs/FEATURE_SPEC.md` → tài liệu chi tiết 60 features theo 3 domain.
 - **2026-03-27 (P09 Codebase Audit):**
-  - Chuyển `DatasetRegistry` từ O(N) List Scan sang Hash Indexing O(1) -> Giảm độ trễ `get_vitals` từ ~74ms xuống 0.001ms (Sẵn sàng Production).
+  - Chuyển `DatasetRegistry` từ O(N) List Scan sang Hash Indexing O(1) → Giảm độ trễ `get_vitals` từ ~74ms xuống 0.001ms (Sẵn sàng Production).
   - Tối ưu `PIF_v3 ETL`, cạo sạch dead code (`fall_adjust`) và duplicate fields.
-  - Ban hành Bảng tiêu chuẩn y tế (Mục 3.2) rào tín hiệu theo AHA, WHO.
+  - Ban hành Bảng tiêu chuẩn y tế rào tín hiệu theo AHA, WHO.
 - **2026-03-27 (P08 - BIDMC):** Tích hợp thành công tín hiệu Nhịp thở (`respiration_rate`) từ kho dữ liệu ICU BIDMC.
 - **2026-03-27 (P07 - VitalDB):** Gắn kết clinical SpO2 và Blood Pressure vào pipeline (thay vì synthetic mock).
 - **2026-03-27 (P06 - WESAD):** Trích xuất Stress HR distribution thành công, thay thế hoàn toàn logic giả lập `+8bpm`.
 
 ---
 
-## Hướng dẫn sử dụng & Khởi động
+## 6. Hướng dẫn sử dụng & Khởi động
 
-*Lưu ý: Dataset thô không được push kèm trong Repository này do giới hạn kích thước. Bạn cần được cấp quyền tải Folder `datasets/` độc lập.*
+> **Lưu ý:** Dataset thô không được push kèm trong Repository này do giới hạn kích thước.  
+> Xem hướng dẫn tải: [`datasets/DOWNLOAD_GUIDE.md`](datasets/DOWNLOAD_GUIDE.md)
 
-1. **Chạy toàn bộ (Backend + Frontend):** 
+1. **Chạy toàn bộ (Backend + Frontend):**
    ```powershell
    .\start_all.bat
    ```
@@ -96,4 +123,12 @@ Mọi tín hiệu sinh tồn khi bật ra khỏi API đều bị chặn theo khu
    npm install
    npm run dev
    ```
-*(Backend Engine chạy ở `http://localhost:8090` | Web UI chạy ở `http://localhost:5173`)*
+3. **Tạo dữ liệu ngủ lịch sử (backfill):**
+   ```powershell
+   # Sau khi simulator đang chạy
+   curl -X POST http://localhost:8090/scenarios/sleep/backfill `
+     -H "Content-Type: application/json" `
+     -d '{"device_id": "<id>", "days_behind": 30, "scenario_id": "good_sleep_night"}'
+   ```
+
+*(Backend Engine: `http://localhost:8090` | Web UI: `http://localhost:5173` | AI Inference: `http://localhost:8001`)*
