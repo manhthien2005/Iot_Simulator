@@ -41,10 +41,19 @@ Thumbs.db
 task_plan.md
 findings.md
 progress.md
+git_status_out.txt
 
 # Local test artifact folders
 normalized_artifacts_runtime_test/
 normalized_artifacts_test/
+
+# Tests — run locally only, not pushed to remote
+tests/
+
+# Docs — internal design/plan docs stay local
+# Only FEATURE_SPEC.md is pushed (developer-facing field reference)
+docs/**
+!docs/FEATURE_SPEC.md
 
 # Dataset files — large binary data, distributed via Drive/Kaggle instead
 # See datasets/DATASET_MANIFEST.md and datasets/DOWNLOAD_GUIDE.md for download instructions

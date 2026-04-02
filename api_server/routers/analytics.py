@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
 from Iot_Simulator.api_server.schemas import (
+    DbSleepHistoryRow,
     RiskInjectRequest,
     RiskScoreResponse,
     RiskTriggerRequest,
@@ -20,6 +21,18 @@ def get_sleep_session(
 ) -> SleepSessionResponse:
     try:
         return runtime.sleep_session(device_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/analytics/sleep/history", response_model=list[DbSleepHistoryRow])
+def get_sleep_history(
+    device_id: str = Query(..., alias="deviceId"),
+    days: int = Query(default=30, ge=1, le=90),
+    runtime: SimulatorRuntime = Depends(get_runtime),
+) -> list[DbSleepHistoryRow]:
+    try:
+        return runtime.sleep_db_history(device_id=device_id, days=days)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

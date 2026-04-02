@@ -20,6 +20,7 @@ class DeviceState:
     activity_state: str = "resting"
     fall_variant: str | None = None
     stress_state: str | None = None
+    sleep_phase: str | None = None
     battery_level: int = 100
     is_online: bool = True
 
@@ -66,6 +67,15 @@ class PersonaEngine:
         if event_type == "fall_detected":
             self.transition_to("fall")
             self.state.fall_variant = variant or "fall_generic"
+        elif event_type == "sleep_start":
+            self.transition_to("sleeping")
+            self.state.sleep_phase = variant or "light"
+        elif event_type == "sleep_end":
+            self.transition_to("resting")
+            self.state.sleep_phase = None
+        elif event_type == "sleep_phase_change":
+            if self.state.activity_state == "sleeping":
+                self.state.sleep_phase = variant or "light"
         elif event_type == "low_battery":
             self.state.battery_level = min(self.state.battery_level, 15)
         elif event_type == "device_offline":
