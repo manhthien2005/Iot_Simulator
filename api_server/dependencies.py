@@ -43,6 +43,7 @@ try:
         VitalsSample,
     )
     from Iot_Simulator.api_server.sim_admin_service import SimAdminService
+    from Iot_Simulator.api_server.services.device_service import DeviceService
     from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
     from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
@@ -71,6 +72,7 @@ except ModuleNotFoundError:
         VitalsSample,
     )
     from api_server.sim_admin_service import SimAdminService
+    from api_server.services.device_service import DeviceService
     from simulator_core.dataset_registry import DatasetRegistry
     from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from simulator_core.sleep_ai_client import SleepAIClient
@@ -401,6 +403,25 @@ class SimulatorRuntime:
             self._background_tick_interval = 1.0
         self._background_tick_stop = Event()
         self._background_tick_thread: Thread | None = None
+
+        # ── Service layer (Task 3.1) ─────────────────────────────────────
+        self._dashboard_cache_ref: list = [self._dashboard_cache]
+        self.device_service = DeviceService(
+            devices=self.devices,
+            sessions=self.sessions,
+            device_scenarios=self.device_scenarios,
+            risk_snapshots=self.risk_snapshots,
+            risk_history=self.risk_history,
+            tick_buffer=self._tick_buffer,
+            event_history=self.event_history,
+            dashboard_cache_ref=self._dashboard_cache_ref,
+            db_device_active_cache=self._db_device_active_cache,
+            lock=self._lock,
+            admin_client=self.admin_client,
+            record_event_fn=self._record_event,
+            publish_device_log_fn=self._publish_device_log,
+        )
+        self.device_service.set_runtime_session_ops(self)
 
     @staticmethod
     def _resolve_artifacts_dir() -> Path:
@@ -1259,80 +1280,30 @@ class SimulatorRuntime:
         )
         return status_code
 
+    # ── Device CRUD — delegated to DeviceService (Task 3.1) ──────────────
+
     def list_devices(self) -> list[SimulatedDevice]:
-        with self._lock:
-            return [device.to_schema() for device in self.devices.values()]
+        return self.device_service.list_devices()
 
     def create_device(self, request: CreateDeviceRequest) -> SimulatedDevice:
-        with self._lock:
-            device_id = uuid4().hex
-            serial = f"SIM-{device_id[:8].upper()}"
-            mqtt_client = f"sim-client-{device_id[:8]}"
-            device = DeviceRecord(
-                id=device_id,
-                name=request.name,
-                serial_number=serial,
-                mqtt_client_id=mqtt_client,
-                device_type=request.type,
-                persona_config=request.persona_config.model_dump(),
-                data_binding=request.data_binding.model_dump() if request.data_binding else None,
-            )
-            self.devices[device_id] = device
-            self.device_scenarios[device_id] = "normal_rest"
-            return device.to_schema()
+        return self.device_service.create_device(request)
 
     def delete_device(self, device_id: str) -> None:
-        with self._lock:
-            self.devices.pop(device_id, None)
-            self.device_scenarios.pop(device_id, None)
-            self.risk_snapshots.pop(device_id, None)
-            self.risk_history.pop(device_id, None)
-            self._tick_buffer = [payload for payload in self._tick_buffer if payload.get("device_id") != device_id]
-            self._refresh_pending_sync_flags()
-            for session in self.sessions.values():
-                if device_id in session.device_ids:
-                    session.device_ids = [item for item in session.device_ids if item != device_id]
-            self._rebuild_db_device_active_cache_locked()
-            self._record_event(
-                device_id=device_id,
-                event_type="device_deleted",
-                severity="offline",
-                message="Device removed from simulator runtime",
-            )
+        self.device_service.delete_device(device_id)
 
     def bind_device(self, sim_device_id: str, db_device_id: int) -> DeviceRecord:
-        with self._lock:
-            device = self._require_device(sim_device_id)
-            device.bound_db_device_id = db_device_id
-            device.bind_status = "bound"
-            if device.state in {"draft", "provisioned", "bindable", "bound"}:
-                device.state = "bound"
-            self._rebuild_db_device_active_cache_locked()
-            return device
+        return self.device_service.bind_device(sim_device_id, db_device_id)
 
     def unbind_device(self, sim_device_id: str) -> DeviceRecord:
-        with self._lock:
-            device = self._require_device(sim_device_id)
-            device.bound_db_device_id = None
-            device.bind_status = "unbound"
-            if device.state == "bound":
-                device.state = "bindable"
-            self._tick_buffer = [payload for payload in self._tick_buffer if payload.get("device_id") != sim_device_id]
-            self._refresh_pending_sync_flags()
-            self._rebuild_db_device_active_cache_locked()
-            return device
+        return self.device_service.unbind_device(sim_device_id)
 
-    # ===========================================================================
-    # Admin Methods — Device Management via Backend DB
-    # ===========================================================================
+    # ── Admin device methods — delegated to DeviceService ────────────────
 
     def admin_list_db_devices(self) -> list[dict[str, Any]]:
-        """Load toàn bộ devices từ backend DB."""
-        return self.admin_client.list_devices()
+        return self.device_service.admin_list_db_devices()
 
     def admin_find_user(self, email: str) -> dict[str, Any] | None:
-        """Tìm user theo email. Dùng trước khi bind."""
-        return self.admin_client.find_user_by_email(email)
+        return self.device_service.admin_find_user(email)
 
     def admin_create_db_device(
         self,
@@ -1341,168 +1312,42 @@ class SimulatorRuntime:
         serial_number: str | None = None,
         user_email: str | None = None,
     ) -> dict[str, Any]:
-        """
-        Tạo device mới trong backend DB.
-        Auto-gen serial_number và mqtt_client_id nếu không truyền.
-        """
-        suffix = str(int(time.time()))[-6:]
-        safe_name = "".join(ch if ch.isalnum() else "-" for ch in device_name.lower()).strip("-") or "device"
-        auto_mqtt = f"sim-{safe_name}-{suffix}"
-        auto_serial = serial_number or f"SIM-{auto_mqtt.upper()[:12]}"
-        return self.admin_client.create_device(
-            device_name=device_name,
-            device_type=device_type,
-            serial_number=auto_serial,
-            mqtt_client_id=auto_mqtt,
-            user_email=user_email,
-        )
+        return self.device_service.admin_create_db_device(device_name, device_type, serial_number, user_email)
 
     def admin_assign_db_device(self, device_id: int, user_email: str) -> dict[str, Any]:
-        """Bind device (đã có trong DB) cho user bằng email."""
-        return self.admin_client.assign_device(device_id, user_email)
+        return self.device_service.admin_assign_db_device(device_id, user_email)
 
     def admin_activate_db_device(self, device_id: int) -> dict[str, Any]:
-        """
-        Kích hoạt device trong DB (is_active=True, single-active rule).
-        Tự động tạo SimDevice + Session cho device này nếu chưa có.
-        """
-        result = self.admin_client.activate_device(device_id)
-        self._ensure_sim_session_for_db_device(device_id, result)
-        return result
+        return self.device_service.admin_activate_db_device(device_id)
 
     def admin_deactivate_db_device(self, device_id: int) -> dict[str, Any]:
-        """Tắt device. Dừng session simulator đang chạy."""
-        result = self.admin_client.deactivate_device(device_id)
-        self._stop_sim_session_for_db_device(device_id)
-        return result
+        return self.device_service.admin_deactivate_db_device(device_id)
 
     def admin_delete_db_device(self, device_id: int) -> None:
-        """Xóa device khỏi DB (soft delete). Dừng session nếu đang chạy."""
-        self._stop_sim_session_for_db_device(device_id)
-        self.admin_client.delete_device(device_id)
+        self.device_service.admin_delete_db_device(device_id)
 
-    # ── Admin Helpers ────────────────────────────────────────────────────────────
+    # ── Admin helpers — delegated to DeviceService ───────────────────────
 
     def _find_sim_id_for_db_device(self, db_device_id: int) -> str | None:
-        """Tìm sim_device_id đang map với db_device_id."""
-        for sim_id, device in self.devices.items():
-            if device.bound_db_device_id == db_device_id:
-                return sim_id
-        return None
+        return self.device_service._find_sim_id_for_db_device(db_device_id)
 
     def _find_running_session_for_sim_device(self, sim_id: str) -> SessionRecord | None:
-        """Tìm session đang running có chứa sim_id."""
-        for record in self.sessions.values():
-            if sim_id in record.device_ids and record.status == "running":
-                return record
-        return None
+        return self.device_service._find_running_session_for_sim_device(sim_id)
 
     def _rebuild_db_device_active_cache_locked(self) -> None:
-        active_db_device_ids: dict[int, bool] = {}
-        for record in self.sessions.values():
-            if record.status != "running":
-                continue
-            for sim_id in record.device_ids:
-                device = self.devices.get(sim_id)
-                if device is None or device.bound_db_device_id is None:
-                    continue
-                active_db_device_ids[device.bound_db_device_id] = True
-        self._db_device_active_cache = active_db_device_ids
+        self.device_service._rebuild_db_device_active_cache_locked()
 
     def list_running_db_device_ids(self) -> set[int]:
-        with self._lock:
-            return set(self._db_device_active_cache)
+        return self.device_service.list_running_db_device_ids()
 
     def is_db_device_sim_running(self, db_device_id: int) -> bool:
-        """
-        Returns True nếu có SimDevice bound với db_device_id này
-        VÀ đang có session running push vitals.
-        Thread-safe — dùng self._lock.
-        Không gọi DB — chỉ đọc in-memory state.
-        """
-        with self._lock:
-            return self._db_device_active_cache.get(db_device_id, False)
+        return self.device_service.is_db_device_sim_running(db_device_id)
 
     def _ensure_sim_session_for_db_device(self, db_device_id: int, device_info: dict[str, Any]) -> None:
-        """
-        Khi DB device được activate:
-        1. Stop các running sessions của các DB devices KHÁC cùng user.
-           Lý do: DB đã apply single-active rule trong phạm vi user hiện tại,
-           nên runtime chỉ được stop session của những device cùng user đó.
-        2. Tìm hoặc tạo SimDevice với bound_db_device_id = db_device_id.
-        3. Start session mới nếu chưa có session running.
-        """
-        same_user_other_db_device_ids: set[int] = set()
-        user_id_raw = device_info.get("user_id")
-        try:
-            user_id = int(user_id_raw) if user_id_raw is not None else None
-        except (TypeError, ValueError):
-            user_id = None
-
-        if user_id is not None:
-            with session_scope() as db:
-                same_user_devices = SimAdminService.list_all_devices(db, user_id=user_id)
-            same_user_other_db_device_ids = {
-                int(device["id"])
-                for device in same_user_devices
-                if int(device["id"]) != db_device_id
-            }
-
-        persona = _build_db_device_persona(device_info, db_device_id)
-
-        session_id_to_start: str | None = None
-        with self._lock:
-            # ── Step 1: Stop các running sessions của device KHÁC cùng user ──────
-            # Chỉ stop những SimDevices đang bound với DB devices khác cùng user.
-            # Không đụng đến session của user khác đang chạy trong cùng process.
-            for sim_id_other, dev_record in list(self.devices.items()):
-                bound_db_device_id = dev_record.bound_db_device_id
-                if bound_db_device_id is None or bound_db_device_id not in same_user_other_db_device_ids:
-                    continue
-                running = self._find_running_session_for_sim_device(sim_id_other)
-                if running is not None:
-                    self.stop_session(running.id)
-
-            # ── Step 2: Tìm hoặc tạo SimDevice ───────────────────────────────────
-            sim_id = self._find_sim_id_for_db_device(db_device_id)
-            if sim_id is None:
-                request = CreateDeviceRequest(
-                    name=str(device_info.get("device_name") or f"DBDevice-{db_device_id}"),
-                    type=str(device_info.get("device_type") or "smartwatch"),
-                    persona_config=persona,
-                )
-                sim_device_schema = self.create_device(request)
-                sim_id = sim_device_schema.id
-                sim_record = self.bind_device(sim_id, db_device_id)
-            else:
-                sim_record = self._require_device(sim_id)
-                if sim_record.bound_db_device_id != db_device_id:
-                    sim_record = self.bind_device(sim_id, db_device_id)
-
-            sim_record.persona_config = dict(persona)
-
-            # ── Step 3: Start session nếu chưa có ────────────────────────────────
-            if self._find_running_session_for_sim_device(sim_id) is None:
-                session = self.create_session([sim_id], speed=5)
-                session_id_to_start = session.get("id")
-                if session_id_to_start is None:
-                    raise RuntimeError(f"Khong the tao session cho db_device_id={db_device_id}")
-        if session_id_to_start is not None:
-            self.start_session(session_id_to_start)
+        self.device_service._ensure_sim_session_for_db_device(db_device_id, device_info)
 
     def _stop_sim_session_for_db_device(self, db_device_id: int) -> None:
-        """Dừng session simulator đang chạy cho db_device_id."""
-        with self._lock:
-            sim_id = self._find_sim_id_for_db_device(db_device_id)
-            if sim_id is None:
-                return
-            session_ids = [
-                record.id
-                for record in self.sessions.values()
-                if sim_id in record.device_ids and record.status == "running"
-            ]
-            for session_id in session_ids:
-                self.stop_session(session_id)
+        self.device_service._stop_sim_session_for_db_device(db_device_id)
 
     def list_sessions(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -2561,13 +2406,7 @@ class SimulatorRuntime:
         return PendingTickPublish(messages=messages, clear_count=len(messages))
 
     def _refresh_pending_sync_flags(self) -> None:
-        pending_ids = {
-            str(payload.get("device_id"))
-            for payload in self._tick_buffer
-            if payload.get("device_id") is not None and payload.get("db_device_id") is not None
-        }
-        for device_id, device in self.devices.items():
-            device.has_pending_sync = device_id in pending_ids
+        self.device_service._refresh_pending_sync_flags()
 
     @staticmethod
     def _scenario_state_hint(scenario_id: str) -> str:
@@ -2855,9 +2694,7 @@ class SimulatorRuntime:
     _safe_float = staticmethod(_safe_float)
 
     def _require_device(self, device_id: str) -> DeviceRecord:
-        if device_id not in self.devices:
-            raise KeyError(f"Device not found: {device_id}")
-        return self.devices[device_id]
+        return self.device_service._require_device(device_id)
 
     @staticmethod
     def _build_sleep_segments(

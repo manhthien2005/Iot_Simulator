@@ -23,7 +23,7 @@ router = APIRouter(tags=["devices"])
 
 @router.get("/devices", response_model=list[SimulatedDevice])
 def list_devices(runtime: SimulatorRuntime = Depends(get_runtime)) -> list[SimulatedDevice]:
-    return runtime.list_devices()
+    return runtime.device_service.list_devices()
 
 
 @router.post("/devices", response_model=SimulatedDevice, status_code=status.HTTP_201_CREATED)
@@ -31,12 +31,12 @@ def create_device(
     request: CreateDeviceRequest,
     runtime: SimulatorRuntime = Depends(get_runtime),
 ) -> SimulatedDevice:
-    return runtime.create_device(request)
+    return runtime.device_service.create_device(request)
 
 
 @router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_device(device_id: str, runtime: SimulatorRuntime = Depends(get_runtime)) -> Response:
-    runtime.delete_device(device_id)
+    runtime.device_service.delete_device(device_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -47,7 +47,7 @@ def bind_device(
     runtime: SimulatorRuntime = Depends(get_runtime),
 ) -> BindDeviceResponse:
     try:
-        device = runtime.bind_device(device_id, payload.db_device_id)
+        device = runtime.device_service.bind_device(device_id, payload.db_device_id)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return BindDeviceResponse(sim_device_id=device.id, db_device_id=device.bound_db_device_id, status="bound")
@@ -56,7 +56,7 @@ def bind_device(
 @router.delete("/devices/{device_id}/bind", response_model=BindDeviceResponse)
 def unbind_device(device_id: str, runtime: SimulatorRuntime = Depends(get_runtime)) -> BindDeviceResponse:
     try:
-        device = runtime.unbind_device(device_id)
+        device = runtime.device_service.unbind_device(device_id)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return BindDeviceResponse(sim_device_id=device.id, db_device_id=device.bound_db_device_id, status="unbound")
@@ -69,7 +69,7 @@ def list_db_devices(
 ) -> list[dict]:
     """Load all devices from production DB, enriched with sim runtime status."""
     devices = SimAdminService.list_admin_devices(db)
-    running_db_device_ids = runtime.list_running_db_device_ids()
+    running_db_device_ids = runtime.device_service.list_running_db_device_ids()
     for device in devices:
         device["is_sim_running"] = int(device["id"]) in running_db_device_ids
     return devices
@@ -141,7 +141,7 @@ def activate_db_device(
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Device {device_id} not found")
 
-    runtime._ensure_sim_session_for_db_device(device_id, result)
+    runtime.device_service._ensure_sim_session_for_db_device(device_id, result)
     return {**result, "message": "Device activated"}
 
 
@@ -158,7 +158,7 @@ def batch_activate_db_devices(
             if result is None:
                 results.append({"id": device_id, "status": "not_found"})
                 continue
-            runtime._ensure_sim_session_for_db_device(device_id, result)
+            runtime.device_service._ensure_sim_session_for_db_device(device_id, result)
             results.append({**result, "status": "activated"})
         except ValueError as exc:
             results.append({"id": device_id, "status": "error", "detail": str(exc)})
@@ -178,7 +178,7 @@ def deactivate_db_device(
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Device {device_id} not found")
 
-    runtime._stop_sim_session_for_db_device(device_id)
+    runtime.device_service._stop_sim_session_for_db_device(device_id)
     return {**result, "message": "Device deactivated"}
 
 
@@ -189,7 +189,7 @@ def delete_db_device(
     db: Session = Depends(get_db),
 ) -> Response:
     """Soft-delete a DB device and stop its simulator session."""
-    runtime._stop_sim_session_for_db_device(device_id)
+    runtime.device_service._stop_sim_session_for_db_device(device_id)
     deleted = SimAdminService.delete_device(device_id, db)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Device {device_id} not found")
