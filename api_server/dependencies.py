@@ -45,6 +45,7 @@ try:
     from Iot_Simulator.api_server.sim_admin_service import SimAdminService
     from Iot_Simulator.api_server.services.device_service import DeviceService
     from Iot_Simulator.api_server.services.vitals_service import VitalsService
+    from Iot_Simulator.api_server.services.alert_service import AlertService
     from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
     from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
@@ -75,6 +76,7 @@ except ModuleNotFoundError:
     from api_server.sim_admin_service import SimAdminService
     from api_server.services.device_service import DeviceService
     from api_server.services.vitals_service import VitalsService
+    from api_server.services.alert_service import AlertService
     from simulator_core.dataset_registry import DatasetRegistry
     from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from simulator_core.sleep_ai_client import SleepAIClient
@@ -432,6 +434,21 @@ class SimulatorRuntime:
             lock=self._lock,
         )
 
+        # ── AlertService (Task 3.5) ──────────────────────────────────────
+        self.alert_service = AlertService(
+            devices=self.devices,
+            event_history=self.event_history,
+            lock=self._lock,
+            last_alert_pushes=self._last_alert_pushes,
+            alert_pushes_in_flight=self._alert_pushes_in_flight,
+            push_interval=self._push_interval,
+            health_backend_url=self._health_backend_url,
+            http_sender=self._http_sender,
+            telemetry_alert_endpoint_fn=self._telemetry_alert_endpoint,
+            publish_device_log_fn=self._publish_device_log,
+            dashboard_cache_ref=self._dashboard_cache_ref,
+        )
+
     @staticmethod
     def _resolve_artifacts_dir() -> Path:
         root = Path(__file__).resolve().parents[1]
@@ -497,6 +514,8 @@ class SimulatorRuntime:
                 },
             )
 
+    # ── Alert push — delegated to AlertService (Task 3.5) ────────────────
+
     def _prepare_alert_push_locked(
         self,
         sim_device_id: str,
@@ -504,46 +523,7 @@ class SimulatorRuntime:
         severity: str,
         metadata: dict[str, Any] | None = None,
     ) -> PreparedAlertPush | None:
-        device = self.devices.get(sim_device_id)
-        if device is None or device.bound_db_device_id is None:
-            return None
-
-        normalized_event_type = str(event_type or "").strip().lower() or "generic_alert"
-        normalized_severity = str(severity or "").strip().lower() or "warning"
-        signature = (sim_device_id, normalized_event_type, normalized_severity)
-        if signature in self._alert_pushes_in_flight:
-            return None
-
-        now = monotonic()
-        cooldown_seconds = max(float(self._push_interval), 10.0)
-        last_sent_at = self._last_alert_pushes.get(signature)
-        if last_sent_at is not None and now - last_sent_at < cooldown_seconds:
-            return None
-
-        alert_metadata = dict(metadata or {})
-        timestamp = str(
-            alert_metadata.pop("timestamp", None)
-            or alert_metadata.pop("emitted_at", None)
-            or _utc_now_iso()
-        )
-        explicit_user_id = alert_metadata.pop("user_id", None)
-        payload = {
-            "db_device_id": device.bound_db_device_id,
-            "user_id": explicit_user_id,
-            "event_type": normalized_event_type,
-            "severity": normalized_severity,
-            "timestamp": timestamp,
-            "metadata": alert_metadata,
-        }
-        self._alert_pushes_in_flight.add(signature)
-        return PreparedAlertPush(
-            sim_device_id=sim_device_id,
-            signature=signature,
-            event_type=normalized_event_type,
-            severity=normalized_severity,
-            timestamp=timestamp,
-            payload_json=_json.dumps(payload),
-        )
+        return self.alert_service._prepare_alert_push_locked(sim_device_id, event_type, severity, metadata)
 
     def _push_alert_to_backend(
         self,
@@ -552,52 +532,7 @@ class SimulatorRuntime:
         severity: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        with self._lock:
-            prepared = self._prepare_alert_push_locked(
-                sim_device_id,
-                event_type=event_type,
-                severity=severity,
-                metadata=metadata,
-            )
-        if prepared is None:
-            return
-        endpoint = self._telemetry_alert_endpoint(self._health_backend_url)
-        try:
-            status_code = self._http_sender(endpoint, prepared.payload_json)
-        except Exception as exc:
-            with self._lock:
-                self._alert_pushes_in_flight.discard(prepared.signature)
-            self._publish_device_log(
-                prepared.sim_device_id,
-                level="ERROR",
-                message=f"alert push failed: {prepared.event_type}/{prepared.severity} ({exc})",
-                timestamp=prepared.timestamp,
-            )
-            return
-
-        with self._lock:
-            self._alert_pushes_in_flight.discard(prepared.signature)
-            if 200 <= status_code < 300:
-                self._last_alert_pushes[prepared.signature] = monotonic()
-                publish_ok = True
-            else:
-                publish_ok = False
-
-        if publish_ok:
-            self._publish_device_log(
-                prepared.sim_device_id,
-                level="INFO",
-                message=f"alert push OK: {prepared.event_type}/{prepared.severity} -> HTTP {status_code}",
-                timestamp=prepared.timestamp,
-            )
-            return
-
-        self._publish_device_log(
-            prepared.sim_device_id,
-            level="ERROR",
-            message=f"alert push failed: {prepared.event_type}/{prepared.severity} -> HTTP {status_code}",
-            timestamp=prepared.timestamp,
-        )
+        self.alert_service._push_alert_to_backend(sim_device_id, event_type, severity, metadata)
 
     def _update_device_heartbeat(self, db_device_id: int, battery_level: int) -> None:
         try:
@@ -1648,16 +1583,15 @@ class SimulatorRuntime:
         self._run_session_side_effects(effects)
 
     def recent_events(self, limit: int = 10) -> list[AlertEvent]:
-        with self._lock:
-            selected = list(self.event_history)[-max(1, limit):]
-            return [event.to_schema() for event in reversed(selected)]
+        return self.alert_service.recent_events(limit=limit)
 
     def dashboard_summary(self) -> DashboardSummary:
         _DASHBOARD_CACHE_TTL = 5.0  # seconds
         with self._lock:
             now_mono = monotonic()
-            if self._dashboard_cache is not None and (now_mono - self._dashboard_cache_ts) < _DASHBOARD_CACHE_TTL:
-                return self._dashboard_cache
+            cached = self._dashboard_cache_ref[0]
+            if cached is not None and (now_mono - self._dashboard_cache_ts) < _DASHBOARD_CACHE_TTL:
+                return cached
 
             total = len(self.devices)
             active = len([device for device in self.devices.values() if device.state == "streaming"])
@@ -1681,7 +1615,7 @@ class SimulatorRuntime:
                 alertsLastHour=alerts,
                 avgLatencyMs=avg_latency,
             )
-            self._dashboard_cache = result
+            self._dashboard_cache_ref[0] = result
             self._dashboard_cache_ts = now_mono
             return result
 
@@ -2949,17 +2883,13 @@ class SimulatorRuntime:
         message: str,
         metadata: dict[str, str] | None = None,
     ) -> None:
-        event = EventRecord(
-            id=uuid4().hex,
-            timestamp=_utc_now_iso(),
+        self.alert_service._record_event(
             device_id=device_id,
             event_type=event_type,
             severity=severity,
             message=message,
-            metadata=metadata or {},
+            metadata=metadata,
         )
-        self.event_history.append(event)
-        self._dashboard_cache = None
 
 
 _runtime_singleton: SimulatorRuntime | None = None

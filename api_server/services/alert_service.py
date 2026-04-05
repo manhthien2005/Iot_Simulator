@@ -1,0 +1,213 @@
+"""AlertService — extracted from SimulatorRuntime (Task 3.5).
+
+Owns alert push logic, event recording, and the ``event_history`` deque.
+
+Thread-safety: methods that touch shared state acquire ``self._lock``
+(the *same* ``threading.RLock`` instance shared with ``SimulatorRuntime``).
+"""
+
+from __future__ import annotations
+
+import collections
+import json as _json
+from threading import RLock
+from time import monotonic
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
+
+if TYPE_CHECKING:
+    from api_server.dependencies import DeviceRecord, PreparedAlertPush, EventRecord
+
+try:
+    from Iot_Simulator.api_server.schemas import AlertEvent
+except ModuleNotFoundError:
+    from api_server.schemas import AlertEvent
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+class AlertService:
+    """Manages alert pushing, event recording, and event history."""
+
+    def __init__(
+        self,
+        *,
+        devices: dict[str, "DeviceRecord"],
+        event_history: collections.deque["EventRecord"],
+        lock: RLock,
+        last_alert_pushes: dict[tuple[str, str, str], float],
+        alert_pushes_in_flight: set[tuple[str, str, str]],
+        push_interval: int,
+        health_backend_url: str,
+        http_sender: Any,  # callable(endpoint, payload_json, headers=None) -> int
+        telemetry_alert_endpoint_fn: Any,  # callable(base_url) -> str
+        publish_device_log_fn: Any,  # callable(sim_device_id, *, level, message, timestamp) -> None
+        dashboard_cache_ref: list,  # mutable container: [DashboardSummary | None]
+    ) -> None:
+        # Shared mutable state — same object references as SimulatorRuntime
+        self.devices = devices
+        self.event_history = event_history
+        self._lock = lock
+        self._last_alert_pushes = last_alert_pushes
+        self._alert_pushes_in_flight = alert_pushes_in_flight
+        self._push_interval = push_interval
+        self._health_backend_url = health_backend_url
+        self._http_sender = http_sender
+        self._telemetry_alert_endpoint = telemetry_alert_endpoint_fn
+        self._publish_device_log = publish_device_log_fn
+        self._dashboard_cache_ref = dashboard_cache_ref
+
+    # ------------------------------------------------------------------
+    # Alert push
+    # ------------------------------------------------------------------
+
+    def _prepare_alert_push_locked(
+        self,
+        sim_device_id: str,
+        event_type: str,
+        severity: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> "PreparedAlertPush | None":
+        try:
+            from Iot_Simulator.api_server.dependencies import PreparedAlertPush
+        except ModuleNotFoundError:
+            from api_server.dependencies import PreparedAlertPush
+
+        device = self.devices.get(sim_device_id)
+        if device is None or device.bound_db_device_id is None:
+            return None
+
+        normalized_event_type = str(event_type or "").strip().lower() or "generic_alert"
+        normalized_severity = str(severity or "").strip().lower() or "warning"
+        signature = (sim_device_id, normalized_event_type, normalized_severity)
+        if signature in self._alert_pushes_in_flight:
+            return None
+
+        now = monotonic()
+        cooldown_seconds = max(float(self._push_interval), 10.0)
+        last_sent_at = self._last_alert_pushes.get(signature)
+        if last_sent_at is not None and now - last_sent_at < cooldown_seconds:
+            return None
+
+        alert_metadata = dict(metadata or {})
+        timestamp = str(
+            alert_metadata.pop("timestamp", None)
+            or alert_metadata.pop("emitted_at", None)
+            or _utc_now_iso()
+        )
+        explicit_user_id = alert_metadata.pop("user_id", None)
+        payload = {
+            "db_device_id": device.bound_db_device_id,
+            "user_id": explicit_user_id,
+            "event_type": normalized_event_type,
+            "severity": normalized_severity,
+            "timestamp": timestamp,
+            "metadata": alert_metadata,
+        }
+        self._alert_pushes_in_flight.add(signature)
+        return PreparedAlertPush(
+            sim_device_id=sim_device_id,
+            signature=signature,
+            event_type=normalized_event_type,
+            severity=normalized_severity,
+            timestamp=timestamp,
+            payload_json=_json.dumps(payload),
+        )
+
+    def _push_alert_to_backend(
+        self,
+        sim_device_id: str,
+        event_type: str,
+        severity: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            prepared = self._prepare_alert_push_locked(
+                sim_device_id,
+                event_type=event_type,
+                severity=severity,
+                metadata=metadata,
+            )
+        if prepared is None:
+            return
+        endpoint = self._telemetry_alert_endpoint(self._health_backend_url)
+        try:
+            status_code = self._http_sender(endpoint, prepared.payload_json)
+        except Exception as exc:
+            with self._lock:
+                self._alert_pushes_in_flight.discard(prepared.signature)
+            self._publish_device_log(
+                prepared.sim_device_id,
+                level="ERROR",
+                message=f"alert push failed: {prepared.event_type}/{prepared.severity} ({exc})",
+                timestamp=prepared.timestamp,
+            )
+            return
+
+        with self._lock:
+            self._alert_pushes_in_flight.discard(prepared.signature)
+            if 200 <= status_code < 300:
+                self._last_alert_pushes[prepared.signature] = monotonic()
+                publish_ok = True
+            else:
+                publish_ok = False
+
+        if publish_ok:
+            self._publish_device_log(
+                prepared.sim_device_id,
+                level="INFO",
+                message=f"alert push OK: {prepared.event_type}/{prepared.severity} -> HTTP {status_code}",
+                timestamp=prepared.timestamp,
+            )
+            return
+
+        self._publish_device_log(
+            prepared.sim_device_id,
+            level="ERROR",
+            message=f"alert push failed: {prepared.event_type}/{prepared.severity} -> HTTP {status_code}",
+            timestamp=prepared.timestamp,
+        )
+
+    # ------------------------------------------------------------------
+    # Event recording
+    # ------------------------------------------------------------------
+
+    def _record_event(
+        self,
+        *,
+        device_id: str,
+        event_type: str,
+        severity: str,
+        message: str,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        try:
+            from Iot_Simulator.api_server.dependencies import EventRecord
+        except ModuleNotFoundError:
+            from api_server.dependencies import EventRecord
+
+        event = EventRecord(
+            id=uuid4().hex,
+            timestamp=_utc_now_iso(),
+            device_id=device_id,
+            event_type=event_type,
+            severity=severity,
+            message=message,
+            metadata=metadata or {},
+        )
+        self.event_history.append(event)
+        # Invalidate dashboard cache
+        if self._dashboard_cache_ref:
+            self._dashboard_cache_ref[0] = None
+
+    # ------------------------------------------------------------------
+    # Event queries
+    # ------------------------------------------------------------------
+
+    def recent_events(self, limit: int = 10) -> list[AlertEvent]:
+        with self._lock:
+            selected = list(self.event_history)[-max(1, limit):]
+            return [event.to_schema() for event in reversed(selected)]
