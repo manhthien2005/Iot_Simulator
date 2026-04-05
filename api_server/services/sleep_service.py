@@ -23,6 +23,10 @@ import httpx
 
 from sqlalchemy import text
 
+# Dual import path: supports both package-level execution
+#   (`python -m Iot_Simulator.api_server.main`)
+# and direct execution from the project root
+#   (`uvicorn api_server.main:app`).
 try:
     from Iot_Simulator.api_server.config import load_sleep_scenarios
     from Iot_Simulator.api_server.db import session_scope

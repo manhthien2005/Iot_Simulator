@@ -16,6 +16,10 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
+# Dual import path: supports both package-level execution
+#   (`python -m Iot_Simulator.api_server.main`)
+# and direct execution from the project root
+#   (`uvicorn api_server.main:app`).
 try:
     from Iot_Simulator.api_server.schemas import DataBindingConfig
     from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry

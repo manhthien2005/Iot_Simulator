@@ -20,6 +20,10 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from api_server.dependencies import DeviceRecord, PreparedAlertPush, EventRecord
 
+# Dual import path: supports both package-level execution
+#   (`python -m Iot_Simulator.api_server.main`)
+# and direct execution from the project root
+#   (`uvicorn api_server.main:app`).
 try:
     from Iot_Simulator.api_server.schemas import AlertEvent
 except ModuleNotFoundError:

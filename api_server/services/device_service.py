@@ -16,6 +16,10 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
+# Dual import path: supports both package-level execution
+#   (`python -m Iot_Simulator.api_server.main`)
+# and direct execution from the project root
+#   (`uvicorn api_server.main:app`).
 try:
     from Iot_Simulator.api_server.backend_admin_client import BackendAdminClient
     from Iot_Simulator.api_server.db import session_scope
@@ -46,6 +50,7 @@ class _RuntimeSessionOps(Protocol):
 
 def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> dict[str, Any]:
     """Import and delegate to the module-level helper in dependencies."""
+    # Dual import path — see module-level comment above.
     try:
         from Iot_Simulator.api_server.dependencies import _build_db_device_persona as _helper
     except ModuleNotFoundError:
