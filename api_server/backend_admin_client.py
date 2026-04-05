@@ -4,9 +4,9 @@ import json as _json
 import logging
 import os
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+
+import httpx
 
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,24 @@ class BackendAdminClient:
     def __init__(self, base_url: str | None = None) -> None:
         self._backend_root = self._resolve_backend_base_url(base_url)
         self._base = f"{self._backend_root}/mobile/admin"
+        # Reusable sync client with connection pooling
+        self._sync_client = httpx.Client(
+            base_url=self._base,
+            timeout=httpx.Timeout(self._TIMEOUT_SECONDS),
+            headers={"X-Internal-Service": "iot-simulator"},
+        )
+        # Lazy-initialized async client (created on first async call)
+        self._async_client: httpx.AsyncClient | None = None
+
+    def _ensure_async_client(self) -> httpx.AsyncClient:
+        """Lazily create the async client to avoid event-loop issues at init time."""
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(
+                base_url=self._base,
+                timeout=httpx.Timeout(self._TIMEOUT_SECONDS),
+                headers={"X-Internal-Service": "iot-simulator"},
+            )
+        return self._async_client
 
     @staticmethod
     def _resolve_backend_base_url(base_url: str | None = None) -> str:
@@ -54,10 +72,14 @@ class BackendAdminClient:
 
     @staticmethod
     def _headers(*, has_body: bool) -> dict[str, str]:
-        headers = {"X-Internal-Service": "iot-simulator"}
+        headers: dict[str, str] = {}
         if has_body:
             headers["Content-Type"] = "application/json"
         return headers
+
+    # ------------------------------------------------------------------
+    # Sync transport (httpx.Client — connection-pooled, non-blocking-friendly)
+    # ------------------------------------------------------------------
 
     def _request(
         self,
@@ -67,41 +89,116 @@ class BackendAdminClient:
         body: dict[str, Any] | None = None,
         allow_statuses: set[int] | None = None,
     ) -> Any:
-        url = f"{self._base}{path}"
-        data = None
+        extra_headers = self._headers(has_body=body is not None)
+        content: bytes | None = None
         if body is not None:
-            data = _json.dumps(body).encode("utf-8")
-
-        request = Request(
-            url,
-            data=data,
-            method=method,
-            headers=self._headers(has_body=body is not None),
-        )
+            content = _json.dumps(body).encode("utf-8")
 
         try:
-            with urlopen(request, timeout=self._TIMEOUT_SECONDS) as response:
-                raw = response.read()
-        except HTTPError as exc:
-            raw_error = exc.read().decode("utf-8", errors="replace")
-            if allow_statuses and int(exc.code) in allow_statuses:
+            response = self._sync_client.request(
+                method,
+                path,
+                content=content,
+                headers=extra_headers,
+            )
+        except httpx.ConnectError as exc:
+            raise BackendAdminClientError(
+                method=method,
+                path=path,
+                reason=str(exc),
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise BackendAdminClientError(
+                method=method,
+                path=path,
+                reason=f"timeout: {exc}",
+            ) from exc
+
+        if response.status_code >= 400:
+            if allow_statuses and response.status_code in allow_statuses:
                 return None
             raise BackendAdminClientError(
                 method=method,
                 path=path,
-                status_code=int(exc.code),
-                body=raw_error or None,
-            ) from exc
-        except URLError as exc:
-            raise BackendAdminClientError(
-                method=method,
-                path=path,
-                reason=str(exc.reason),
-            ) from exc
+                status_code=response.status_code,
+                body=response.text or None,
+            )
 
+        raw = response.content
         if not raw:
             return None
         return _json.loads(raw.decode("utf-8"))
+
+    # ------------------------------------------------------------------
+    # Async transport (httpx.AsyncClient — non-blocking for event loop)
+    # ------------------------------------------------------------------
+
+    async def _arequest(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        allow_statuses: set[int] | None = None,
+    ) -> Any:
+        client = self._ensure_async_client()
+        extra_headers = self._headers(has_body=body is not None)
+        content: bytes | None = None
+        if body is not None:
+            content = _json.dumps(body).encode("utf-8")
+
+        try:
+            response = await client.request(
+                method,
+                path,
+                content=content,
+                headers=extra_headers,
+            )
+        except httpx.ConnectError as exc:
+            raise BackendAdminClientError(
+                method=method,
+                path=path,
+                reason=str(exc),
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise BackendAdminClientError(
+                method=method,
+                path=path,
+                reason=f"timeout: {exc}",
+            ) from exc
+
+        if response.status_code >= 400:
+            if allow_statuses and response.status_code in allow_statuses:
+                return None
+            raise BackendAdminClientError(
+                method=method,
+                path=path,
+                status_code=response.status_code,
+                body=response.text or None,
+            )
+
+        raw = response.content
+        if not raw:
+            return None
+        return _json.loads(raw.decode("utf-8"))
+
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the sync client and release pooled connections."""
+        self._sync_client.close()
+
+    async def aclose(self) -> None:
+        """Close the async client and release pooled connections."""
+        if self._async_client is not None:
+            await self._async_client.aclose()
+            self._async_client = None
+
+    # ------------------------------------------------------------------
+    # Sync public API (backward-compatible)
+    # ------------------------------------------------------------------
 
     def list_devices(self, user_id: int | None = None) -> list[dict[str, Any]]:
         query = ""
@@ -186,6 +283,45 @@ class BackendAdminClient:
     def find_user_by_email(self, email: str) -> dict[str, Any] | None:
         quoted_email = quote(email, safe="")
         result = self._request(
+            "GET",
+            f"/users/search?email={quoted_email}",
+            allow_statuses={404},
+        )
+        return result if isinstance(result, dict) else None
+
+    # ------------------------------------------------------------------
+    # Async public API (mirrors sync API for async callers)
+    # ------------------------------------------------------------------
+
+    async def alist_devices(self, user_id: int | None = None) -> list[dict[str, Any]]:
+        query = ""
+        if user_id is not None:
+            query = "?" + urlencode({"user_id": user_id})
+        result = await self._arequest("GET", f"/devices{query}")
+        return result if isinstance(result, list) else []
+
+    async def aupdate_heartbeat(
+        self,
+        device_id: int,
+        battery_level: int | None = None,
+        signal_strength: int | None = None,
+    ) -> dict[str, Any] | None:
+        try:
+            return await self._arequest(
+                "POST",
+                f"/devices/{device_id}/heartbeat",
+                body={
+                    "battery_level": battery_level,
+                    "signal_strength": signal_strength,
+                },
+            )
+        except Exception as exc:
+            logger.warning("Async heartbeat update failed for device %s: %s", device_id, exc)
+            return None
+
+    async def afind_user_by_email(self, email: str) -> dict[str, Any] | None:
+        quoted_email = quote(email, safe="")
+        result = await self._arequest(
             "GET",
             f"/users/search?email={quoted_email}",
             allow_statuses={404},

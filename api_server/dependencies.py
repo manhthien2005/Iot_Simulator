@@ -15,8 +15,7 @@ from threading import Event, RLock, Thread
 from time import monotonic
 from typing import Any
 from uuid import uuid4
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+import httpx
 
 from sqlalchemy import text
 
@@ -548,17 +547,18 @@ class SimulatorRuntime:
         request_headers = {"Content-Type": "application/json"}
         if headers:
             request_headers.update(headers)
-        request = Request(
-            endpoint,
-            data=payload.encode("utf-8"),
-            method="POST",
-            headers=request_headers,
-        )
         try:
-            with urlopen(request, timeout=10) as response:
-                return int(response.getcode() or 200)
-        except HTTPError as exc:
-            return int(exc.code)
+            response = httpx.post(
+                endpoint,
+                content=payload.encode("utf-8"),
+                headers=request_headers,
+                timeout=10,
+            )
+            return response.status_code
+        except httpx.HTTPStatusError as exc:
+            return exc.response.status_code
+        except httpx.HTTPError:
+            raise
 
     def _publish_device_log(self, sim_device_id: str, *, level: str, message: str, timestamp: str | None = None) -> None:
         ts = timestamp or _utc_now_iso()

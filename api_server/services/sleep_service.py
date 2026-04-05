@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from threading import RLock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
-from urllib.request import Request, urlopen
+import httpx
 
 from sqlalchemy import text
 
@@ -583,14 +583,13 @@ class SleepService:
         }
         endpoint = f"{self._health_backend_url}/mobile/telemetry/sleep"
         try:
-            req = Request(
+            resp = httpx.post(
                 endpoint,
-                data=_json.dumps(payload).encode("utf-8"),
-                method="POST",
+                content=_json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
+                timeout=5,
             )
-            with urlopen(req, timeout=5) as resp:
-                code = int(resp.getcode() or 200)
+            code = resp.status_code
             self._publish_device_log(
                 sim_device_id,
                 level="INFO",
@@ -639,15 +638,14 @@ class SleepService:
 
     def _post_sleep_payload(self, *, payload: dict[str, Any], device_id: str) -> tuple[bool, int]:
         endpoint = f"{self._health_backend_url}/mobile/telemetry/sleep"
-        req = Request(
+        resp = httpx.post(
             endpoint,
-            data=_json.dumps(payload).encode("utf-8"),
-            method="POST",
+            content=_json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
+            timeout=5,
         )
-        with urlopen(req, timeout=5) as resp:
-            code = int(resp.getcode() or 200)
-            raw_body = resp.read().decode("utf-8", "replace").strip()
+        code = resp.status_code
+        raw_body = resp.text.strip()
         if raw_body:
             try:
                 body = _json.loads(raw_body)
