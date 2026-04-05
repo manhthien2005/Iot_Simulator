@@ -30,6 +30,7 @@ build/
 # Logs and local runtime files
 *.log
 *.pid
+*dump*.txt
 
 # Editor and OS files
 .DS_Store
