@@ -3,6 +3,7 @@ import type { VitalsSample } from "../../types/vitals";
 import type { SimulatedDevice } from "../../types/device";
 import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
+import { POLL_INTERVALS } from "../../config/defaults";
 
 interface MotionPreviewPanelProps {
   selectedDevice: SimulatedDevice | null;
@@ -33,7 +34,7 @@ export const MotionPreviewPanel = memo(function MotionPreviewPanel({ selectedDev
       if (!document.hidden) {
         setTimeSlice((prev) => prev + 1);
       }
-    }, 1000);
+    }, POLL_INTERVALS.motionPreview);
     return () => window.clearInterval(handle);
   }, [selectedDevice?.id]);
 

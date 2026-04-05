@@ -8,6 +8,7 @@ import { SleepAnalyticsTab } from "../components/domain/SleepAnalyticsTab";
 import { RiskAnalyticsTab } from "../components/domain/RiskAnalyticsTab";
 import { useDevices } from "../hooks/useDevices";
 import { getDbSleepHistory, getRiskScore, getSleepSession } from "../services/analyticsApi";
+import { POLL_INTERVALS } from "../config/defaults";
 
 type AnalyticsTab = "sleep" | "risk";
 
@@ -68,21 +69,21 @@ export function AnalyticsPage() {
     queryKey: ["analytics", "sleep", deviceId],
     queryFn: () => getSleepSession(deviceId),
     enabled: Boolean(deviceId),
-    refetchInterval: 15000,
+    refetchInterval: POLL_INTERVALS.analytics,
   });
 
   const dbHistoryQuery = useQuery({
     queryKey: ["analytics", "sleep", "db-history", deviceId],
     queryFn: () => getDbSleepHistory(deviceId, 30),
     enabled: Boolean(deviceId),
-    refetchInterval: 15000,
+    refetchInterval: POLL_INTERVALS.analytics,
   });
 
   const riskQuery = useQuery({
     queryKey: ["analytics", "risk", deviceId],
     queryFn: () => getRiskScore(deviceId),
     enabled: Boolean(deviceId),
-    refetchInterval: 10000,
+    refetchInterval: POLL_INTERVALS.analyticsRisk,
   });
 
   if (devicesLoading) {

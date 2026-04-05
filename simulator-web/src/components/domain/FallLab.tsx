@@ -5,6 +5,7 @@ import { useRecentEvents } from "../../hooks/useRecentEvents";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { notify } from "../../utils/toast";
+import { FALL_COUNTDOWN_SECONDS, FALL_LAB_RECENT_EVENTS_LIMIT, POLL_INTERVALS } from "../../config/defaults";
 
 interface FallLabProps {
   devices: SimulatedDevice[];
@@ -21,7 +22,7 @@ export function FallLab({ devices }: FallLabProps) {
   const targetRef = useRef(resolvedTarget);
   useEffect(() => { targetRef.current = resolvedTarget; }, [resolvedTarget]);
 
-  const { data: recentEvents = [] } = useRecentEvents(30, 1500, {
+  const { data: recentEvents = [] } = useRecentEvents(FALL_LAB_RECENT_EVENTS_LIMIT, POLL_INTERVALS.fallLabEvents, {
     enabled: Boolean(resolvedTarget),
     select: (events) => events.filter((event) => event.deviceId === resolvedTarget).slice(0, 15),
   });
@@ -41,7 +42,7 @@ export function FallLab({ devices }: FallLabProps) {
     if (timerRef.current) {
       clearInterval(timerRef.current);
     }
-    setCountdown(30);
+    setCountdown(FALL_COUNTDOWN_SECONDS);
     timerRef.current = setInterval(() => {
       setCountdown((value) => {
         if (value <= 1) {

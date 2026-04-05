@@ -11,6 +11,7 @@ import { getVitalSeverity } from "../../utils/severity";
 import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
 import { Skeleton } from "../ui/Skeleton";
+import { POLL_INTERVALS } from "../../config/defaults";
 
 interface SessionVitalsPanelProps {
   devices: SimulatedDevice[];
@@ -45,7 +46,7 @@ export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: Sessio
   const { data: latestSample, isLoading, error } = useQuery({
     queryKey: ["vitals", "session-panel", deviceId],
     queryFn: () => fetchLatestVitals(deviceId),
-    refetchInterval: deviceId && isConnected ? 1000 : false,
+    refetchInterval: deviceId && isConnected ? POLL_INTERVALS.vitals : false,
     enabled: Boolean(deviceId && isConnected),
   });
 

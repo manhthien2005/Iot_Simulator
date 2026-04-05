@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchRecentEvents } from "../services/eventApi";
 import type { AlertEvent } from "../types/event";
+import { POLL_INTERVALS } from "../config/defaults";
 
 interface UseRecentEventsOptions {
   enabled?: boolean;
@@ -9,7 +10,7 @@ interface UseRecentEventsOptions {
 
 export function useRecentEvents(
   limit = 10,
-  refetchInterval = 3000,
+  refetchInterval: number = POLL_INTERVALS.events,
   options?: UseRecentEventsOptions,
 ) {
   return useQuery({
