@@ -931,7 +931,7 @@ class SleepService:
         today = datetime.now(timezone.utc).date()
         for raw in sampled:
             summary = raw.get("summary") or {}
-            session_hash = int(_hashlib.md5(str(raw).encode("utf-8")).hexdigest()[:8], 16)
+            session_hash = int(_hashlib.sha256(str(raw).encode("utf-8")).hexdigest()[:8], 16)
             date_value = (today - timedelta(days=(session_hash % 30) + 1)).isoformat()
             if date_value in seen_dates:
                 continue
