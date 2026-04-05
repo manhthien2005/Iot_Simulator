@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SimulatedDevice } from "../../types/device";
-import { fetchRecentEvents, injectEvent, injectFallEvent } from "../../services/eventApi";
+import { injectEvent, injectFallEvent } from "../../services/eventApi";
+import { useRecentEvents } from "../../hooks/useRecentEvents";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 
@@ -16,10 +16,7 @@ export function FallLab({ devices }: FallLabProps) {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const resolvedTarget = useMemo(() => targetId || (devices[0]?.id ?? ""), [devices, targetId]);
-  const { data: recentEvents = [] } = useQuery({
-    queryKey: ["events", "recent", resolvedTarget],
-    queryFn: () => fetchRecentEvents(30),
-    refetchInterval: 1500,
+  const { data: recentEvents = [] } = useRecentEvents(30, 1500, {
     enabled: Boolean(resolvedTarget),
     select: (events) => events.filter((event) => event.deviceId === resolvedTarget).slice(0, 15),
   });
