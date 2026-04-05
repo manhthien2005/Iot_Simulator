@@ -6,6 +6,7 @@ import json as _json
 import logging
 import math
 import os
+import random as _random
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -860,8 +861,6 @@ class SimulatorRuntime:
         - End at `start_time + duration_minutes`
         - Clamp the end time to `now` and never move the recomputed start before 20:00 UTC
         """
-        import random as _random
-
         duration = max(1, int(duration_minutes))
         now = datetime.now(timezone.utc)
         yesterday = (now - timedelta(days=1)).date()
@@ -895,8 +894,6 @@ class SimulatorRuntime:
 
     @staticmethod
     def _compute_sleep_window_for_date(target_date: date, duration_minutes: int) -> tuple[date, datetime, datetime]:
-        import random as _random
-
         duration = max(1, int(duration_minutes))
         start_floor = datetime(
             target_date.year,
@@ -2150,8 +2147,6 @@ class SimulatorRuntime:
             if not filtered:
                 filtered = pool
 
-        import random as _random
-
         raw = _random.choice(filtered)
         summary = self._apply_sleep_summary_override(raw.get("summary") or {}, profile.get("stats_override"))
         return raw, {
@@ -3022,8 +3017,6 @@ class SimulatorRuntime:
         start_hour: int = 22,
         start_minute: int = 0,
     ) -> list[SleepStageSegment]:
-        import random as _random
-
         if start_hour == 22 and start_minute == 0:
             offset = _random.randint(0, 90)
             start_hour = 22 + (offset // 60)
@@ -3201,7 +3194,6 @@ class SimulatorRuntime:
             return []
 
         import hashlib as _hashlib
-        import random as _random
 
         sample_size = min(max(1, limit * 2), len(all_sessions))
         sampled = _random.sample(all_sessions, sample_size)
