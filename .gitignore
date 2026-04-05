@@ -43,6 +43,7 @@ task_plan.md
 findings.md
 progress.md
 git_status_out.txt
+REFACTOR_PLAN*
 
 # Local test artifact folders
 normalized_artifacts_runtime_test/
@@ -58,19 +59,7 @@ docs/**
 
 # Dataset files — large binary data, distributed via Drive/Kaggle instead
 # See datasets/DATASET_MANIFEST.md and datasets/DOWNLOAD_GUIDE.md for download instructions
-datasets/**/*.zip
-datasets/**/*.gz
-datasets/**/*.dat
-datasets/**/*.pkl
-datasets/**/*.pkl.gz
-datasets/**/*.edf
-datasets/**/*.rec
-datasets/**/*.csv
-datasets/**/*.h5
-datasets/**/*.txt
-datasets/**/Raw/
-datasets/**/normalized/
-datasets/**/etl/
+datasets/
 
 # Normalized ETL artifacts — rebuilt locally by running etl_pipeline/normalize.py
 normalized_artifacts/
