@@ -9,6 +9,11 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+try:
+    from Iot_Simulator.api_server.repositories.device_repository import DeviceRepository
+except ModuleNotFoundError:
+    from api_server.repositories.device_repository import DeviceRepository
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,8 +203,9 @@ class SimAdminService:
                 if cls._admin_list_cache_rows is not None and now < cls._admin_list_cache_expires_at:
                     return cls._copy_rows(cls._admin_list_cache_rows)
 
-        rows = db.execute(text(cls._ADMIN_LIST_SQL)).mappings().all()
-        devices = [dict(row) for row in rows]
+        # Delegate to DeviceRepository for typed query execution
+        typed_devices = DeviceRepository.list_admin_devices(db)
+        devices = [d.model_dump() for d in typed_devices]
 
         if ttl_seconds > 0:
             with cls._admin_list_cache_lock:
@@ -234,64 +240,17 @@ class SimAdminService:
         mqtt_client_id: str | None = None,
         user_id: int | None = None,
     ) -> dict[str, Any]:
-        normalized_name = device_name.strip()
-        normalized_serial = SimAdminService._normalize_optional_string(serial_number)
-        normalized_mqtt = SimAdminService._normalize_optional_string(mqtt_client_id)
-
-        if not normalized_name:
-            raise ValueError("device_name must not be empty")
-
-        SimAdminService._check_duplicate_identity(
-            serial_number=normalized_serial,
-            mqtt_client_id=normalized_mqtt,
-            db=db,
+        # Delegate to DeviceRepository (handles validation, dup-check, insert)
+        typed = DeviceRepository.create_device(
+            db,
+            device_name=device_name,
+            device_type=device_type,
+            serial_number=serial_number,
+            mqtt_client_id=mqtt_client_id,
+            user_id=user_id,
         )
-
-        row = db.execute(
-            text(
-                """
-                INSERT INTO devices (
-                    user_id,
-                    device_name,
-                    device_type,
-                    serial_number,
-                    mqtt_client_id,
-                    is_active,
-                    registered_at,
-                    updated_at
-                )
-                VALUES (
-                    :user_id,
-                    :device_name,
-                    :device_type,
-                    :serial_number,
-                    :mqtt_client_id,
-                    FALSE,
-                    NOW(),
-                    NOW()
-                )
-                RETURNING id
-                """
-            ),
-            {
-                "user_id": user_id,
-                "device_name": normalized_name,
-                "device_type": device_type,
-                "serial_number": normalized_serial,
-                "mqtt_client_id": normalized_mqtt,
-            },
-        ).mappings().first()
-
-        if row is None:
-            db.rollback()
-            raise ValueError("Failed to create device")
-
-        db.commit()
         SimAdminService.invalidate_admin_list_cache()
-        created = SimAdminService._fetch_device(int(row["id"]), db)
-        if created is None:
-            raise ValueError("Failed to reload device after creation")
-        return created
+        return typed.model_dump()
 
     @staticmethod
     def assign_device(device_id: int, user_id: int, db: Session) -> dict[str, Any] | None:
@@ -397,26 +356,11 @@ class SimAdminService:
 
     @staticmethod
     def delete_device(device_id: int, db: Session) -> bool:
-        row = db.execute(
-            text(
-                """
-                UPDATE devices
-                SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW()
-                WHERE id = :device_id
-                  AND deleted_at IS NULL
-                RETURNING id
-                """
-            ),
-            {"device_id": device_id},
-        ).mappings().first()
-
-        if row is None:
-            db.rollback()
-            return False
-
-        db.commit()
-        SimAdminService.invalidate_admin_list_cache()
-        return True
+        # Delegate to DeviceRepository
+        deleted = DeviceRepository.delete_device(device_id, db)
+        if deleted:
+            SimAdminService.invalidate_admin_list_cache()
+        return deleted
 
     @staticmethod
     def update_heartbeat(
