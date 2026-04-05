@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # Load repo-local environment before importing the API stack.
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,9 +31,11 @@ from Iot_Simulator.api_server.ws.log_stream import handle_ws_logs
 
 app = FastAPI(title="IoT Simulator API", version="1.0.0")
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
