@@ -108,7 +108,8 @@ def _derive_age(value: Any, default: int = 35) -> int:
     return max(years, 0)
 
 
-def _coerce_float(value: Any, default: float) -> float:
+def _safe_float(value: Any, default: float | None) -> float | None:
+    """Convert *value* to float, returning *default* on failure / NaN / Inf."""
     try:
         cast = float(value)
     except (TypeError, ValueError):
@@ -132,8 +133,8 @@ def _normalize_gender(value: Any) -> str | None:
 def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> dict[str, Any]:
     return {
         "age": _derive_age(device_info.get("date_of_birth")),
-        "weight_kg": _coerce_float(device_info.get("weight_kg"), 70.0),
-        "height_cm": _coerce_float(device_info.get("height_cm"), 170.0),
+        "weight_kg": _safe_float(device_info.get("weight_kg"), 70.0),
+        "height_cm": _safe_float(device_info.get("height_cm"), 170.0),
         "gender": _normalize_gender(device_info.get("gender")),
         "seed": db_device_id % 97,
     }
@@ -3007,15 +3008,8 @@ class SimulatorRuntime:
             sourceMode=source_mode if source_mode != "synthetic" else None,
         )
 
-    @staticmethod
-    def _safe_float(value: Any, default: float | None) -> float | None:
-        try:
-            cast = float(value)
-        except (TypeError, ValueError):
-            return default
-        if math.isnan(cast) or math.isinf(cast):
-            return default
-        return cast
+    # Delegate to module-level _safe_float for backward compatibility
+    _safe_float = staticmethod(_safe_float)
 
     def _require_device(self, device_id: str) -> DeviceRecord:
         if device_id not in self.devices:
