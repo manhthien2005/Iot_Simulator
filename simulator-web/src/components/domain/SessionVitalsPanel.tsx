@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
@@ -156,7 +156,7 @@ export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: Sessio
   );
 }
 
-function MetricWidget(props: { title: string; value: string; severity: MetricSeverity | null }) {
+const MetricWidget = memo(function MetricWidget(props: { title: string; value: string; severity: MetricSeverity | null }) {
   return (
     <div style={{ border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)", padding: "10px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
@@ -166,9 +166,13 @@ function MetricWidget(props: { title: string; value: string; severity: MetricSev
       <div style={{ marginTop: "6px", fontSize: "18px", fontWeight: 700, fontFamily: "var(--font-mono)" }}>{props.value}</div>
     </div>
   );
-}
+}, (prev, next) =>
+  prev.title === next.title &&
+  prev.value === next.value &&
+  prev.severity === next.severity
+);
 
-function MetricChart(props: { title: string; metric: MetricKey; data: VitalsSample[] }) {
+const MetricChart = memo(function MetricChart(props: { title: string; metric: MetricKey; data: VitalsSample[] }) {
   const option = useMemo(() => buildMetricOption(props.metric, props.data), [props.metric, props.data]);
   return (
     <div style={{ border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)", padding: "8px" }}>
@@ -176,7 +180,15 @@ function MetricChart(props: { title: string; metric: MetricKey; data: VitalsSamp
       <ReactECharts option={option} notMerge={false} lazyUpdate style={{ height: "180px", width: "100%" }} />
     </div>
   );
-}
+}, (prev, next) => {
+  if (prev.title !== next.title) return false;
+  if (prev.data === next.data) return true;
+  if (prev.data.length !== next.data.length) return false;
+  if (prev.data.length === 0) return true;
+  const prevLast = prev.data[prev.data.length - 1];
+  const nextLast = next.data[next.data.length - 1];
+  return prevLast.timestamp === nextLast.timestamp;
+});
 
 function buildMetricOption(metric: MetricKey, data: VitalsSample[]): EChartsOption {
   const points = data.slice(-120);
