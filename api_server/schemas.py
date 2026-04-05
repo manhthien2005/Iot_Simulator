@@ -293,3 +293,83 @@ class AdminAssignUserRequest(BaseModel):
 
 class BatchActivateRequest(BaseModel):
     device_ids: list[int]
+
+
+# ---------------------------------------------------------------------------
+# Admin device response models (typed replacements for raw ``dict`` returns)
+# ---------------------------------------------------------------------------
+
+
+class AdminDeviceResponse(BaseModel):
+    """Typed response for a device row from the production DB."""
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    uuid: str | None = None
+    user_id: int | None = None
+    user_email: str | None = None
+    user_full_name: str | None = None
+    height_cm: float | None = None
+    weight_kg: float | None = None
+    date_of_birth: str | None = None
+    gender: str | None = None
+    device_name: str | None = None
+    device_type: str | None = None
+    model: str | None = None
+    firmware_version: str | None = None
+    serial_number: str | None = None
+    mac_address: str | None = None
+    mqtt_client_id: str | None = None
+    is_active: bool = False
+    battery_level: int | None = None
+    signal_strength: int | None = None
+    last_seen_at: str | None = None
+    last_sync_at: str | None = None
+    registered_at: str | None = None
+    updated_at: str | None = None
+    deleted_at: str | None = None
+    # enriched by the router layer
+    is_sim_running: bool = False
+
+
+class AdminDeviceActionResponse(AdminDeviceResponse):
+    """Extended response returned by mutating admin actions (activate, assign, etc.)."""
+
+    message: str | None = None
+
+
+class AdminDeviceAssignResponse(AdminDeviceActionResponse):
+    """Response for the assign endpoint — includes the assigned user's email."""
+
+    user_email: str | None = None  # type: ignore[assignment]
+
+
+class AdminBatchActivateItem(BaseModel):
+    """Single item in a batch-activate response list."""
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    status: str
+    detail: str | None = None
+    # all AdminDeviceResponse fields are optional here (present only on success)
+    uuid: str | None = None
+    user_id: int | None = None
+    user_email: str | None = None
+    user_full_name: str | None = None
+    device_name: str | None = None
+    device_type: str | None = None
+    is_active: bool | None = None
+    message: str | None = None
+
+
+class AdminUserResponse(BaseModel):
+    """Typed response for user search."""
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    email: str
+    full_name: str | None = None
+    is_active: bool = True
