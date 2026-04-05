@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { DeviceAssignPanel } from "../components/domain/DeviceAssignPanel";
 import { FallLab } from "../components/domain/FallLab";
 import { MotionPreviewPanel } from "../components/domain/MotionPreviewPanel";
@@ -11,7 +12,6 @@ import { applyScenarioPreset, fetchScenarios } from "../services/scenarioApi";
 
 import { useSessionVitalsStore } from "../stores/sessionVitalsStore";
 import { useSessionStore } from "../stores/sessionStore";
-import type { ScenarioOption } from "../types/scenario";
 import type { VitalsSample } from "../types/vitals";
 import { notify } from "../utils/toast";
 
@@ -21,15 +21,15 @@ export function SessionRunnerPage() {
   const preselectedScenarioId = searchParams.get("scenario");
   const { data: devices = [] } = useDevices(2000);
   const { data: sessions = [], refetch: refetchSessions } = useSessions();
-  const [scenarios, setScenarios] = useState<ScenarioOption[]>([]);
+  const { data: scenarios = [] } = useQuery({
+    queryKey: ["scenarios"],
+    queryFn: fetchScenarios,
+    staleTime: 60_000,
+  });
   const [scenarioByDevice, setScenarioByDevice] = useState<Record<string, string>>({});
   const [monitorDeviceId, setMonitorDeviceId] = useState<string>("");
 
   const { activeSessionId, setActiveSession, streamSpeed, setSpeed, isPaused, setPaused } = useSessionStore();
-
-  useEffect(() => {
-    fetchScenarios().then(setScenarios).catch(() => setScenarios([]));
-  }, []);
 
   const defaultScenarioId = useMemo(
     () => scenarios.find((scenario) => scenario.category !== "fall")?.id ?? scenarios[0]?.id ?? "normal_rest",
