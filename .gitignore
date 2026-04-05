@@ -65,6 +65,8 @@ datasets/**/*.pkl.gz
 datasets/**/*.edf
 datasets/**/*.rec
 datasets/**/*.csv
+datasets/**/*.h5
+datasets/**/*.txt
 datasets/**/Raw/
 datasets/**/normalized/
 datasets/**/etl/
