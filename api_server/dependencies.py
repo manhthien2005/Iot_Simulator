@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json as _json
 import logging
 import math
@@ -516,7 +517,7 @@ class SimulatorRuntime:
         self.devices: dict[str, DeviceRecord] = {}
         self.device_scenarios: dict[str, str] = {}
         self.sessions: dict[str, SessionRecord] = {}
-        self.event_history: list[EventRecord] = []
+        self.event_history: collections.deque[EventRecord] = collections.deque(maxlen=2000)
         self.risk_snapshots: dict[str, RiskSnapshot] = {}
         self._dashboard_cache: DashboardSummary | None = None
         self._dashboard_cache_ts: float = 0.0
@@ -1948,7 +1949,7 @@ class SimulatorRuntime:
 
     def recent_events(self, limit: int = 10) -> list[AlertEvent]:
         with self._lock:
-            selected = self.event_history[-max(1, limit) :]
+            selected = list(self.event_history)[-max(1, limit):]
             return [event.to_schema() for event in reversed(selected)]
 
     def dashboard_summary(self) -> DashboardSummary:
@@ -3401,8 +3402,6 @@ class SimulatorRuntime:
             metadata=metadata or {},
         )
         self.event_history.append(event)
-        if len(self.event_history) > 2000:
-            self.event_history[:] = self.event_history[-2000:]
         self._dashboard_cache = None
 
 
