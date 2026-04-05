@@ -1,5 +1,5 @@
 import { Plus, Watch } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CreateDbDeviceModal } from "../components/domain/CreateDbDeviceModal";
 import { DbDeviceTable } from "../components/domain/DbDeviceTable";
@@ -24,19 +24,22 @@ export function DevicesPage() {
   const queryClient = useQueryClient();
   const { data: dbDevices = [], isLoading, error, refetch } = useDbDevices();
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [openCreate, setOpenCreate] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [batchActivating, setBatchActivating] = useState(false);
 
   const filtered = useMemo(
-    () =>
-      dbDevices.filter(
+    () => {
+      const term = deferredSearch.toLowerCase();
+      return dbDevices.filter(
         (device) =>
-          device.device_name.toLowerCase().includes(search.toLowerCase()) ||
-          (device.serial_number ?? "").toLowerCase().includes(search.toLowerCase()) ||
-          (device.user_email ?? "").toLowerCase().includes(search.toLowerCase())
-      ),
-    [dbDevices, search]
+          device.device_name.toLowerCase().includes(term) ||
+          (device.serial_number ?? "").toLowerCase().includes(term) ||
+          (device.user_email ?? "").toLowerCase().includes(term)
+      );
+    },
+    [dbDevices, deferredSearch]
   );
 
   useEffect(() => {
