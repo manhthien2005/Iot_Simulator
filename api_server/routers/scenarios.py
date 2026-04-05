@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from typing import Literal
 
@@ -14,6 +15,8 @@ from Iot_Simulator.api_server.schemas import (
     PushSleepDateRequest,
     PushSleepDateResponse,
 )
+
+_logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["scenarios"])
 
@@ -144,9 +147,48 @@ def apply_scenario(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def _run_backfill(
+    runtime: SimulatorRuntime,
+    device_id: str,
+    days_behind: int,
+    scenario_id: str,
+) -> None:
+    """Execute backfill loop in background (CRITICAL #3 fix).
+
+    This runs outside the HTTP request lifecycle so it can take as long
+    as needed without hitting request timeouts.
+    """
+    today = datetime.now(timezone.utc).date()
+    pushed = 0
+    skipped = 0
+    for offset in range(days_behind, 0, -1):
+        target_date = today - timedelta(days=offset)
+        try:
+            result = runtime.push_sleep_session_for_date(
+                device_id=device_id,
+                target_date=target_date,
+                scenario_id=scenario_id,
+            )
+            if result.get("success"):
+                pushed += 1
+            else:
+                skipped += 1
+        except Exception as exc:
+            skipped += 1
+            _logger.warning(
+                "Backfill day %s failed: %s: %s",
+                target_date, type(exc).__name__, exc,
+            )
+    _logger.info(
+        "Backfill complete for device=%s days=%d pushed=%d skipped=%d",
+        device_id, days_behind, pushed, skipped,
+    )
+
+
 @router.post("/scenarios/sleep/backfill", response_model=BackfillSleepResponse)
 def backfill_sleep_history(
     request: BackfillSleepRequest,
+    background_tasks: BackgroundTasks,
     runtime: SimulatorRuntime = Depends(get_runtime),
 ) -> BackfillSleepResponse:
     """
@@ -156,36 +198,26 @@ def backfill_sleep_history(
 
     - days_behind: số ngày muốn backfill (1-90)
     - scenario_id: kịch bản giấc ngủ để truyền xuống runtime
+
+    CRITICAL #3 fix: The heavy loop (up to 90 iterations of DB + AI + HTTP)
+    now runs in a FastAPI BackgroundTask. The endpoint returns immediately
+    with status ``pushed=0`` and ``total_days`` set, indicating processing
+    has been accepted.
     """
-    pushed = 0
-    skipped = 0
-    errors: list[str] = []
-    today = datetime.now(timezone.utc).date()
+    # Schedule the heavy work in the background
+    background_tasks.add_task(
+        _run_backfill,
+        runtime,
+        request.device_id,
+        request.days_behind,
+        request.scenario_id,
+    )
 
-    for offset in range(request.days_behind, 0, -1):
-        target_date = today - timedelta(days=offset)
-        try:
-            result = runtime.push_sleep_session_for_date(
-                device_id=request.device_id,
-                target_date=target_date,
-                scenario_id=request.scenario_id,
-            )
-            if result.get("success"):
-                pushed += 1
-            else:
-                skipped += 1
-                errors.append(f"{target_date}: {result.get('message', 'push failed')}")
-        except KeyError as exc:
-            skipped += 1
-            errors.append(f"{target_date}: device not found — {exc}")
-        except Exception as exc:
-            skipped += 1
-            errors.append(f"{target_date}: {type(exc).__name__}: {exc}")
-
+    # Return immediately — the client receives a "processing" response
     return BackfillSleepResponse(
-        pushed=pushed,
-        skipped=skipped,
-        errors=errors,
+        pushed=0,
+        skipped=0,
+        errors=["Backfill accepted — processing in background"],
         total_days=request.days_behind,
     )
 

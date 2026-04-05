@@ -17,12 +17,7 @@ export async function injectFallEvent(deviceId: string, variant = "confirmed"): 
   });
 }
 
-export async function injectDeviceStatus(deviceId: string, eventType: "device_offline" | "device_online" | "low_battery"): Promise<void> {
-  await apiClient.post("/api/sim/events/device-status", {
-    device_id: deviceId,
-    event_type: eventType,
-  });
-}
+// Reserved for future use: injectDeviceStatus
 
 export async function fetchRecentEvents(limit = 10): Promise<AlertEvent[]> {
   const response = await apiClient.get<AlertEvent[]>("/api/sim/events/recent", { params: { limit } });

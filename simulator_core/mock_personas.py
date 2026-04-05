@@ -1,3 +1,4 @@
+# NOTE: These personas are available for manual use / future API integration. Not currently auto-imported.
 """Mock persona configurations for demo and testing. Use with POST /api/sim/devices."""
 
 from __future__ import annotations

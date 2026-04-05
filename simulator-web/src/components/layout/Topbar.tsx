@@ -1,14 +1,16 @@
 import { Square, Zap } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSessions } from "../../hooks/useSessions";
 import { stopSession } from "../../services/sessionApi";
 import { useSessionStore } from "../../stores/sessionStore";
+import { notify } from "../../utils/toast";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
 
 export function Topbar() {
   const { activeSessionId, setActiveSession } = useSessionStore();
   const { data: sessions } = useSessions();
+  const [stopping, setStopping] = useState(false);
 
   const runningSessions = useMemo(() => {
     if (!sessions) return [];
@@ -25,10 +27,25 @@ export function Topbar() {
 
   const stopAll = async () => {
     if (runningSessions.length === 0) return;
-    for (const session of runningSessions) {
-      await stopSession(session.id);
+    setStopping(true);
+    try {
+      const results = await Promise.allSettled(
+        runningSessions.map((session) => stopSession(session.id))
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed === 0) {
+        notify.success("Đã dừng tất cả phiên mô phỏng.");
+      } else if (failed < results.length) {
+        notify.warning(`Dừng được ${results.length - failed}/${results.length} phiên. ${failed} phiên lỗi.`);
+      } else {
+        notify.error("Không dừng được phiên nào. Kiểm tra kết nối.");
+      }
+      setActiveSession(null);
+    } catch {
+      notify.error("Lỗi khi dừng phiên mô phỏng.");
+    } finally {
+      setStopping(false);
     }
-    setActiveSession(null);
   };
 
   return (
@@ -55,8 +72,8 @@ export function Topbar() {
           <Badge severity="normal" dot pulse>
             Đang chạy {activeDeviceCount} thiết bị ({runningSessions.length} phiên)
           </Badge>
-          <Button variant="danger" size="sm" leftIcon={<Square size={14} />} onClick={stopAll}>
-            Dừng tất cả
+          <Button variant="danger" size="sm" leftIcon={<Square size={14} />} onClick={stopAll} disabled={stopping}>
+            {stopping ? "Đang dừng…" : "Dừng tất cả"}
           </Button>
         </div>
       ) : (

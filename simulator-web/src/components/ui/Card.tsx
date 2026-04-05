@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 interface CardProps {
   children: ReactNode;
@@ -16,6 +16,8 @@ const paddingMap = {
 };
 
 export function Card({ children, header, footer, padding = "md", hoverable = false }: CardProps) {
+  const [hovered, setHovered] = useState(false);
+
   return (
     <section
       className="surface-card"
@@ -23,22 +25,12 @@ export function Card({ children, header, footer, padding = "md", hoverable = fal
         padding: paddingMap[padding],
         transition:
           "border-color var(--duration-fast) var(--ease-default), box-shadow var(--duration-fast) var(--ease-default), transform var(--duration-fast) var(--ease-default)",
-        transform: hoverable ? "translateY(0)" : "none",
+        transform: hoverable && hovered ? "translateY(-1px)" : hoverable ? "translateY(0)" : "none",
+        borderColor: hoverable && hovered ? "var(--border-subtle)" : undefined,
+        boxShadow: hoverable && hovered ? "var(--shadow-md)" : undefined,
       }}
-      onMouseEnter={(event) => {
-        if (hoverable) {
-          event.currentTarget.style.borderColor = "var(--border-subtle)";
-          event.currentTarget.style.boxShadow = "var(--shadow-md)";
-          event.currentTarget.style.transform = "translateY(-1px)";
-        }
-      }}
-      onMouseLeave={(event) => {
-        if (hoverable) {
-          event.currentTarget.style.borderColor = "var(--border-default)";
-          event.currentTarget.style.boxShadow = "var(--shadow-sm)";
-          event.currentTarget.style.transform = "translateY(0)";
-        }
-      }}
+      onMouseEnter={hoverable ? () => setHovered(true) : undefined}
+      onMouseLeave={hoverable ? () => setHovered(false) : undefined}
     >
       {header ? <header style={{ marginBottom: "12px" }}>{header}</header> : null}
       <div>{children}</div>

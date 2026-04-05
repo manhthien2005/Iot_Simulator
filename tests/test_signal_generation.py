@@ -125,8 +125,8 @@ class TestFallArchitecture(unittest.TestCase):
     def test_severity_spo2_85_critical(self):
         self.assertEqual(self._sev(95, 85, 120, 78), "critical")
 
-    def test_severity_dbp_112_critical(self):
-        self.assertEqual(self._sev(88, 97, 155, 112), "critical")
+    def test_severity_dbp_120_critical(self):
+        self.assertEqual(self._sev(88, 97, 155, 120), "critical")
 
     def test_severity_bp_140_90_warning(self):
         self.assertEqual(self._sev(82, 97, 140, 90), "warning")

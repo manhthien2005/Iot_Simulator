@@ -12,7 +12,11 @@ let lastUnavailableMessage = "API Simulator không khả dụng. Hãy kiểm tra
 export const apiClient = axios.create({
   baseURL,
   timeout: 10000,
-  headers: { "Content-Type": "application/json" },
+  // NOTE: Do NOT set a default Content-Type header here.
+  // For GET/HEAD requests it is unnecessary and forces a CORS preflight
+  // (OPTIONS) on every call, doubling the request count toward the backend
+  // rate-limit budget.  Axios automatically sets Content-Type to
+  // "application/json" when a POST/PUT/PATCH body is an object.
 });
 
 function isUnavailableError(status: number | undefined) {

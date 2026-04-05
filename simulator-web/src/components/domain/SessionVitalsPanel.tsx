@@ -1,6 +1,5 @@
-import { useEffect, useMemo } from "react";
+import React, { memo, Suspense, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Activity } from "lucide-react";
 import type { SimulatedDevice } from "../../types/device";
@@ -11,11 +10,21 @@ import { getVitalSeverity } from "../../utils/severity";
 import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
 import { Skeleton } from "../ui/Skeleton";
+import { POLL_INTERVALS } from "../../config/defaults";
+
+const ReactECharts = React.lazy(() => import("echarts-for-react"));
 
 interface SessionVitalsPanelProps {
   devices: SimulatedDevice[];
   deviceId: string;
   onDeviceChange: (deviceId: string) => void;
+}
+
+interface EChartsTooltipParam {
+  axisValue: string;
+  marker: string;
+  seriesName: string;
+  data: [string, number];
 }
 
 type MetricKey = "heartRate" | "spo2" | "temperature" | "bloodPressure" | "respiratoryRate";
@@ -38,7 +47,7 @@ export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: Sessio
   const { data: latestSample, isLoading, error } = useQuery({
     queryKey: ["vitals", "session-panel", deviceId],
     queryFn: () => fetchLatestVitals(deviceId),
-    refetchInterval: deviceId && isConnected ? 1000 : false,
+    refetchInterval: deviceId && isConnected ? POLL_INTERVALS.vitals : false,
     enabled: Boolean(deviceId && isConnected),
   });
 
@@ -94,6 +103,7 @@ export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: Sessio
             <select
               value={deviceId}
               onChange={(event) => onDeviceChange(event.target.value)}
+              aria-label="Chọn thiết bị để xem sinh hiệu"
               style={{
                 background: "var(--bg-base)",
                 color: "var(--text-primary)",
@@ -156,7 +166,7 @@ export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: Sessio
   );
 }
 
-function MetricWidget(props: { title: string; value: string; severity: MetricSeverity | null }) {
+const MetricWidget = memo(function MetricWidget(props: { title: string; value: string; severity: MetricSeverity | null }) {
   return (
     <div style={{ border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)", padding: "10px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
@@ -166,17 +176,31 @@ function MetricWidget(props: { title: string; value: string; severity: MetricSev
       <div style={{ marginTop: "6px", fontSize: "18px", fontWeight: 700, fontFamily: "var(--font-mono)" }}>{props.value}</div>
     </div>
   );
-}
+}, (prev, next) =>
+  prev.title === next.title &&
+  prev.value === next.value &&
+  prev.severity === next.severity
+);
 
-function MetricChart(props: { title: string; metric: MetricKey; data: VitalsSample[] }) {
+const MetricChart = memo(function MetricChart(props: { title: string; metric: MetricKey; data: VitalsSample[] }) {
   const option = useMemo(() => buildMetricOption(props.metric, props.data), [props.metric, props.data]);
   return (
     <div style={{ border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)", padding: "8px" }}>
       <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>{props.title}</div>
-      <ReactECharts option={option} notMerge={false} lazyUpdate style={{ height: "180px", width: "100%" }} />
+      <Suspense fallback={<Skeleton style={{ height: "180px" }} />}>
+        <ReactECharts option={option} notMerge={false} lazyUpdate style={{ height: "180px", width: "100%" }} />
+      </Suspense>
     </div>
   );
-}
+}, (prev, next) => {
+  if (prev.title !== next.title) return false;
+  if (prev.data === next.data) return true;
+  if (prev.data.length !== next.data.length) return false;
+  if (prev.data.length === 0) return true;
+  const prevLast = prev.data[prev.data.length - 1];
+  const nextLast = next.data[next.data.length - 1];
+  return prevLast.timestamp === nextLast.timestamp;
+});
 
 function buildMetricOption(metric: MetricKey, data: VitalsSample[]): EChartsOption {
   const points = data.slice(-120);
@@ -186,11 +210,12 @@ function buildMetricOption(metric: MetricKey, data: VitalsSample[]): EChartsOpti
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis",
-        formatter: (params: any) => {
+        formatter: (rawParams: unknown) => {
+          const params = rawParams as EChartsTooltipParam | EChartsTooltipParam[];
           const rows = Array.isArray(params) ? params : [params];
           const axis = rows[0]?.axisValue;
           const header = `UTC+7: ${formatUtc7Time(axis)}`;
-          const lines = rows.map((row: any) => `${row.marker ?? ""}${row.seriesName}: ${formatChartValue(row.data?.[1])}`).join("<br/>");
+          const lines = rows.map((row) => `${row.marker ?? ""}${row.seriesName}: ${formatChartValue((row.data as [string, number])?.[1])}`).join("<br/>");
           return `${header}<br/>${lines}`;
         },
       },
@@ -270,10 +295,11 @@ function buildMetricOption(metric: MetricKey, data: VitalsSample[]): EChartsOpti
     backgroundColor: "transparent",
     tooltip: {
       trigger: "axis",
-      formatter: (params: any) => {
+      formatter: (rawParams: unknown) => {
+        const params = rawParams as EChartsTooltipParam | EChartsTooltipParam[];
         const rows = Array.isArray(params) ? params : [params];
         const axis = rows[0]?.axisValue;
-        return `UTC+7: ${formatUtc7Time(axis)}<br/>${rows[0]?.seriesName ?? ""}: ${formatChartValue(rows[0]?.data?.[1])}`;
+        return `UTC+7: ${formatUtc7Time(axis)}<br/>${rows[0]?.seriesName ?? ""}: ${formatChartValue((rows[0]?.data as [string, number])?.[1])}`;
       },
     },
     grid: { top: 20, right: 20, bottom: 26, left: 42 },

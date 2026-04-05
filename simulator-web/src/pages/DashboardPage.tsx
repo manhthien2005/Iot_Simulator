@@ -1,5 +1,6 @@
 import { AlertTimeline } from "../components/domain/AlertTimeline";
 import { Card } from "../components/ui/Card";
+import { KpiCard } from "../components/ui/KpiCard";
 import { Skeleton } from "../components/ui/Skeleton";
 import { useDashboardSummary } from "../hooks/useDashboardSummary";
 import { useRecentEvents } from "../hooks/useRecentEvents";
@@ -9,13 +10,14 @@ export function DashboardPage() {
   const { data: events = [] } = useRecentEvents(10, 3000);
 
   return (
-    <section style={{ display: "grid", gap: "14px" }}>
+    <section style={{ display: "grid", gap: "20px" }}>
       <div>
         <h1 className="page-title">Bảng điều khiển</h1>
         <p className="page-subtitle">Tổng quan KPI và dòng sự kiện. Phần sinh hiệu trực tiếp được hiển thị trong trang Phiên mô phỏng.</p>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(180px, 1fr))", gap: "10px" }}>
+      {/* KPI Grid — responsive via .kpi-grid class (4→2→1 columns) */}
+      <div className="kpi-grid">
         {summaryLoading ? (
           <>
             <Skeleton style={{ height: "88px" }} />
@@ -39,17 +41,20 @@ export function DashboardPage() {
         </p>
       </Card>
 
+      {/* Section header cho timeline */}
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div
+          style={{
+            width: "3px",
+            height: "18px",
+            borderRadius: "2px",
+            background: "var(--accent-cyan)",
+          }}
+        />
+        <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>Dòng sự kiện gần đây</h2>
+      </div>
+
       <AlertTimeline events={events} />
     </section>
-  );
-}
-
-function KpiCard(props: { title: string; value: string | number; subtitle: string }) {
-  return (
-    <Card>
-      <small style={{ color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{props.title}</small>
-      <div style={{ marginTop: "8px", fontSize: "30px", fontWeight: 700, fontFamily: "var(--font-mono)" }}>{props.value}</div>
-      <small style={{ color: "var(--text-muted)" }}>{props.subtitle}</small>
-    </Card>
   );
 }

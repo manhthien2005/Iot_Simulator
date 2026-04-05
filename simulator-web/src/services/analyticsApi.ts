@@ -17,9 +17,7 @@ export async function getSleepSession(deviceId: string): Promise<SleepSessionRes
   return response.data;
 }
 
-export async function pushSleepSession(deviceId: string): Promise<void> {
-  await apiClient.post(`/api/sim/analytics/sleep/${deviceId}/push`);
-}
+// Reserved for future use: pushSleepSession
 
 export async function getDbSleepHistory(deviceId: string, days: number = 30): Promise<DbSleepHistoryRow[]> {
   const response = await apiClient.get<DbSleepHistoryRow[]>("/api/sim/analytics/sleep/history", {

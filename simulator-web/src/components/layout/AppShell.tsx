@@ -6,11 +6,11 @@ import { Topbar } from "./Topbar";
 
 export function AppShell() {
   return (
-    <div style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "auto 1fr", background: "var(--bg-base)" }}>
+    <div className="app-shell" style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "auto 1fr", background: "var(--bg-base)" }}>
       <Sidebar />
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Topbar />
-        <main style={{ padding: "24px", maxWidth: "1600px" }}>
+        <main className="app-main" style={{ padding: "24px", maxWidth: "1600px" }}>
           <Suspense fallback={<RouteContentFallback />}>
             <Outlet />
           </Suspense>

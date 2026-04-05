@@ -1,3 +1,4 @@
+import React from "react";
 import type { AlertEvent } from "../../types/event";
 import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
@@ -6,7 +7,7 @@ interface AlertTimelineProps {
   events: AlertEvent[];
 }
 
-export function AlertTimeline({ events }: AlertTimelineProps) {
+function AlertTimelineInner({ events }: AlertTimelineProps) {
   return (
     <Card header={<strong>Dòng thời gian cảnh báo</strong>}>
       <div style={{ display: "grid", gap: "8px" }}>
@@ -36,3 +37,5 @@ export function AlertTimeline({ events }: AlertTimelineProps) {
     </Card>
   );
 }
+
+export const AlertTimeline = React.memo(AlertTimelineInner);

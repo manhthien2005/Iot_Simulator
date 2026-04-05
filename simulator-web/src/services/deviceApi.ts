@@ -1,34 +1,49 @@
 import { apiClient } from "./api";
-import type { BatchActivateResult, BindDeviceResponse, DbDevice, DeviceType, SimulatedDevice } from "../types/device";
+import type {
+  BatchActivateResult,
+  DbDevice,
+  DeviceType,
+  PersonaConfig,
+  SimulatedDevice,
+} from "../types/device";
+
+// ── Transform helpers ─────────────────────────────────────────────────────────
+// Backend PersonaConfig uses snake_case (weight_kg, height_cm).
+// Frontend standardizes on camelCase (weightKg, heightCm).
+
+interface RawPersonaConfig {
+  age?: number;
+  weight_kg?: number;
+  height_cm?: number;
+  gender?: string | null;
+  seed?: number;
+}
+
+interface RawSimulatedDevice extends Omit<SimulatedDevice, "personaConfig"> {
+  personaConfig?: RawPersonaConfig | null;
+}
+
+function normalizePersonaConfig(raw: RawPersonaConfig | null | undefined): PersonaConfig | undefined {
+  if (!raw) return undefined;
+  return {
+    age: raw.age,
+    weightKg: raw.weight_kg,
+    heightCm: raw.height_cm,
+    gender: raw.gender,
+    seed: raw.seed,
+  };
+}
+
+function normalizeSimDevice(raw: RawSimulatedDevice): SimulatedDevice {
+  const { personaConfig: rawPersona, ...rest } = raw;
+  return { ...rest, personaConfig: normalizePersonaConfig(rawPersona) };
+}
+
+// ── Device APIs ───────────────────────────────────────────────────────────────
 
 export async function fetchDevices(): Promise<SimulatedDevice[]> {
-  const response = await apiClient.get<SimulatedDevice[]>("/api/sim/devices");
-  return response.data;
-}
-
-export async function createDevice(payload: {
-  name: string;
-  type: DeviceType;
-  persona_config?: { age: number; weight_kg: number; height_cm: number; seed: number };
-}): Promise<SimulatedDevice> {
-  const response = await apiClient.post<SimulatedDevice>("/api/sim/devices", payload);
-  return response.data;
-}
-
-export async function deleteDevice(deviceId: string): Promise<void> {
-  await apiClient.delete(`/api/sim/devices/${deviceId}`);
-}
-
-export async function bindDevice(deviceId: string, dbDeviceId: number): Promise<BindDeviceResponse> {
-  const response = await apiClient.post<BindDeviceResponse>(`/api/sim/devices/${deviceId}/bind`, {
-    db_device_id: dbDeviceId,
-  });
-  return response.data;
-}
-
-export async function unbindDevice(deviceId: string): Promise<BindDeviceResponse> {
-  const response = await apiClient.delete<BindDeviceResponse>(`/api/sim/devices/${deviceId}/bind`);
-  return response.data;
+  const response = await apiClient.get<RawSimulatedDevice[]>("/api/sim/devices");
+  return response.data.map(normalizeSimDevice);
 }
 
 // ── Admin DB Device APIs ──────────────────────────────────────────────────────

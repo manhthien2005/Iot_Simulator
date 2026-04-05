@@ -25,6 +25,18 @@ class DeviceState:
     is_online: bool = True
 
 
+# LOW #2: Activity-dependent battery drain multipliers
+_BATTERY_DRAIN_FACTORS: dict[str, float] = {
+    "sleeping": 0.5,
+    "resting": 0.8,
+    "walking": 1.5,
+    "running": 1.5,
+    "standing": 1.0,
+    "fall": 1.2,
+    "recovery": 1.0,
+}
+
+
 @dataclass
 class PersonaEngine:
     FALL_DURATION_TICKS: ClassVar[int] = 10
@@ -37,11 +49,18 @@ class PersonaEngine:
         self._ticks = 0
         self._ticks_in_state = 0
         self._state_started_at = monotonic()
+        self._drain_accumulator: float = 0.0
 
     def tick(self) -> DeviceState:
         self._ticks += 1
         if self.state.battery_level > 0 and self._ticks % 60 == 0:
-            self.state.battery_level -= 1
+            # LOW #2: drain rate depends on activity state
+            factor = _BATTERY_DRAIN_FACTORS.get(self.state.activity_state, 1.0)
+            self._drain_accumulator += factor
+            if self._drain_accumulator >= 1.0:
+                drain = int(self._drain_accumulator)
+                self.state.battery_level = max(0, self.state.battery_level - drain)
+                self._drain_accumulator -= drain
 
         self._ticks_in_state += 1
         if self.state.activity_state == "fall" and self._ticks_in_state >= self.FALL_DURATION_TICKS:
@@ -60,8 +79,7 @@ class PersonaEngine:
         self._ticks_in_state = 0
         return self.state
 
-    def set_activity(self, activity_state: str, stress_state: str | None = None) -> DeviceState:
-        return self.transition_to(activity_state, stress_state)
+    # Removed dead code: set_activity, current_activity_label, time_in_state, is_fall_event
 
     def inject_event(self, event_type: str, variant: str | None = None) -> DeviceState:
         if event_type == "fall_detected":
@@ -88,11 +106,3 @@ class PersonaEngine:
             self.state.stress_state = "neutral"
         return self.state
 
-    def current_activity_label(self) -> str:
-        return self.state.activity_state
-
-    def time_in_state(self) -> float:
-        return monotonic() - self._state_started_at
-
-    def is_fall_event(self) -> bool:
-        return self.state.activity_state == "fall"

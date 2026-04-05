@@ -26,7 +26,7 @@ def recent_events(
     limit: int = Query(default=10, ge=1, le=200),
     runtime: SimulatorRuntime = Depends(get_runtime),
 ) -> list[AlertEvent]:
-    return runtime.recent_events(limit=limit)
+    return runtime.alert_service.recent_events(limit=limit)
 
 
 @router.post("/events/fall", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,6 +1,6 @@
-import { Download, Terminal } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { Download, Terminal } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LogEntry } from "../../hooks/useLogStream";
 import { Button } from "../ui/Button";
@@ -10,7 +10,12 @@ interface LogViewerProps {
   logs: LogEntry[];
 }
 
-export function LogViewer({ logs }: LogViewerProps) {
+function sanitizeCsvCell(val: string): string {
+  if (/^[=+\-@\t\r]/.test(val)) return `'${val}`;
+  return val;
+}
+
+function LogViewerInner({ logs }: LogViewerProps) {
   const [device, setDevice] = useState("all");
   const [level, setLevel] = useState("WARN+");
   const parentRef = useRef<HTMLDivElement | null>(null);
@@ -44,7 +49,12 @@ export function LogViewer({ logs }: LogViewerProps) {
 
   const exportCsv = () => {
     const header = "timestamp,level,device,message\n";
-    const body = filtered.map((row) => `${row.ts ?? ""},${row.level},${row.device_id},"${row.message.replace(/"/g, '""')}"`).join("\n");
+    const body = filtered
+      .map(
+        (row) =>
+          `${sanitizeCsvCell(row.ts ?? "")},${sanitizeCsvCell(row.level)},${sanitizeCsvCell(row.device_id)},"${sanitizeCsvCell(row.message.replace(/"/g, '""'))}"`
+      )
+      .join("\n");
     const blob = new Blob([header + body], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -132,6 +142,8 @@ export function LogViewer({ logs }: LogViewerProps) {
     </Card>
   );
 }
+
+export const LogViewer = React.memo(LogViewerInner);
 
 const selectStyle: CSSProperties = {
   background: "var(--bg-base)",

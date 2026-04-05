@@ -1,7 +1,9 @@
+import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchHealth } from "../../services/healthApi";
 import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
+import { POLL_INTERVALS } from "../../config/defaults";
 
 function statusToSeverity(value: string) {
   if (value === "running" || value === "connected" || value === "local-ok") return "normal" as const;
@@ -9,11 +11,11 @@ function statusToSeverity(value: string) {
   return "critical" as const;
 }
 
-export function HealthStatusPanel() {
+function HealthStatusPanelInner() {
   const { data } = useQuery({
     queryKey: ["health"],
     queryFn: fetchHealth,
-    refetchInterval: 15000,
+    refetchInterval: POLL_INTERVALS.health,
   });
 
   return (
@@ -48,3 +50,5 @@ function healthLabel(value: string) {
   if (value === "idle") return "rảnh";
   return value;
 }
+
+export const HealthStatusPanel = React.memo(HealthStatusPanelInner);

@@ -1,0 +1,9 @@
+"""Service layer — extracted from SimulatorRuntime (God Object decomposition)."""
+
+from .device_service import DeviceService
+from .vitals_service import VitalsService
+from .alert_service import AlertService
+from .session_service import SessionService
+from .sleep_service import SleepService
+
+__all__ = ["DeviceService", "VitalsService", "AlertService", "SessionService", "SleepService"]

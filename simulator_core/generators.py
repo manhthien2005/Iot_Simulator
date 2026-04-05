@@ -211,8 +211,7 @@ class MotionGenerator:
             return None
         return deepcopy(windows[self._rng.randrange(len(windows))])
 
-    def get_window_for_state(self, state: DeviceState) -> dict[str, Any] | None:
-        return self.generate(state)
+    # Removed dead code: get_window_for_state (alias for generate, 0 callers)
 
     def inject_fall(self, variant: str) -> dict[str, Any] | None:
         windows = self.registry.get_motion_windows(fall_variant=variant)
