@@ -1,5 +1,6 @@
 import { AlertTimeline } from "../components/domain/AlertTimeline";
 import { Card } from "../components/ui/Card";
+import { KpiCard } from "../components/ui/KpiCard";
 import { Skeleton } from "../components/ui/Skeleton";
 import { useDashboardSummary } from "../hooks/useDashboardSummary";
 import { useRecentEvents } from "../hooks/useRecentEvents";
@@ -41,15 +42,5 @@ export function DashboardPage() {
 
       <AlertTimeline events={events} />
     </section>
-  );
-}
-
-function KpiCard(props: { title: string; value: string | number; subtitle: string }) {
-  return (
-    <Card>
-      <small style={{ color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{props.title}</small>
-      <div style={{ marginTop: "8px", fontSize: "30px", fontWeight: 700, fontFamily: "var(--font-mono)" }}>{props.value}</div>
-      <small style={{ color: "var(--text-muted)" }}>{props.subtitle}</small>
-    </Card>
   );
 }
