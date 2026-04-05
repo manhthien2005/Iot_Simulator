@@ -18,6 +18,9 @@ export function FallLab({ devices }: FallLabProps) {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const resolvedTarget = useMemo(() => targetId || (devices[0]?.id ?? ""), [devices, targetId]);
+  const targetRef = useRef(resolvedTarget);
+  useEffect(() => { targetRef.current = resolvedTarget; }, [resolvedTarget]);
+
   const { data: recentEvents = [] } = useRecentEvents(30, 1500, {
     enabled: Boolean(resolvedTarget),
     select: (events) => events.filter((event) => event.deviceId === resolvedTarget).slice(0, 15),
@@ -46,7 +49,7 @@ export function FallLab({ devices }: FallLabProps) {
             clearInterval(timerRef.current);
             timerRef.current = null;
           }
-          injectFallEvent(resolvedTarget, "fall_no_response").catch(() => {
+          injectFallEvent(targetRef.current, "fall_no_response").catch(() => {
             notify.error("Gửi sự kiện fall_no_response thất bại");
           });
           return 0;
