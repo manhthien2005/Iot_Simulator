@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from Iot_Simulator.api_server.db import get_db
 from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
+from Iot_Simulator.api_server.middleware.auth import require_admin_key
 from Iot_Simulator.api_server.schemas import (
     AdminAssignUserRequest,
     BatchActivateRequest,
@@ -19,6 +20,12 @@ from Iot_Simulator.api_server.schemas import (
 from Iot_Simulator.api_server.sim_admin_service import SimAdminService
 
 router = APIRouter(tags=["devices"])
+
+# Sub-router for admin endpoints — protected by API-key auth
+_admin_router = APIRouter(
+    tags=["admin-devices"],
+    dependencies=[Depends(require_admin_key)],
+)
 
 
 @router.get("/devices", response_model=list[SimulatedDevice])
@@ -62,7 +69,7 @@ def unbind_device(device_id: str, runtime: SimulatorRuntime = Depends(get_runtim
     return BindDeviceResponse(sim_device_id=device.id, db_device_id=device.bound_db_device_id, status="unbound")
 
 
-@router.get("/admin/db-devices")
+@_admin_router.get("/admin/db-devices")
 def list_db_devices(
     runtime: SimulatorRuntime = Depends(get_runtime),
     db: Session = Depends(get_db),
@@ -75,7 +82,7 @@ def list_db_devices(
     return devices
 
 
-@router.post("/admin/db-devices", status_code=status.HTTP_201_CREATED)
+@_admin_router.post("/admin/db-devices", status_code=status.HTTP_201_CREATED)
 def create_db_device(
     payload: AdminCreateDeviceSimRequest,
     db: Session = Depends(get_db),
@@ -108,7 +115,7 @@ def create_db_device(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.post("/admin/db-devices/{device_id}/assign")
+@_admin_router.post("/admin/db-devices/{device_id}/assign")
 def assign_db_device(
     device_id: int,
     payload: AdminAssignUserRequest,
@@ -127,7 +134,7 @@ def assign_db_device(
     return {**result, "user_email": user["email"], "message": f"Assigned to {user['email']}"}
 
 
-@router.post("/admin/db-devices/{device_id}/activate")
+@_admin_router.post("/admin/db-devices/{device_id}/activate")
 def activate_db_device(
     device_id: int,
     runtime: SimulatorRuntime = Depends(get_runtime),
@@ -145,7 +152,7 @@ def activate_db_device(
     return {**result, "message": "Device activated"}
 
 
-@router.post("/admin/db-devices/batch-activate")
+@_admin_router.post("/admin/db-devices/batch-activate")
 def batch_activate_db_devices(
     payload: BatchActivateRequest,
     runtime: SimulatorRuntime = Depends(get_runtime),
@@ -167,7 +174,7 @@ def batch_activate_db_devices(
     return results
 
 
-@router.post("/admin/db-devices/{device_id}/deactivate")
+@_admin_router.post("/admin/db-devices/{device_id}/deactivate")
 def deactivate_db_device(
     device_id: int,
     runtime: SimulatorRuntime = Depends(get_runtime),
@@ -182,7 +189,7 @@ def deactivate_db_device(
     return {**result, "message": "Device deactivated"}
 
 
-@router.delete("/admin/db-devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+@_admin_router.delete("/admin/db-devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_db_device(
     device_id: int,
     runtime: SimulatorRuntime = Depends(get_runtime),
@@ -197,10 +204,14 @@ def delete_db_device(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/admin/users/search")
+@_admin_router.get("/admin/users/search")
 def search_user(email: str, db: Session = Depends(get_db)) -> dict:
     """Find a user by email directly from the production DB."""
     user = SimAdminService.find_user_by_email(email, db)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User not found: {email}")
     return user
+
+
+# Merge admin sub-router into main router so all routes are exposed together
+router.include_router(_admin_router)
