@@ -18,6 +18,13 @@ interface SessionVitalsPanelProps {
   onDeviceChange: (deviceId: string) => void;
 }
 
+interface EChartsTooltipParam {
+  axisValue: string;
+  marker: string;
+  seriesName: string;
+  data: [string, number];
+}
+
 type MetricKey = "heartRate" | "spo2" | "temperature" | "bloodPressure" | "respiratoryRate";
 type MetricSeverity = "normal" | "warning" | "critical";
 type BadgeSeverity = "normal" | "warning" | "critical" | "info" | "offline";
@@ -198,11 +205,12 @@ function buildMetricOption(metric: MetricKey, data: VitalsSample[]): EChartsOpti
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis",
-        formatter: (params: any) => {
+        formatter: (rawParams: unknown) => {
+          const params = rawParams as EChartsTooltipParam | EChartsTooltipParam[];
           const rows = Array.isArray(params) ? params : [params];
           const axis = rows[0]?.axisValue;
           const header = `UTC+7: ${formatUtc7Time(axis)}`;
-          const lines = rows.map((row: any) => `${row.marker ?? ""}${row.seriesName}: ${formatChartValue(row.data?.[1])}`).join("<br/>");
+          const lines = rows.map((row) => `${row.marker ?? ""}${row.seriesName}: ${formatChartValue((row.data as [string, number])?.[1])}`).join("<br/>");
           return `${header}<br/>${lines}`;
         },
       },
@@ -282,10 +290,11 @@ function buildMetricOption(metric: MetricKey, data: VitalsSample[]): EChartsOpti
     backgroundColor: "transparent",
     tooltip: {
       trigger: "axis",
-      formatter: (params: any) => {
+      formatter: (rawParams: unknown) => {
+        const params = rawParams as EChartsTooltipParam | EChartsTooltipParam[];
         const rows = Array.isArray(params) ? params : [params];
         const axis = rows[0]?.axisValue;
-        return `UTC+7: ${formatUtc7Time(axis)}<br/>${rows[0]?.seriesName ?? ""}: ${formatChartValue(rows[0]?.data?.[1])}`;
+        return `UTC+7: ${formatUtc7Time(axis)}<br/>${rows[0]?.seriesName ?? ""}: ${formatChartValue((rows[0]?.data as [string, number])?.[1])}`;
       },
     },
     grid: { top: 20, right: 20, bottom: 26, left: 42 },
