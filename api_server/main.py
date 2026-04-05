@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
+from Iot_Simulator.api_server.middleware.rate_limit import RateLimitMiddleware
+
 _ENV_CANDIDATES = [
     Path(__file__).resolve().parents[1] / ".env",
     Path(__file__).resolve().parents[2] / ".env",
@@ -40,6 +42,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RateLimitMiddleware)
 
 app.include_router(devices_router, prefix="/api/sim")
 app.include_router(dashboard_router, prefix="/api/sim")
