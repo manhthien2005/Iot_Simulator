@@ -1671,19 +1671,57 @@ class SimulatorRuntime:
         )
 
 
-_runtime_singleton: SimulatorRuntime | None = None
+class _RuntimeHolder:
+    """Indirection layer so tests can swap the singleton via
+    ``app.dependency_overrides[get_runtime]`` **or** by calling
+    ``set_runtime`` / ``reset_runtime_for_tests`` directly.
+
+    This replaces the old bare ``global _runtime_singleton`` pattern
+    and makes the codebase compatible with FastAPI's dependency-override
+    mechanism used in integration / unit tests.
+    """
+
+    __slots__ = ("instance",)
+
+    def __init__(self) -> None:
+        self.instance: SimulatorRuntime | None = None
+
+    def get(self) -> SimulatorRuntime:
+        if self.instance is None:
+            self.instance = SimulatorRuntime()
+        self.instance.start_background_tick()
+        return self.instance
+
+    def set(self, runtime: SimulatorRuntime) -> None:  # noqa: A003
+        self.instance = runtime
+
+    def reset(self) -> SimulatorRuntime:
+        if self.instance is not None:
+            self.instance.shutdown()
+        self.instance = SimulatorRuntime()
+        return self.instance
+
+
+_holder = _RuntimeHolder()
 
 
 def get_runtime() -> SimulatorRuntime:
-    global _runtime_singleton
-    if _runtime_singleton is None:
-        _runtime_singleton = SimulatorRuntime()
-    _runtime_singleton.start_background_tick()
-    return _runtime_singleton
+    """FastAPI dependency — returns the running :class:`SimulatorRuntime`.
+
+    Override in tests::
+
+        from api_server.dependencies import get_runtime
+
+        app.dependency_overrides[get_runtime] = lambda: my_mock_runtime
+    """
+    return _holder.get()
+
+
+def set_runtime(runtime: SimulatorRuntime) -> None:
+    """Explicitly install a runtime instance (e.g. during app lifespan)."""
+    _holder.set(runtime)
 
 
 def reset_runtime_for_tests() -> None:
-    global _runtime_singleton
-    if _runtime_singleton is not None:
-        _runtime_singleton.shutdown()
-    _runtime_singleton = SimulatorRuntime()
+    """Tear down & recreate the singleton — kept for backward compat."""
+    _holder.reset()

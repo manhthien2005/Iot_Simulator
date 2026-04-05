@@ -329,16 +329,49 @@ class BackendAdminClient:
         return result if isinstance(result, dict) else None
 
 
-_client_singleton: BackendAdminClient | None = None
+class _ClientHolder:
+    """Indirection for the :class:`BackendAdminClient` singleton.
+
+    Allows ``app.dependency_overrides[get_backend_admin_client]``
+    in tests without mutating module-level globals.
+    """
+
+    __slots__ = ("instance",)
+
+    def __init__(self) -> None:
+        self.instance: BackendAdminClient | None = None
+
+    def get(self) -> BackendAdminClient:
+        if self.instance is None:
+            self.instance = BackendAdminClient()
+        return self.instance
+
+    def set(self, client: BackendAdminClient) -> None:  # noqa: A003
+        self.instance = client
+
+    def reset(self) -> BackendAdminClient:
+        self.instance = BackendAdminClient()
+        return self.instance
+
+
+_client_holder = _ClientHolder()
 
 
 def get_backend_admin_client() -> BackendAdminClient:
-    global _client_singleton
-    if _client_singleton is None:
-        _client_singleton = BackendAdminClient()
-    return _client_singleton
+    """FastAPI dependency — returns the :class:`BackendAdminClient` singleton.
+
+    Override in tests::
+
+        app.dependency_overrides[get_backend_admin_client] = lambda: mock_client
+    """
+    return _client_holder.get()
+
+
+def set_backend_admin_client(client: BackendAdminClient) -> None:
+    """Explicitly install a client instance (e.g. during app lifespan)."""
+    _client_holder.set(client)
 
 
 def reset_backend_admin_client_for_tests() -> None:
-    global _client_singleton
-    _client_singleton = BackendAdminClient()
+    """Tear down & recreate — kept for backward compat."""
+    _client_holder.reset()

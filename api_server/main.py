@@ -2,7 +2,9 @@ from __future__ import annotations
 
 # Load repo-local environment before importing the API stack.
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
@@ -19,7 +21,7 @@ for _env_path in _ENV_CANDIDATES:
         load_dotenv(_env_path, override=False)
         break
 
-from Iot_Simulator.api_server.dependencies import get_runtime
+from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime, set_runtime
 from Iot_Simulator.api_server.routers.analytics import router as analytics_router
 from Iot_Simulator.api_server.routers.dashboard import router as dashboard_router
 from Iot_Simulator.api_server.routers.devices import router as devices_router
@@ -31,7 +33,20 @@ from Iot_Simulator.api_server.routers.verification import router as verification
 from Iot_Simulator.api_server.routers.vitals import router as vitals_router
 from Iot_Simulator.api_server.ws.log_stream import handle_ws_logs
 
-app = FastAPI(title="IoT Simulator API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Startup / shutdown lifecycle — initialises the runtime singleton
+    and stores it on ``app.state`` so tests can access or replace it."""
+    runtime = SimulatorRuntime()
+    set_runtime(runtime)
+    app.state.runtime = runtime
+    runtime.start_background_tick()
+    yield
+    runtime.shutdown()
+
+
+app = FastAPI(title="IoT Simulator API", version="1.0.0", lifespan=lifespan)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 
