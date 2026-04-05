@@ -518,6 +518,8 @@ class SimulatorRuntime:
         self.sessions: dict[str, SessionRecord] = {}
         self.event_history: list[EventRecord] = []
         self.risk_snapshots: dict[str, RiskSnapshot] = {}
+        self._dashboard_cache: DashboardSummary | None = None
+        self._dashboard_cache_ts: float = 0.0
         self.risk_history: dict[str, list[RiskHistoryPoint]] = {}
         self.logs = LogHub()
         self._lock = RLock()
@@ -1950,7 +1952,12 @@ class SimulatorRuntime:
             return [event.to_schema() for event in reversed(selected)]
 
     def dashboard_summary(self) -> DashboardSummary:
+        _DASHBOARD_CACHE_TTL = 5.0  # seconds
         with self._lock:
+            now_mono = monotonic()
+            if self._dashboard_cache is not None and (now_mono - self._dashboard_cache_ts) < _DASHBOARD_CACHE_TTL:
+                return self._dashboard_cache
+
             total = len(self.devices)
             active = len([device for device in self.devices.values() if device.state == "streaming"])
             alerts = len(
@@ -1967,12 +1974,15 @@ class SimulatorRuntime:
                 if session.last_publish_count > 0 and session.last_publish_latency_ms is not None
             ]
             avg_latency = int(round(sum(latencies) / len(latencies))) if latencies else 0
-            return DashboardSummary(
+            result = DashboardSummary(
                 totalDevices=total,
                 activeDevices=active,
                 alertsLastHour=alerts,
                 avgLatencyMs=avg_latency,
             )
+            self._dashboard_cache = result
+            self._dashboard_cache_ts = now_mono
+            return result
 
     def health_payload(self) -> dict[str, str]:
         with self._lock:
@@ -3393,6 +3403,7 @@ class SimulatorRuntime:
         self.event_history.append(event)
         if len(self.event_history) > 2000:
             self.event_history[:] = self.event_history[-2000:]
+        self._dashboard_cache = None
 
 
 _runtime_singleton: SimulatorRuntime | None = None
