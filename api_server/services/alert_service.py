@@ -12,6 +12,7 @@ import collections
 import json as _json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from threading import RLock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -26,19 +27,16 @@ if TYPE_CHECKING:
 #   (`uvicorn api_server.main:app`).
 try:
     from Iot_Simulator.api_server.schemas import AlertEvent
+    from Iot_Simulator.api_server.utils import _utc_now_iso
 except ModuleNotFoundError:
     from api_server.schemas import AlertEvent
+    from api_server.utils import _utc_now_iso
 
 
 logger = logging.getLogger(__name__)
 
 _ALERT_PUSH_MAX_RETRIES = 3
 _ALERT_PUSH_BACKOFF_BASE = 1  # seconds; actual delays: 1, 2, 4
-
-
-def _utc_now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
 
 
 class AlertService:
@@ -71,6 +69,13 @@ class AlertService:
         self._telemetry_alert_endpoint = telemetry_alert_endpoint_fn
         self._publish_device_log = publish_device_log_fn
         self._dashboard_cache_ref = dashboard_cache_ref
+
+        # Dedicated thread pool for alert push retries so that
+        # time.sleep() backoff does NOT block the background tick thread.
+        # (CRITICAL #1 fix)
+        self._alert_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="alert-push"
+        )
 
     # ------------------------------------------------------------------
     # Alert push
@@ -240,10 +245,13 @@ class AlertService:
             message=message,
             metadata=metadata or {},
         )
-        self.event_history.append(event)
-        # Invalidate dashboard cache
-        if self._dashboard_cache_ref:
-            self._dashboard_cache_ref[0] = None
+        # HIGH #2 fix: acquire lock before mutating shared event_history
+        # and invalidating dashboard cache.
+        with self._lock:
+            self.event_history.append(event)
+            # Invalidate dashboard cache
+            if self._dashboard_cache_ref:
+                self._dashboard_cache_ref[0] = None
 
     # ------------------------------------------------------------------
     # Event queries

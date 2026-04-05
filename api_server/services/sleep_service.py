@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json as _json
 import logging
-import math
 import os
 import random as _random
 from datetime import date, datetime, timedelta, timezone
@@ -28,8 +27,8 @@ from sqlalchemy import text
 # and direct execution from the project root
 #   (`uvicorn api_server.main:app`).
 try:
-    from Iot_Simulator.api_server.config import load_sleep_scenarios
     from Iot_Simulator.api_server.db import session_scope
+    from Iot_Simulator.api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender
     from Iot_Simulator.api_server.schemas import (
         DbSleepHistoryRow,
         SleepHistoryRow,
@@ -40,8 +39,8 @@ try:
     from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
     from Iot_Simulator.simulator_core.sleep_vitals_enricher import enrich_sleep_record
 except ModuleNotFoundError:
-    from api_server.config import load_sleep_scenarios
     from api_server.db import session_scope
+    from api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender
     from api_server.schemas import (
         DbSleepHistoryRow,
         SleepHistoryRow,
@@ -57,51 +56,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Sleep scenario data loaded from external YAML config
-SLEEP_SCENARIO_PHASES, SLEEP_SCENARIO_PROFILES = load_sleep_scenarios()
 
-
-# ── Helpers ──────────────────────────────────────────────────────────────
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _safe_float(value: Any, default: float | None) -> float | None:
-    """Convert *value* to float, returning *default* on failure / NaN / Inf."""
-    try:
-        cast = float(value)
-    except (TypeError, ValueError):
-        return default
-    if math.isnan(cast) or math.isinf(cast):
-        return default
-    return cast
-
-
-def _coerce_date(value: Any) -> date | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        try:
-            return date.fromisoformat(value[:10])
-        except ValueError:
-            return None
-    return None
-
-
-def _normalize_gender(value: Any) -> str | None:
-    normalized = str(value or "").strip().lower()
-    if not normalized:
-        return None
-    if normalized in {"male", "m", "man", "nam"}:
-        return "male"
-    if normalized in {"female", "f", "woman", "nu", "nữ"}:
-        return "female"
-    return normalized
+# MEDIUM #9: Module-level references — populated once from dependencies.py
+# via SleepService.__init__ to avoid calling load_sleep_scenarios() twice.
+SLEEP_SCENARIO_PHASES: dict[str, Any] = {}
+SLEEP_SCENARIO_PROFILES: dict[str, Any] = {}
 
 
 class SleepService:
@@ -121,7 +80,10 @@ class SleepService:
         http_sender: Any,
         publish_device_log_fn: Any,
         require_device_fn: Any,
+        sleep_scenario_phases: dict[str, Any] | None = None,
+        sleep_scenario_profiles: dict[str, Any] | None = None,
     ) -> None:
+        global SLEEP_SCENARIO_PHASES, SLEEP_SCENARIO_PROFILES
         self.devices = devices
         self.sessions = sessions
         self.device_scenarios = device_scenarios
@@ -134,6 +96,17 @@ class SleepService:
         self._http_sender = http_sender
         self._publish_device_log = publish_device_log_fn
         self._require_device = require_device_fn
+
+        # MEDIUM #9: accept pre-loaded scenario data from caller (dependencies.py)
+        # instead of calling load_sleep_scenarios() a second time.
+        if sleep_scenario_phases is not None:
+            SLEEP_SCENARIO_PHASES.update(sleep_scenario_phases)
+        if sleep_scenario_profiles is not None:
+            SLEEP_SCENARIO_PROFILES.update(sleep_scenario_profiles)
+
+        # CRITICAL #2 fix: shared httpx.Client for sleep push requests
+        # instead of creating a new TCP connection each call via httpx.post().
+        self._http_client: httpx.Client | None = None
 
     # ------------------------------------------------------------------
     # Sleep window computation
@@ -376,8 +349,16 @@ class SleepService:
         if deep_ratio > 1:
             deep_ratio /= 100
         deep_ratio = max(0.0, min(1.0, deep_ratio))
+        # LOW #3: add REM component to sleep score
+        rem_ratio = _safe_float(stage_props.get("rem"), 0.0)
+        if rem_ratio is None:
+            rem_ratio = 0.0
+        if rem_ratio > 1:
+            rem_ratio /= 100
+        rem_ratio = max(0.0, min(1.0, rem_ratio))
+        rem_bonus = rem_ratio * 10
         wake_count = int(summary.get("wake_count") or 0)
-        return max(0, min(100, round(25 + efficiency_ratio * 55 + deep_ratio * 20 - min(wake_count, 8) * 2.5)))
+        return max(0, min(100, round(25 + efficiency_ratio * 55 + deep_ratio * 20 + rem_bonus - min(wake_count, 8) * 2.5)))
 
     def _calc_sleep_score(self, raw: dict[str, Any]) -> int:
         summary = raw.get("summary") or {}
@@ -390,9 +371,15 @@ class SleepService:
         if deep_ratio > 1:
             deep_ratio /= 100
         deep_ratio = max(0.0, min(1.0, deep_ratio))
+        # LOW #3: add REM component to sleep score
+        rem_ratio = _safe_float(stage_props.get("rem"), 0.0)
+        if rem_ratio is not None and rem_ratio > 1:
+            rem_ratio /= 100
+        rem_ratio = max(0.0, min(1.0, rem_ratio or 0.0))
+        rem_bonus = rem_ratio * 10
         wake_count = int(summary.get("wake_count") or 0)
         wake_penalty = min(max(wake_count, 0), 8) * 2.5
-        score = 25 + efficiency_ratio * 55 + deep_ratio * 20 - wake_penalty
+        score = 25 + efficiency_ratio * 55 + deep_ratio * 20 + rem_bonus - wake_penalty
         return max(0, min(100, round(score)))
 
     def _compute_sleep_score_with_ai(self, sleep_ai_record: dict) -> int:
@@ -547,6 +534,12 @@ class SleepService:
     # Backend push
     # ------------------------------------------------------------------
 
+    def _get_http_client(self) -> httpx.Client:
+        """Lazy-init shared httpx.Client for sleep push requests (CRITICAL #2 fix)."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.Client(timeout=5)
+        return self._http_client
+
     def _push_sleep_to_backend(
         self,
         sim_device_id: str,
@@ -587,11 +580,12 @@ class SleepService:
         }
         endpoint = f"{self._health_backend_url}/mobile/telemetry/sleep"
         try:
-            resp = httpx.post(
+            # CRITICAL #2 fix: use shared httpx.Client instead of httpx.post()
+            client = self._get_http_client()
+            resp = client.post(
                 endpoint,
                 content=_json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
-                timeout=5,
             )
             code = resp.status_code
             self._publish_device_log(
@@ -642,11 +636,12 @@ class SleepService:
 
     def _post_sleep_payload(self, *, payload: dict[str, Any], device_id: str) -> tuple[bool, int]:
         endpoint = f"{self._health_backend_url}/mobile/telemetry/sleep"
-        resp = httpx.post(
+        # CRITICAL #2 fix: use shared httpx.Client instead of httpx.post()
+        client = self._get_http_client()
+        resp = client.post(
             endpoint,
             content=_json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
-            timeout=5,
         )
         code = resp.status_code
         raw_body = resp.text.strip()

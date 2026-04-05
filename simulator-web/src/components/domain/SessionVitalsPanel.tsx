@@ -1,6 +1,5 @@
-import { memo, useEffect, useMemo } from "react";
+import React, { memo, Suspense, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Activity } from "lucide-react";
 import type { SimulatedDevice } from "../../types/device";
@@ -12,6 +11,8 @@ import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
 import { Skeleton } from "../ui/Skeleton";
 import { POLL_INTERVALS } from "../../config/defaults";
+
+const ReactECharts = React.lazy(() => import("echarts-for-react"));
 
 interface SessionVitalsPanelProps {
   devices: SimulatedDevice[];
@@ -102,6 +103,7 @@ export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: Sessio
             <select
               value={deviceId}
               onChange={(event) => onDeviceChange(event.target.value)}
+              aria-label="Chọn thiết bị để xem sinh hiệu"
               style={{
                 background: "var(--bg-base)",
                 color: "var(--text-primary)",
@@ -185,7 +187,9 @@ const MetricChart = memo(function MetricChart(props: { title: string; metric: Me
   return (
     <div style={{ border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)", padding: "8px" }}>
       <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>{props.title}</div>
-      <ReactECharts option={option} notMerge={false} lazyUpdate style={{ height: "180px", width: "100%" }} />
+      <Suspense fallback={<Skeleton style={{ height: "180px" }} />}>
+        <ReactECharts option={option} notMerge={false} lazyUpdate style={{ height: "180px", width: "100%" }} />
+      </Suspense>
     </div>
   );
 }, (prev, next) => {

@@ -42,19 +42,31 @@ def _is_enabled() -> bool:
 class _SlidingWindowCounter:
     """Per-key sliding-window request counter (1-minute window)."""
 
-    __slots__ = ("_window_seconds", "_max_requests", "_buckets")
+    __slots__ = ("_window_seconds", "_max_requests", "_buckets", "_call_count")
 
     def __init__(self, max_requests: int, window_seconds: int = 60) -> None:
         self._window_seconds = window_seconds
         self._max_requests = max_requests
         # key -> deque of timestamps
         self._buckets: dict[str, collections.deque[float]] = collections.defaultdict(collections.deque)
+        self._call_count: int = 0
+
+    def _evict_stale(self) -> None:
+        """Remove keys whose deques are empty to prevent unbounded memory growth."""
+        stale_keys = [key for key, deque in self._buckets.items() if not deque]
+        for key in stale_keys:
+            del self._buckets[key]
 
     def is_allowed(self, key: str) -> tuple[bool, int]:
         """Return (allowed, remaining) for *key*.
 
         Prunes expired entries, then checks whether a new request fits.
+        Periodically evicts stale (empty) keys to prevent memory leak.
         """
+        self._call_count += 1
+        if self._call_count % 100 == 0:
+            self._evict_stale()
+
         now = time.monotonic()
         cutoff = now - self._window_seconds
         bucket = self._buckets[key]
@@ -77,7 +89,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: Callable, **kwargs) -> None:  # type: ignore[type-arg]
         super().__init__(app, **kwargs)
         self._read_limiter = _SlidingWindowCounter(
-            max_requests=_env_int("SIM_RATE_LIMIT_READ", 60),
+            max_requests=_env_int("SIM_RATE_LIMIT_READ", 300),
         )
         self._write_limiter = _SlidingWindowCounter(
             max_requests=_env_int("SIM_RATE_LIMIT_WRITE", 10),

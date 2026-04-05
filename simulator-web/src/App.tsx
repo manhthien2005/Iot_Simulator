@@ -34,8 +34,8 @@ export default function App() {
         <Route path="session" element={withBoundary(<SessionRunnerPage />)} />
         <Route path="analytics" element={withBoundary(<AnalyticsPage />)} />
         <Route path="verification" element={withBoundary(<VerificationPage />)} />
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
-      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }

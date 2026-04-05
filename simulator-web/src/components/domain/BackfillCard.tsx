@@ -1,35 +1,19 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { backfillSleep } from "../../services/analyticsApi";
 import type { BackfillSleepResponse } from "../../types/analytics";
 import { notify } from "../../utils/toast";
-
-const sleepScenarioOptions = [
-  { id: "good_sleep_night", label: "Đêm ngủ tốt (AASM chuẩn)" },
-  { id: "fragmented_sleep", label: "Ngủ phân mảnh" },
-  { id: "sleep_apnea_mild", label: "Ngưng thở nhẹ (AHI ~10)" },
-  { id: "sleep_apnea_severe", label: "Ngưng thở nặng (AHI >30)" },
-  { id: "insomnia_pattern", label: "Mất ngủ kinh niên" },
-  { id: "elderly_normal", label: "Ngủ người cao tuổi (bình thường)" },
-] as const;
+import { sleepScenarioOptions } from "../../config/sleepScenarios";
+import { fieldStyle } from "../../config/defaults";
 
 export interface BackfillCardProps {
   deviceId: string;
   onCompleted?: () => void | Promise<void>;
 }
 
-const fieldStyle: React.CSSProperties = {
-  background: "var(--bg-base)",
-  color: "var(--text-primary)",
-  border: "1px solid var(--border-default)",
-  borderRadius: "var(--radius-md)",
-  minHeight: "36px",
-  padding: "0 10px",
-};
-
-export function BackfillCard({ deviceId, onCompleted }: BackfillCardProps) {
+function BackfillCardInner({ deviceId, onCompleted }: BackfillCardProps) {
   const [days, setDays] = useState(30);
   const [scenarioId, setScenarioId] = useState("good_sleep_night");
   const [result, setResult] = useState<BackfillSleepResponse | null>(null);
@@ -136,3 +120,5 @@ export function BackfillCard({ deviceId, onCompleted }: BackfillCardProps) {
     </Card>
   );
 }
+
+export const BackfillCard = React.memo(BackfillCardInner);

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date as Date
+from datetime import date as Date, datetime as DateTime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -306,13 +307,13 @@ class AdminDeviceResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     id: int
-    uuid: str | None = None
+    uuid: str | UUID | None = None
     user_id: int | None = None
     user_email: str | None = None
     user_full_name: str | None = None
     height_cm: float | None = None
     weight_kg: float | None = None
-    date_of_birth: str | None = None
+    date_of_birth: str | Date | None = None
     gender: str | None = None
     device_name: str | None = None
     device_type: str | None = None
@@ -324,11 +325,11 @@ class AdminDeviceResponse(BaseModel):
     is_active: bool = False
     battery_level: int | None = None
     signal_strength: int | None = None
-    last_seen_at: str | None = None
-    last_sync_at: str | None = None
-    registered_at: str | None = None
-    updated_at: str | None = None
-    deleted_at: str | None = None
+    last_seen_at: str | DateTime | None = None
+    last_sync_at: str | DateTime | None = None
+    registered_at: str | DateTime | None = None
+    updated_at: str | DateTime | None = None
+    deleted_at: str | DateTime | None = None
     # enriched by the router layer
     is_sim_running: bool = False
 

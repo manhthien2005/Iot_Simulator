@@ -20,7 +20,7 @@ export function SessionRunnerPage() {
   const preselectedDeviceId = searchParams.get("deviceId") ?? searchParams.get("device");
   const preselectedScenarioId = searchParams.get("scenario");
   const { data: devices = [] } = useDevices(2000);
-  const { data: sessions = [], refetch: refetchSessions } = useSessions();
+  const { data: sessions = [] } = useSessions();
   const { data: scenarios = [] } = useQuery({
     queryKey: ["scenarios"],
     queryFn: fetchScenarios,
@@ -29,23 +29,21 @@ export function SessionRunnerPage() {
   const [scenarioByDevice, setScenarioByDevice] = useState<Record<string, string>>({});
   const [monitorDeviceId, setMonitorDeviceId] = useState<string>("");
 
-  const { activeSessionId, setActiveSession, streamSpeed, setSpeed, isPaused, setPaused } = useSessionStore();
+  const { activeSessionId, setActiveSession } = useSessionStore();
 
   const defaultScenarioId = useMemo(
     () => scenarios.find((scenario) => scenario.category !== "fall")?.id ?? scenarios[0]?.id ?? "normal_rest",
     [scenarios]
   );
 
-  const normalizeScenarioId = (scenarioId?: string | null) => {
+  const normalizeScenarioId = useCallback((scenarioId?: string | null) => {
     if (!scenarioId) return defaultScenarioId;
     const scenario = scenarios.find((item) => item.id === scenarioId);
     if (!scenario || scenario.category === "fall") {
       return defaultScenarioId;
     }
     return scenario.id;
-  };
-
-
+  }, [scenarios, defaultScenarioId]);
 
   useEffect(() => {
     if (!preselectedDeviceId || !preselectedScenarioId) return;
@@ -53,7 +51,7 @@ export function SessionRunnerPage() {
       ...prev,
       [preselectedDeviceId]: normalizeScenarioId(preselectedScenarioId),
     }));
-  }, [defaultScenarioId, preselectedDeviceId, preselectedScenarioId, scenarios]);
+  }, [normalizeScenarioId, preselectedDeviceId, preselectedScenarioId]);
 
   useEffect(() => {
     if (!devices.length) {
@@ -73,7 +71,6 @@ export function SessionRunnerPage() {
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions.find((session) => session.status === "running") ?? null,
     [activeSessionId, sessions]
   );
-  const running = activeSession?.status === "running" && !isPaused;
   const currentVitals = useSessionVitalsStore((state) => {
     if (state.activeDeviceId !== monitorDeviceId) {
       return null;

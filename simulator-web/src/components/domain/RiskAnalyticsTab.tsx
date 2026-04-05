@@ -1,13 +1,15 @@
-import { Suspense, lazy, useMemo, useState, type CSSProperties } from "react";
-import { type ColumnDef, type Table, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { Suspense, lazy, useMemo, useState } from "react";
+import { type ColumnDef, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Skeleton } from "../ui/Skeleton";
+import { TableRenderer } from "../ui/TableRenderer";
 import { injectRiskScore, triggerRiskCalculation } from "../../services/analyticsApi";
 import type { RiskContribution, RiskLevel, RiskScoreResponse, RiskType } from "../../types/analytics";
 import { notify } from "../../utils/toast";
+import { fieldStyle } from "../../config/defaults";
 
 const LazyReactECharts = lazy(() => import("echarts-for-react"));
 const LazyRiskHistoryChart = lazy(() =>
@@ -18,15 +20,6 @@ export interface RiskAnalyticsTabProps {
   deviceId: string;
   riskQuery: UseQueryResult<RiskScoreResponse>;
 }
-
-const fieldStyle: CSSProperties = {
-  background: "var(--bg-base)",
-  color: "var(--text-primary)",
-  border: "1px solid var(--border-default)",
-  borderRadius: "var(--radius-md)",
-  minHeight: "36px",
-  padding: "0 10px",
-};
 
 export function RiskAnalyticsTab({ deviceId, riskQuery }: RiskAnalyticsTabProps) {
   const [riskType, setRiskType] = useState<RiskType>("general");
@@ -231,41 +224,3 @@ function riskLevelLabel(level: RiskLevel) {
   return "Nguy kịch";
 }
 
-function TableRenderer<TData>(props: { table: Table<TData> }) {
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          {props.table.getHeaderGroups().map((headerGroup) => (
-            <tr key={headerGroup.id} style={{ color: "var(--text-secondary)", fontSize: "12px", textTransform: "uppercase" }}>
-              {headerGroup.headers.map((header) => (
-                <th key={header.id} style={{ textAlign: "left", padding: "8px 0" }}>
-                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                </th>
-              ))}
-            </tr>
-          ))}
-        </thead>
-        <tbody>
-          {props.table.getRowModel().rows.length === 0 ? (
-            <tr>
-              <td colSpan={Math.max(1, props.table.getAllLeafColumns().length)} style={{ padding: "12px 0", color: "var(--text-secondary)" }}>
-                Không có dữ liệu
-              </td>
-            </tr>
-          ) : (
-            props.table.getRowModel().rows.map((row) => (
-              <tr key={row.id} style={{ borderTop: "1px solid var(--border-default)" }}>
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} style={{ padding: "10px 0", color: "var(--text-primary)" }}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}

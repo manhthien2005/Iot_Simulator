@@ -38,11 +38,14 @@ export function Badge({ children, severity = "info", dot = false, pulse = false 
       {dot ? (
         <span
           className={pulse ? "live-dot" : undefined}
-          style={
-            pulse
-              ? undefined
-              : { width: "7px", height: "7px", borderRadius: "50%", background: colors.text, display: "inline-block" }
-          }
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            backgroundColor: colors.text,
+            display: "inline-block",
+            animation: pulse ? "live-pulse 2s infinite" : undefined,
+          }}
         />
       ) : null}
       {children}

@@ -1,3 +1,4 @@
+import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchHealth } from "../../services/healthApi";
 import { Badge } from "../ui/Badge";
@@ -10,7 +11,7 @@ function statusToSeverity(value: string) {
   return "critical" as const;
 }
 
-export function HealthStatusPanel() {
+function HealthStatusPanelInner() {
   const { data } = useQuery({
     queryKey: ["health"],
     queryFn: fetchHealth,
@@ -49,3 +50,5 @@ function healthLabel(value: string) {
   if (value === "idle") return "rảnh";
   return value;
 }
+
+export const HealthStatusPanel = React.memo(HealthStatusPanelInner);

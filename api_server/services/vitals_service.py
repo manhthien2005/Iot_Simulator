@@ -9,7 +9,6 @@ Thread-safety: ``latest_vitals`` acquires ``self._lock`` (the *same*
 
 from __future__ import annotations
 
-import math
 from threading import RLock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -20,33 +19,13 @@ from typing import TYPE_CHECKING, Any
 #   (`uvicorn api_server.main:app`).
 try:
     from Iot_Simulator.api_server.schemas import VitalsSample
+    from Iot_Simulator.api_server.utils import _utc_now_iso, _safe_float, _is_sleeping_state
 except ModuleNotFoundError:
     from api_server.schemas import VitalsSample
+    from api_server.utils import _utc_now_iso, _safe_float, _is_sleeping_state
 
 if TYPE_CHECKING:
     from api_server.dependencies import DeviceRecord, SessionRecord
-
-
-# ── Module-level helpers (imported from dependencies) ────────────────────
-
-def _utc_now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _safe_float(value: Any, default: float | None) -> float | None:
-    """Convert *value* to float, returning *default* on failure / NaN / Inf."""
-    try:
-        cast = float(value)
-    except (TypeError, ValueError):
-        return default
-    if math.isnan(cast) or math.isinf(cast):
-        return default
-    return cast
-
-
-def _is_sleeping_state(activity_state: Any) -> bool:
-    return str(activity_state or "").strip().lower() == "sleeping"
 
 
 # ── Threshold constants ──────────────────────────────────────────────────

@@ -10,13 +10,14 @@ export function DashboardPage() {
   const { data: events = [] } = useRecentEvents(10, 3000);
 
   return (
-    <section style={{ display: "grid", gap: "14px" }}>
+    <section style={{ display: "grid", gap: "20px" }}>
       <div>
         <h1 className="page-title">Bảng điều khiển</h1>
         <p className="page-subtitle">Tổng quan KPI và dòng sự kiện. Phần sinh hiệu trực tiếp được hiển thị trong trang Phiên mô phỏng.</p>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(180px, 1fr))", gap: "10px" }}>
+      {/* KPI Grid — responsive via .kpi-grid class (4→2→1 columns) */}
+      <div className="kpi-grid">
         {summaryLoading ? (
           <>
             <Skeleton style={{ height: "88px" }} />
@@ -39,6 +40,19 @@ export function DashboardPage() {
           Để theo dõi HR, SpO2, nhiệt độ và huyết áp theo thời gian thực, hãy vào trang <strong>Phiên mô phỏng</strong>.
         </p>
       </Card>
+
+      {/* Section header cho timeline */}
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div
+          style={{
+            width: "3px",
+            height: "18px",
+            borderRadius: "2px",
+            background: "var(--accent-cyan)",
+          }}
+        />
+        <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>Dòng sự kiện gần đây</h2>
+      </div>
 
       <AlertTimeline events={events} />
     </section>

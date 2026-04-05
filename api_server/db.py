@@ -57,9 +57,17 @@ def get_db() -> Generator[Session, None, None]:
 
 @contextmanager
 def session_scope() -> Iterator[Session]:
-    """Context manager for non-request DB access such as runtime heartbeats."""
+    """Context manager for non-request DB access such as runtime heartbeats.
+
+    Rolls back on exception; always closes the session.
+    Does not auto-commit — callers that mutate data should call ``db.commit()``
+    explicitly (most current usage is SELECT-only).
+    """
     db = get_session_factory()()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

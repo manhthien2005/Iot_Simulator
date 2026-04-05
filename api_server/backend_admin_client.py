@@ -231,19 +231,7 @@ class BackendAdminClient:
         }
         return self._request("POST", "/devices", body=payload)
 
-    def update_device(self, device_id: int, **kwargs: Any) -> dict[str, Any]:
-        allowed_fields = {
-            "device_name",
-            "firmware_version",
-            "battery_level",
-            "signal_strength",
-        }
-        payload = {
-            key: value
-            for key, value in kwargs.items()
-            if key in allowed_fields and value is not None
-        }
-        return self._request("PATCH", f"/devices/{device_id}", body=payload)
+    # Removed dead code: update_device (0 callers)
 
     def delete_device(self, device_id: int) -> dict[str, Any]:
         return self._request("DELETE", f"/devices/{device_id}")
@@ -261,24 +249,7 @@ class BackendAdminClient:
     def deactivate_device(self, device_id: int) -> dict[str, Any]:
         return self._request("POST", f"/devices/{device_id}/deactivate")
 
-    def update_heartbeat(
-        self,
-        device_id: int,
-        battery_level: int | None = None,
-        signal_strength: int | None = None,
-    ) -> dict[str, Any] | None:
-        try:
-            return self._request(
-                "POST",
-                f"/devices/{device_id}/heartbeat",
-                body={
-                    "battery_level": battery_level,
-                    "signal_strength": signal_strength,
-                },
-            )
-        except Exception as exc:
-            logger.warning("Heartbeat update failed for device %s: %s", device_id, exc)
-            return None
+    # Removed dead code: update_heartbeat (sync), alist_devices, aupdate_heartbeat, afind_user_by_email
 
     def find_user_by_email(self, email: str) -> dict[str, Any] | None:
         quoted_email = quote(email, safe="")
@@ -288,46 +259,6 @@ class BackendAdminClient:
             allow_statuses={404},
         )
         return result if isinstance(result, dict) else None
-
-    # ------------------------------------------------------------------
-    # Async public API (mirrors sync API for async callers)
-    # ------------------------------------------------------------------
-
-    async def alist_devices(self, user_id: int | None = None) -> list[dict[str, Any]]:
-        query = ""
-        if user_id is not None:
-            query = "?" + urlencode({"user_id": user_id})
-        result = await self._arequest("GET", f"/devices{query}")
-        return result if isinstance(result, list) else []
-
-    async def aupdate_heartbeat(
-        self,
-        device_id: int,
-        battery_level: int | None = None,
-        signal_strength: int | None = None,
-    ) -> dict[str, Any] | None:
-        try:
-            return await self._arequest(
-                "POST",
-                f"/devices/{device_id}/heartbeat",
-                body={
-                    "battery_level": battery_level,
-                    "signal_strength": signal_strength,
-                },
-            )
-        except Exception as exc:
-            logger.warning("Async heartbeat update failed for device %s: %s", device_id, exc)
-            return None
-
-    async def afind_user_by_email(self, email: str) -> dict[str, Any] | None:
-        quoted_email = quote(email, safe="")
-        result = await self._arequest(
-            "GET",
-            f"/users/search?email={quoted_email}",
-            allow_statuses={404},
-        )
-        return result if isinstance(result, dict) else None
-
 
 class _ClientHolder:
     """Indirection for the :class:`BackendAdminClient` singleton.

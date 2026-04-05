@@ -22,6 +22,7 @@ from uuid import uuid4
 #   (`uvicorn api_server.main:app`).
 try:
     from Iot_Simulator.api_server.schemas import DataBindingConfig
+    from Iot_Simulator.api_server.utils import _utc_now_iso
     from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
     from Iot_Simulator.simulator_core.session import (
         DataBinding as SimDataBinding,
@@ -30,6 +31,7 @@ try:
     )
 except ModuleNotFoundError:
     from api_server.schemas import DataBindingConfig
+    from api_server.utils import _utc_now_iso
     from simulator_core.dataset_registry import DatasetRegistry
     from simulator_core.session import (
         DataBinding as SimDataBinding,
@@ -39,11 +41,6 @@ except ModuleNotFoundError:
 
 if TYPE_CHECKING:
     from api_server.dependencies import DeviceRecord, SessionRecord, SessionSideEffects
-
-
-def _utc_now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
 
 
 class SessionService:

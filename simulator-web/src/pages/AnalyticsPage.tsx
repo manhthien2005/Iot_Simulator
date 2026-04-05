@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Moon, ShieldAlert, Watch } from "lucide-react";
-import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
+import { Select } from "../components/ui/Select";
 import { Skeleton } from "../components/ui/Skeleton";
+import { Tabs } from "../components/ui/Tabs";
 import { SleepAnalyticsTab } from "../components/domain/SleepAnalyticsTab";
 import { RiskAnalyticsTab } from "../components/domain/RiskAnalyticsTab";
 import { useDevices } from "../hooks/useDevices";
@@ -68,21 +69,21 @@ export function AnalyticsPage() {
   const sleepQuery = useQuery({
     queryKey: ["analytics", "sleep", deviceId],
     queryFn: () => getSleepSession(deviceId),
-    enabled: Boolean(deviceId),
+    enabled: Boolean(deviceId) && tab === "sleep",
     refetchInterval: POLL_INTERVALS.analytics,
   });
 
   const dbHistoryQuery = useQuery({
     queryKey: ["analytics", "sleep", "db-history", deviceId],
     queryFn: () => getDbSleepHistory(deviceId, 30),
-    enabled: Boolean(deviceId),
+    enabled: Boolean(deviceId) && tab === "sleep",
     refetchInterval: POLL_INTERVALS.analytics,
   });
 
   const riskQuery = useQuery({
     queryKey: ["analytics", "risk", deviceId],
     queryFn: () => getRiskScore(deviceId),
-    enabled: Boolean(deviceId),
+    enabled: Boolean(deviceId) && tab === "risk",
     refetchInterval: POLL_INTERVALS.analyticsRisk,
   });
 
@@ -111,34 +112,27 @@ export function AnalyticsPage() {
           <h1 className="page-title">Phân tích</h1>
           <p className="page-subtitle">Phát lại giấc ngủ và phân tích rủi ro với chế độ fallback cho Sleep-EDF.</p>
         </div>
-        <select
+        <Select
           value={deviceId}
           onChange={(event) => setDeviceId(event.target.value)}
-          style={{
-            background: "var(--bg-base)",
-            color: "var(--text-primary)",
-            border: "1px solid var(--border-default)",
-            borderRadius: "var(--radius-md)",
-            minHeight: "36px",
-            padding: "0 10px",
-          }}
+          aria-label="Chọn thiết bị để phân tích"
         >
           {devices.map((device) => (
             <option key={device.id} value={device.id}>
               {device.name}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
-      <div style={{ display: "flex", gap: "8px" }}>
-        <Button variant={tab === "sleep" ? "primary" : "secondary"} onClick={() => setTab("sleep")} leftIcon={<Moon size={14} />}>
-          Giấc ngủ
-        </Button>
-        <Button variant={tab === "risk" ? "primary" : "secondary"} onClick={() => setTab("risk")} leftIcon={<ShieldAlert size={14} />}>
-          Rủi ro
-        </Button>
-      </div>
+      <Tabs
+        items={[
+          { key: "sleep", label: "Giấc ngủ", icon: <Moon size={14} /> },
+          { key: "risk", label: "Rủi ro", icon: <ShieldAlert size={14} /> },
+        ]}
+        activeKey={tab}
+        onChange={(key) => setTab(key as AnalyticsTab)}
+      />
 
       {tab === "sleep" ? (
         <SleepAnalyticsTab

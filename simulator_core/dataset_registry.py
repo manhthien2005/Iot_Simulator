@@ -150,7 +150,8 @@ class DatasetRegistry:
             ]
             if required_records:
                 records = required_records
-        return records[len(records) // 2]
+        # LOW #6: use random.choice instead of fixed midpoint for more variation
+        return random.choice(records)
 
     def get_stress_sample(self, stress_state: str = "stress") -> dict[str, Any] | None:
         self._ensure_indexes()

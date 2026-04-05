@@ -31,6 +31,58 @@ sleep_scenario_phases:
     - [deep, 15]
     - [light, 25]
 
+  # HIGH #3 fix: phase schedules for 4 sleep-only scenarios so they
+  # can be applied via the /scenarios/apply API and drive sleep phase
+  # progression in the tick loop.
+  sleep_apnea_mild:
+    - [light, 30]
+    - [rem, 20]
+    - [light, 25]
+    - [awake, 10]
+    - [light, 25]
+    - [rem, 20]
+    - [light, 25]
+    - [awake, 8]
+    - [deep, 25]
+    - [light, 30]
+
+  sleep_apnea_severe:
+    - [light, 20]
+    - [awake, 15]
+    - [light, 18]
+    - [awake, 12]
+    - [light, 20]
+    - [rem, 12]
+    - [awake, 10]
+    - [light, 18]
+    - [awake, 10]
+    - [deep, 12]
+    - [light, 18]
+    - [awake, 10]
+
+  insomnia_pattern:
+    - [awake, 35]
+    - [light, 25]
+    - [awake, 20]
+    - [light, 25]
+    - [rem, 18]
+    - [awake, 15]
+    - [light, 25]
+    - [awake, 12]
+    - [deep, 20]
+    - [light, 25]
+
+  elderly_normal:
+    - [light, 40]
+    - [deep, 30]
+    - [light, 35]
+    - [rem, 25]
+    - [light, 30]
+    - [awake, 10]
+    - [light, 30]
+    - [rem, 25]
+    - [light, 35]
+
 # ── Scenario profiles ────────────────────────────────────────────────
 # filter_criteria: structured conditions evaluated against session
 #   summary dict at runtime.  Set to null when no filter is needed.

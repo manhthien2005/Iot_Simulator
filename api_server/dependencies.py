@@ -27,6 +27,7 @@ try:
     from Iot_Simulator.api_server.config import load_sleep_scenarios
     from Iot_Simulator.api_server.backend_admin_client import BackendAdminClient
     from Iot_Simulator.api_server.db import session_scope
+    from Iot_Simulator.api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state
     from Iot_Simulator.api_server.schemas import (
         AlertEvent,
         CreateDeviceRequest,
@@ -60,6 +61,7 @@ except ModuleNotFoundError:
     from api_server.config import load_sleep_scenarios
     from api_server.backend_admin_client import BackendAdminClient
     from api_server.db import session_scope
+    from api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state  # noqa: F811
     from api_server.schemas import (
         AlertEvent,
         CreateDeviceRequest,
@@ -94,23 +96,8 @@ except ModuleNotFoundError:
 logger = logging.getLogger(__name__)
 
 
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _coerce_date(value: Any) -> date | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        try:
-            return date.fromisoformat(value[:10])
-        except ValueError:
-            return None
-    return None
+# _utc_now_iso, _coerce_date, _safe_float, _normalize_gender, _is_sleeping_state
+# imported from api_server.utils (MEDIUM #7 dedup)
 
 
 def _derive_age(value: Any, default: int = 35) -> int:
@@ -123,27 +110,6 @@ def _derive_age(value: Any, default: int = 35) -> int:
         years -= 1
     return max(years, 0)
 
-
-def _safe_float(value: Any, default: float | None) -> float | None:
-    """Convert *value* to float, returning *default* on failure / NaN / Inf."""
-    try:
-        cast = float(value)
-    except (TypeError, ValueError):
-        return default
-    if math.isnan(cast) or math.isinf(cast):
-        return default
-    return cast
-
-
-def _normalize_gender(value: Any) -> str | None:
-    normalized = str(value or "").strip().lower()
-    if not normalized:
-        return None
-    if normalized in {"male", "m", "man", "nam"}:
-        return "male"
-    if normalized in {"female", "f", "woman", "nu", "nữ"}:
-        return "female"
-    return normalized
 
 
 def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> dict[str, Any]:
@@ -159,44 +125,13 @@ def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> 
 # Sleep scenario data loaded from external YAML config (see api_server/config/sleep_scenarios.yaml)
 SLEEP_SCENARIO_PHASES, SLEEP_SCENARIO_PROFILES = load_sleep_scenarios()
 
+# MEDIUM #8: Threshold constants centralised in vitals_service.py
+# Import them here for backward compatibility.
+try:
+    from Iot_Simulator.api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
+except ModuleNotFoundError:
+    from api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
 
-DAYTIME_THRESHOLDS: dict[str, float] = {
-    "hr_critical_low": 50.0,
-    "hr_critical_high": 120.0,
-    "hr_warning_low": 55.0,
-    "hr_warning_high": 110.0,
-    "spo2_critical": 90.0,
-    "spo2_warning": 94.0,
-    "rr_critical_low": 10.0,
-    "rr_critical_high": 25.0,
-    "bp_sys_critical": 180.0,
-    "bp_dia_critical": 120.0,
-    "bp_sys_warning": 140.0,
-    "bp_dia_warning": 90.0,
-}
-
-
-SLEEP_THRESHOLDS: dict[str, float] = {
-    "hr_critical_low": 38.0,
-    "hr_critical_high": 100.0,
-    "hr_warning_low": 42.0,
-    "hr_warning_high": 90.0,
-    "spo2_critical": 85.0,
-    "spo2_warning": 90.0,
-    "rr_critical_low": 6.0,
-    "rr_critical_high": 25.0,
-    "bp_sys_critical": 180.0,
-    "bp_dia_critical": 120.0,
-    "bp_sys_warning": 160.0,
-    "bp_dia_warning": 100.0,
-    "osa_alert_spo2_threshold": 88.0,
-    "nocturnal_tachy_hr": 120.0,
-    "apnea_rr_threshold": 6.0,
-}
-
-
-def _is_sleeping_state(activity_state: Any) -> bool:
-    return str(activity_state or "").strip().lower() == "sleeping"
 
 
 @dataclass
@@ -337,6 +272,8 @@ class LogHub:
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._lock = RLock()
         self._loop: asyncio.AbstractEventLoop | None = None
+        # LOW #5: track dropped messages
+        self._dropped_count: int = 0
 
     def _get_loop(self) -> asyncio.AbstractEventLoop | None:
         """Return the cached event loop, lazily resolving on first call."""
@@ -368,6 +305,12 @@ class LogHub:
                     else:
                         queue.put_nowait(entry)
                 except asyncio.QueueFull:
+                    self._dropped_count += 1
+                    if self._dropped_count % 100 == 0:
+                        logger.warning(
+                            "LogHub: %d messages dropped (queue full) since startup",
+                            self._dropped_count,
+                        )
                     continue
                 except RuntimeError:
                     # Loop closed or queue invalidated — skip gracefully
@@ -420,8 +363,12 @@ class SimulatorRuntime:
         self.sessions: dict[str, SessionRecord] = {}
         self.event_history: collections.deque[EventRecord] = collections.deque(maxlen=2000)
         self.risk_snapshots: dict[str, RiskSnapshot] = {}
-        self._dashboard_cache: DashboardSummary | None = None
+        # Removed dead attribute: self._dashboard_cache (actual cache uses _dashboard_cache_ref[0])
         self._dashboard_cache_ts: float = 0.0
+        # HIGH #1 fix: pre-computed alert counter so dashboard_summary()
+        # does not need to iterate event_history under lock.
+        self._alert_count_1h: int = 0
+        self._alert_timestamps_1h: collections.deque[float] = collections.deque()
         self.risk_history: dict[str, list[RiskHistoryPoint]] = {}
         self.logs = LogHub()
         self._lock = RLock()
@@ -454,7 +401,7 @@ class SimulatorRuntime:
         self._background_tick_thread: Thread | None = None
 
         # ── Service layer (Task 3.1) ─────────────────────────────────────
-        self._dashboard_cache_ref: list = [self._dashboard_cache]
+        self._dashboard_cache_ref: list = [None]
         self.device_service = DeviceService(
             devices=self.devices,
             sessions=self.sessions,
@@ -469,6 +416,10 @@ class SimulatorRuntime:
             admin_client=self.admin_client,
             record_event_fn=self._record_event,
             publish_device_log_fn=self._publish_device_log,
+            # HIGH #6 fix: pass tracker dicts for cleanup on device delete
+            sleep_phase_tracker=self._sleep_phase_tracker,
+            bp_last_observed=self._bp_last_observed,
+            last_alert_pushes=self._last_alert_pushes,
         )
         self.device_service.set_runtime_session_ops(self)
 
@@ -518,6 +469,9 @@ class SimulatorRuntime:
             http_sender=self._http_sender,
             publish_device_log_fn=self._publish_device_log,
             require_device_fn=self.device_service._require_device,
+            # MEDIUM #9: pass pre-loaded scenario data to avoid double load
+            sleep_scenario_phases=SLEEP_SCENARIO_PHASES,
+            sleep_scenario_profiles=SLEEP_SCENARIO_PROFILES,
         )
 
     @staticmethod
@@ -603,7 +557,13 @@ class SimulatorRuntime:
         severity: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        self.alert_service._push_alert_to_backend(sim_device_id, event_type, severity, metadata)
+        # CRITICAL #1 fix: offload alert push (with retry/sleep) to a
+        # dedicated ThreadPoolExecutor so the background tick thread is
+        # never blocked by exponential-backoff sleeps.
+        self.alert_service._alert_executor.submit(
+            self.alert_service._push_alert_to_backend,
+            sim_device_id, event_type, severity, metadata,
+        )
 
     def _update_device_heartbeat(self, db_device_id: int, battery_level: int) -> None:
         try:
@@ -809,6 +769,11 @@ class SimulatorRuntime:
             "fragmented_sleep",
             "high_risk_cardiac",
             "medium_risk_general",
+            # HIGH #3 fix: 4 sleep scenarios from YAML that were missing
+            "sleep_apnea_mild",
+            "sleep_apnea_severe",
+            "insomnia_pattern",
+            "elderly_normal",
         }
         _WAKING_SCENARIOS = {
             "normal_rest",
@@ -970,6 +935,20 @@ class SimulatorRuntime:
     def recent_events(self, limit: int = 10) -> list[AlertEvent]:
         return self.alert_service.recent_events(limit=limit)
 
+    def _increment_alert_counter(self) -> None:
+        """Bump the pre-computed 1-hour alert counter (called from _record_event).
+
+        HIGH #1 fix: keeps a deque of timestamps so ``dashboard_summary``
+        only reads a counter instead of scanning all 2 000 events.
+        """
+        now = time.time()
+        self._alert_timestamps_1h.append(now)
+        # Prune entries older than 1 hour
+        cutoff = now - 3600
+        while self._alert_timestamps_1h and self._alert_timestamps_1h[0] < cutoff:
+            self._alert_timestamps_1h.popleft()
+        self._alert_count_1h = len(self._alert_timestamps_1h)
+
     def dashboard_summary(self) -> DashboardSummary:
         _DASHBOARD_CACHE_TTL = 5.0  # seconds
         with self._lock:
@@ -980,14 +959,16 @@ class SimulatorRuntime:
 
             total = len(self.devices)
             active = len([device for device in self.devices.values() if device.state == "streaming"])
-            alerts = len(
-                [
-                    event
-                    for event in self.event_history
-                    if event.severity in {"warning", "critical"}
-                    and (datetime.now(timezone.utc).timestamp() - datetime.fromisoformat(event.timestamp).timestamp()) <= 3600
-                ]
-            )
+
+            # HIGH #1 fix: prune stale entries then read counter directly,
+            # instead of iterating the full event_history and parsing ISO timestamps.
+            now_ts = time.time()
+            cutoff = now_ts - 3600
+            while self._alert_timestamps_1h and self._alert_timestamps_1h[0] < cutoff:
+                self._alert_timestamps_1h.popleft()
+            self._alert_count_1h = len(self._alert_timestamps_1h)
+            alerts = self._alert_count_1h
+
             latencies = [
                 session.last_publish_latency_ms
                 for session in self.sessions.values()
@@ -1330,13 +1311,18 @@ class SimulatorRuntime:
 
     @staticmethod
     def _scenario_state_hint(scenario_id: str) -> str:
-        if scenario_id in {"hypoxia_critical", "high_risk_cardiac", "fall_no_response"}:
+        if scenario_id in {"hypoxia_critical", "high_risk_cardiac", "fall_no_response", "sleep_apnea_severe"}:
             return "critical"
-        if scenario_id in {"tachycardia_warning", "hypertension_moderate", "fragmented_sleep", "medium_risk_general", "fall_false_alarm"}:
+        if scenario_id in {
+            "tachycardia_warning", "hypertension_moderate", "fragmented_sleep",
+            "medium_risk_general", "fall_false_alarm",
+            # HIGH #3 fix: new sleep scenarios mapped to appropriate state hints
+            "sleep_apnea_mild", "insomnia_pattern",
+        }:
             return "warning"
         if scenario_id == "fall_high_confidence":
             return "fall_countdown"
-        if scenario_id in {"normal_rest", "good_sleep_night"}:
+        if scenario_id in {"normal_rest", "good_sleep_night", "elderly_normal"}:
             return "streaming"
         return "streaming"
 
@@ -1629,7 +1615,7 @@ class SimulatorRuntime:
             RiskContribution(feature="blood_pressure_sys", value=bp_sys, weight=0.1, direction="up"),
             RiskContribution(feature="risk_type_bias", value=risk_type, weight=type_weight, direction="up"),
             RiskContribution(feature="age", value=f"{baseline_age} years", weight=0.07, direction="up"),
-            RiskContribution(feature="sleep_efficiency", value="92.6%", weight=-0.04, direction="down"),
+            RiskContribution(feature="sleep_efficiency", value="~estimated", weight=-0.04, direction="down"),
             RiskContribution(feature="stability_guard", value=f"{score:.2f}", weight=0.03, direction="flat"),
         ]
 
@@ -1669,6 +1655,9 @@ class SimulatorRuntime:
             message=message,
             metadata=metadata,
         )
+        # HIGH #1 fix: keep the pre-computed 1-hour alert counter in sync.
+        if severity in {"warning", "critical"}:
+            self._increment_alert_counter()
 
 
 class _RuntimeHolder:
@@ -1689,7 +1678,10 @@ class _RuntimeHolder:
     def get(self) -> SimulatorRuntime:
         if self.instance is None:
             self.instance = SimulatorRuntime()
-        self.instance.start_background_tick()
+            # Start background tick only once on first creation.
+            # HIGH #5 fix: removed per-request start_background_tick()
+            # call that acquired RLock on every HTTP request.
+            self.instance.start_background_tick()
         return self.instance
 
     def set(self, runtime: SimulatorRuntime) -> None:  # noqa: A003

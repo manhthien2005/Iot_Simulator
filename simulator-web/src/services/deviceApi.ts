@@ -1,7 +1,6 @@
 import { apiClient } from "./api";
 import type {
   BatchActivateResult,
-  BindDeviceResponse,
   DbDevice,
   DeviceType,
   PersonaConfig,
@@ -40,55 +39,11 @@ function normalizeSimDevice(raw: RawSimulatedDevice): SimulatedDevice {
   return { ...rest, personaConfig: normalizePersonaConfig(rawPersona) };
 }
 
-function toSnakeCasePersona(cfg: {
-  age?: number;
-  weightKg?: number;
-  heightCm?: number;
-  seed?: number;
-}): { age?: number; weight_kg?: number; height_cm?: number; seed?: number } {
-  return {
-    age: cfg.age,
-    weight_kg: cfg.weightKg,
-    height_cm: cfg.heightCm,
-    seed: cfg.seed,
-  };
-}
-
 // ── Device APIs ───────────────────────────────────────────────────────────────
 
 export async function fetchDevices(): Promise<SimulatedDevice[]> {
   const response = await apiClient.get<RawSimulatedDevice[]>("/api/sim/devices");
   return response.data.map(normalizeSimDevice);
-}
-
-export async function createDevice(payload: {
-  name: string;
-  type: DeviceType;
-  personaConfig?: { age: number; weightKg: number; heightCm: number; seed: number };
-}): Promise<SimulatedDevice> {
-  const { personaConfig, ...rest } = payload;
-  const body = {
-    ...rest,
-    persona_config: personaConfig ? toSnakeCasePersona(personaConfig) : undefined,
-  };
-  const response = await apiClient.post<RawSimulatedDevice>("/api/sim/devices", body);
-  return normalizeSimDevice(response.data);
-}
-
-export async function deleteDevice(deviceId: string): Promise<void> {
-  await apiClient.delete(`/api/sim/devices/${deviceId}`);
-}
-
-export async function bindDevice(deviceId: string, dbDeviceId: number): Promise<BindDeviceResponse> {
-  const response = await apiClient.post<BindDeviceResponse>(`/api/sim/devices/${deviceId}/bind`, {
-    db_device_id: dbDeviceId,
-  });
-  return response.data;
-}
-
-export async function unbindDevice(deviceId: string): Promise<BindDeviceResponse> {
-  const response = await apiClient.delete<BindDeviceResponse>(`/api/sim/devices/${deviceId}/bind`);
-  return response.data;
 }
 
 // ── Admin DB Device APIs ──────────────────────────────────────────────────────

@@ -20,9 +20,11 @@ import {
 import { notify } from "../utils/toast";
 import type { DbDevice, DeviceType } from "../types/device";
 
+const EMPTY_DB_DEVICES: DbDevice[] = [];
+
 export function DevicesPage() {
   const queryClient = useQueryClient();
-  const { data: dbDevices = [], isLoading, error, refetch } = useDbDevices();
+  const { data: dbDevices = EMPTY_DB_DEVICES, isLoading, error, refetch } = useDbDevices();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [openCreate, setOpenCreate] = useState(false);
@@ -44,7 +46,11 @@ export function DevicesPage() {
 
   useEffect(() => {
     const visibleIds = new Set(filtered.map((device) => device.id));
-    setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
+    setSelectedIds((current) => {
+      const next = current.filter((id) => visibleIds.has(id));
+      // Bail out: return same reference if nothing was removed → prevents re-render loop
+      return next.length === current.length ? current : next;
+    });
   }, [filtered]);
 
   const invalidate = useCallback(
@@ -63,27 +69,43 @@ export function DevicesPage() {
   }, [invalidate]);
 
   const handleAssign = useCallback(async (deviceId: number, email: string) => {
-    await assignDbDevice(deviceId, email);
-    notify.success(`Đã gán thiết bị cho ${email}`);
-    await invalidate();
+    try {
+      await assignDbDevice(deviceId, email);
+      notify.success(`Đã gán thiết bị cho ${email}`);
+      await invalidate();
+    } catch {
+      notify.error("Không gán được thiết bị. Kiểm tra kết nối.");
+    }
   }, [invalidate]);
 
   const handleActivateSim = useCallback(async (device: DbDevice) => {
-    await activateDbDevice(device.id);
-    notify.success(`Đã bật sim cho ${device.device_name} — hệ thống đang truyền dữ liệu`);
-    await invalidate();
+    try {
+      await activateDbDevice(device.id);
+      notify.success(`Đã bật sim cho ${device.device_name} — hệ thống đang truyền dữ liệu`);
+      await invalidate();
+    } catch {
+      notify.error(`Không bật được sim cho ${device.device_name}. Kiểm tra kết nối.`);
+    }
   }, [invalidate]);
 
   const handleDeactivateSim = useCallback(async (device: DbDevice) => {
-    await deactivateDbDevice(device.id);
-    notify.warning(`Đã tắt sim cho ${device.device_name} — mobile app sẽ mất dữ liệu`);
-    await invalidate();
+    try {
+      await deactivateDbDevice(device.id);
+      notify.warning(`Đã tắt sim cho ${device.device_name} — mobile app sẽ mất dữ liệu`);
+      await invalidate();
+    } catch {
+      notify.error(`Không tắt được sim cho ${device.device_name}. Kiểm tra kết nối.`);
+    }
   }, [invalidate]);
 
   const handleDelete = useCallback(async (deviceId: number) => {
-    await deleteDbDevice(deviceId);
-    notify.success("Đã xóa thiết bị");
-    await invalidate();
+    try {
+      await deleteDbDevice(deviceId);
+      notify.success("Đã xóa thiết bị");
+      await invalidate();
+    } catch {
+      notify.error("Không xóa được thiết bị. Kiểm tra kết nối.");
+    }
   }, [invalidate]);
 
   const handleBatchActivate = useCallback(async (deviceIds: number[]) => {

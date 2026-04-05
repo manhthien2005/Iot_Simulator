@@ -68,6 +68,7 @@ export function FallLab({ devices }: FallLabProps) {
         <select
           value={resolvedTarget}
           onChange={(event) => setTargetId(event.target.value)}
+          aria-label="Chọn thiết bị mục tiêu cho phòng thí nghiệm té ngã"
           style={{
             background: "var(--bg-base)",
             color: "var(--text-primary)",
@@ -213,7 +214,7 @@ export function FallLab({ devices }: FallLabProps) {
               <span>{countdown} giây</span>
             </div>
             <div style={{ height: "8px", borderRadius: "999px", background: "var(--bg-base)", overflow: "hidden" }}>
-              <div style={{ width: `${(countdown / 30) * 100}%`, height: "100%", background: countdown < 10 ? "var(--severity-critical)" : "var(--severity-warning)" }} />
+              <div style={{ width: `${(countdown / FALL_COUNTDOWN_SECONDS) * 100}%`, height: "100%", background: countdown < 10 ? "var(--severity-critical)" : "var(--severity-warning)" }} />
             </div>
             <div style={{ marginTop: "10px" }}>
               <Button variant="secondary" onClick={cancelCountdown}>

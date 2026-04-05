@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 // ── Polling intervals (ms) ──────────────────────────────────────────
 export const POLL_INTERVALS = {
   sessions: 3_000,
@@ -17,3 +19,13 @@ export const POLL_INTERVALS = {
 // ── Fall detection ──────────────────────────────────────────────────
 export const FALL_COUNTDOWN_SECONDS = 30;
 export const FALL_LAB_RECENT_EVENTS_LIMIT = 30;
+
+// ── Shared form field style ─────────────────────────────────────────
+export const fieldStyle: CSSProperties = {
+  background: "var(--bg-base)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-default)",
+  borderRadius: "var(--radius-md)",
+  minHeight: "36px",
+  padding: "0 10px",
+};

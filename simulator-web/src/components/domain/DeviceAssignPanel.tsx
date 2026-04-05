@@ -1,3 +1,4 @@
+import React from "react";
 import type { SimulatedDevice } from "../../types/device";
 import type { ScenarioOption } from "../../types/scenario";
 import { Badge } from "../ui/Badge";
@@ -11,7 +12,7 @@ interface DeviceAssignPanelProps {
   isApplying?: boolean;
 }
 
-export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, onScenarioChange, isApplying = false }: DeviceAssignPanelProps) {
+function DeviceAssignPanelInner({ devices, scenarios, scenarioByDevice, onScenarioChange, isApplying = false }: DeviceAssignPanelProps) {
   const vitalsScenarios = scenarios.filter((scenario) => scenario.category !== "fall");
   const fallScenarios = scenarios.filter((scenario) => scenario.category === "fall");
   const defaultScenarioId = vitalsScenarios[0]?.id ?? "";
@@ -83,3 +84,5 @@ export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, onScen
     </Card>
   );
 }
+
+export const DeviceAssignPanel = React.memo(DeviceAssignPanelInner);

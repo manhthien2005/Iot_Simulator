@@ -105,7 +105,7 @@ def create_db_device(
     suffix = str(int(_time.time()))[-6:]
     safe_name = "".join(ch if ch.isalnum() else "-" for ch in payload.device_name.lower()).strip("-") or "device"
     auto_mqtt = f"sim-{safe_name}-{suffix}"
-    auto_serial = payload.serial_number or f"SIM-{auto_mqtt.upper()[:12]}"
+    auto_serial = payload.serial_number or f"SIM-{safe_name.upper()[:8]}-{suffix}"
 
     try:
         raw = SimAdminService.create_device(

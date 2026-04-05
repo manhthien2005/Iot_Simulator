@@ -25,11 +25,13 @@ try:
     from Iot_Simulator.api_server.db import session_scope
     from Iot_Simulator.api_server.schemas import CreateDeviceRequest, SimulatedDevice
     from Iot_Simulator.api_server.sim_admin_service import SimAdminService
+    from Iot_Simulator.api_server.utils import _utc_now_iso
 except ModuleNotFoundError:
     from api_server.backend_admin_client import BackendAdminClient
     from api_server.db import session_scope
     from api_server.schemas import CreateDeviceRequest, SimulatedDevice
     from api_server.sim_admin_service import SimAdminService
+    from api_server.utils import _utc_now_iso
 
 if TYPE_CHECKING:
     from api_server.dependencies import DeviceRecord, EventRecord, SessionRecord
@@ -58,10 +60,6 @@ def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> 
     return _helper(device_info, db_device_id)
 
 
-def _utc_now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
-
 
 class DeviceService:
     """Manages simulated devices, binding, admin-DB-device lifecycle."""
@@ -82,6 +80,10 @@ class DeviceService:
         admin_client: BackendAdminClient,
         record_event_fn: Any,  # callable(**kwargs) -> None
         publish_device_log_fn: Any,  # callable(sim_device_id, *, level, message, timestamp) -> None
+        # HIGH #6 fix: additional dicts that must be cleaned up on device delete
+        sleep_phase_tracker: dict[str, Any] | None = None,
+        bp_last_observed: dict[str, float] | None = None,
+        last_alert_pushes: dict[tuple, float] | None = None,
     ) -> None:
         # Shared mutable state — same object references as SimulatorRuntime
         self.devices = devices
@@ -97,6 +99,10 @@ class DeviceService:
         self.admin_client = admin_client
         self._record_event = record_event_fn
         self._publish_device_log = publish_device_log_fn
+        # HIGH #6 fix: references for cleanup on device deletion
+        self._sleep_phase_tracker = sleep_phase_tracker or {}
+        self._bp_last_observed = bp_last_observed or {}
+        self._last_alert_pushes = last_alert_pushes or {}
 
         # Set later via set_runtime_session_ops() to avoid circular init
         self._runtime_session_ops: _RuntimeSessionOps | None = None
@@ -142,6 +148,18 @@ class DeviceService:
             self.device_scenarios.pop(device_id, None)
             self.risk_snapshots.pop(device_id, None)
             self.risk_history.pop(device_id, None)
+            # HIGH #6 fix: clean up tracker/observation dicts that were
+            # previously missed, preventing stale entries from leaking.
+            self._sleep_phase_tracker.pop(device_id, None)
+            self._bp_last_observed.pop(device_id, None)
+            # _last_alert_pushes is keyed by (device_id, event_type, severity)
+            # tuples — remove all entries for this device_id.
+            stale_keys = [
+                key for key in self._last_alert_pushes
+                if key[0] == device_id
+            ]
+            for key in stale_keys:
+                self._last_alert_pushes.pop(key, None)
             self._tick_buffer[:] = [
                 payload for payload in self._tick_buffer
                 if payload.get("device_id") != device_id

@@ -48,16 +48,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="IoT Simulator API", version="1.0.0", lifespan=lifespan)
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:5174").split(",")
 
+# NOTE: Starlette processes middlewares in LIFO order (last-added = outermost).
+# CORSMiddleware MUST be outermost so that even rate-limited 429 responses
+# carry correct CORS headers; otherwise the browser treats them as opaque
+# network errors and the frontend shows "API Simulator không khả dụng".
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(RateLimitMiddleware)
 
 app.include_router(devices_router, prefix="/api/sim")
 app.include_router(dashboard_router, prefix="/api/sim")

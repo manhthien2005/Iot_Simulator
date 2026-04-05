@@ -28,78 +28,10 @@ class SimAdminService:
     _admin_list_cache_expires_at = 0.0
     _admin_list_cache_rows: tuple[dict[str, Any], ...] | None = None
 
-    _DEVICE_DETAIL_SQL = """
-        SELECT
-            d.id,
-            d.uuid,
-            d.user_id,
-            u.email AS user_email,
-            u.full_name AS user_full_name,
-            u.height_cm,
-            u.weight_kg,
-            u.date_of_birth,
-            u.gender,
-            d.device_name,
-            d.device_type,
-            d.model,
-            d.firmware_version,
-            d.serial_number,
-            d.mac_address,
-            d.mqtt_client_id,
-            d.is_active,
-            d.battery_level,
-            d.signal_strength,
-            d.last_seen_at,
-            d.last_sync_at,
-            d.registered_at,
-            d.updated_at,
-            d.deleted_at
-        FROM devices d
-        LEFT JOIN users u ON u.id = d.user_id
-        WHERE d.id = :device_id
-          AND d.deleted_at IS NULL
-        LIMIT 1
-    """
-
-    _ADMIN_LIST_SQL = """
-        SELECT
-            d.id,
-            d.uuid,
-            d.user_id,
-            u.email AS user_email,
-            u.full_name AS user_full_name,
-            u.height_cm,
-            u.weight_kg,
-            u.date_of_birth,
-            u.gender,
-            d.device_name,
-            d.device_type,
-            d.model,
-            d.firmware_version,
-            d.serial_number,
-            d.mac_address,
-            d.mqtt_client_id,
-            d.is_active,
-            d.battery_level,
-            d.signal_strength,
-            d.last_seen_at,
-            d.last_sync_at,
-            d.registered_at,
-            d.updated_at,
-            d.deleted_at
-        FROM devices d
-        LEFT JOIN users u ON u.id = d.user_id
-        WHERE d.deleted_at IS NULL
-        ORDER BY d.is_active DESC, d.registered_at DESC
-        LIMIT 200
-    """
-
-    @staticmethod
-    def _normalize_optional_string(value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
+    # HIGH #4 fix: removed duplicate _DEVICE_DETAIL_SQL — now delegates
+    # to DeviceRepository.fetch_device() which owns the canonical SQL.
+    # Removed dead code: _ADMIN_LIST_SQL (delegated to DeviceRepository),
+    # _normalize_optional_string, _check_duplicate_identity
 
     @staticmethod
     def _copy_rows(rows: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
@@ -113,43 +45,11 @@ class SimAdminService:
 
     @staticmethod
     def _fetch_device(device_id: int, db: Session) -> dict[str, Any] | None:
-        row = db.execute(
-            text(SimAdminService._DEVICE_DETAIL_SQL),
-            {"device_id": device_id},
-        ).mappings().first()
-        return dict(row) if row is not None else None
-
-    @staticmethod
-    def _check_duplicate_identity(
-        *,
-        serial_number: str | None,
-        mqtt_client_id: str | None,
-        db: Session,
-    ) -> None:
-        if not serial_number and not mqtt_client_id:
-            return
-
-        row = db.execute(
-            text(
-                """
-                SELECT id
-                FROM devices
-                WHERE deleted_at IS NULL
-                  AND (
-                    (:serial_number IS NOT NULL AND serial_number = :serial_number)
-                    OR (:mqtt_client_id IS NOT NULL AND mqtt_client_id = :mqtt_client_id)
-                  )
-                LIMIT 1
-                """
-            ),
-            {
-                "serial_number": serial_number,
-                "mqtt_client_id": mqtt_client_id,
-            },
-        ).mappings().first()
-
-        if row is not None:
-            raise ValueError("Device identity already exists (duplicate serial_number or mqtt_client_id)")
+        """HIGH #4 fix: delegate to DeviceRepository to eliminate SQL duplication."""
+        typed = DeviceRepository.fetch_device(device_id, db)
+        if typed is None:
+            return None
+        return typed.model_dump()
 
     @staticmethod
     def list_all_devices(db: Session, user_id: int | None = None) -> list[dict[str, Any]]:

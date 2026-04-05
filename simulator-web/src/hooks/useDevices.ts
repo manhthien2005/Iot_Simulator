@@ -3,7 +3,7 @@ import { fetchDbDevices, fetchDevices } from "../services/deviceApi";
 import type { DbDevice } from "../types/device";
 import { POLL_INTERVALS } from "../config/defaults";
 
-export function useDevices(refetchInterval = Number(import.meta.env.VITE_POLL_INTERVAL_DEVICES ?? POLL_INTERVALS.devices)) {
+export function useDevices(refetchInterval = Number(import.meta.env.VITE_POLL_INTERVAL_DEVICES) || POLL_INTERVALS.devices) {
   return useQuery({
     queryKey: ["devices"],
     queryFn: fetchDevices,
