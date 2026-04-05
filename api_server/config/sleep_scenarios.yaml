@@ -1,0 +1,175 @@
+# Sleep scenario configuration extracted from dependencies.py
+# Used by simulator to drive sleep phase progression and session selection.
+
+# ── Phase schedules ──────────────────────────────────────────────────
+# Each entry is a list of [stage, duration_minutes] pairs that the
+# simulator walks through in order while a device is "sleeping".
+sleep_scenario_phases:
+  good_sleep_night:
+    - [light, 35]
+    - [deep, 60]
+    - [rem, 25]
+    - [light, 45]
+    - [awake, 10]
+    - [deep, 55]
+    - [rem, 25]
+    - [light, 45]
+    - [awake, 7]
+    - [rem, 28]
+    - [light, 75]
+
+  fragmented_sleep:
+    - [light, 20]
+    - [awake, 15]
+    - [light, 25]
+    - [awake, 20]
+    - [rem, 15]
+    - [light, 25]
+    - [awake, 12]
+    - [rem, 18]
+    - [light, 30]
+    - [deep, 15]
+    - [light, 25]
+
+# ── Scenario profiles ────────────────────────────────────────────────
+# filter_criteria: structured conditions evaluated against session
+#   summary dict at runtime.  Set to null when no filter is needed.
+#   - combine: "and" | "or"
+#   - conditions[].field: key looked up in session["summary"]
+#   - conditions[].op: one of ">", ">=", "<", "<=", "=="
+#   - conditions[].value: threshold
+#   - conditions[].default: fallback when the field is missing
+sleep_scenario_profiles:
+  good_sleep_night:
+    filter_criteria:
+      combine: and
+      conditions:
+        - { field: sleep_efficiency, op: ">",  value: 0.82, default: 0 }
+        - { field: wake_count,       op: "<=", value: 2,    default: 99 }
+    stats_override: null
+    phases_pattern_override: null
+    disorder_tags: []
+    description: "Giấc ngủ lành mạnh theo chuẩn AASM: deep ≥15%, REM ≥20%, hiệu suất ≥85%"
+
+  fragmented_sleep:
+    filter_criteria:
+      combine: or
+      conditions:
+        - { field: wake_count,       op: ">=", value: 3,    default: 0 }
+        - { field: sleep_efficiency, op: "<",  value: 0.78, default: 1 }
+    stats_override: null
+    phases_pattern_override:
+      - light
+      - awake
+      - light
+      - awake
+      - rem
+      - light
+      - awake
+      - rem
+      - light
+      - deep
+      - light
+    disorder_tags: [arousal]
+    description: "Giấc ngủ phân mảnh: thức nhiều lần, hiệu suất ~72%"
+
+  sleep_apnea_mild:
+    filter_criteria: null
+    stats_override:
+      sleep_efficiency: 0.76
+      wake_count: 8
+      stage_proportions:
+        deep: 0.10
+        rem: 0.15
+        light: 0.59
+        awake: 0.16
+      spo2_min_override: 91.0
+    phases_pattern_override:
+      - light
+      - rem
+      - light
+      - awake
+      - light
+      - rem
+      - light
+      - awake
+      - deep
+      - light
+    disorder_tags: [osa_mild]
+    description: "Ngưng thở nhẹ (AHI ~10): SpO2 dip đến 91%, 8 lần thức"
+
+  sleep_apnea_severe:
+    filter_criteria: null
+    stats_override:
+      sleep_efficiency: 0.62
+      wake_count: 18
+      stage_proportions:
+        deep: 0.05
+        rem: 0.08
+        light: 0.61
+        awake: 0.26
+      spo2_min_override: 84.0
+    phases_pattern_override:
+      - light
+      - awake
+      - light
+      - awake
+      - light
+      - rem
+      - awake
+      - light
+      - awake
+      - deep
+      - light
+      - awake
+    disorder_tags: [osa_severe, trigger_osa_alert]
+    description: "Ngưng thở nặng (AHI >30): SpO2 xuống 84%, 18 lần thức"
+
+  insomnia_pattern:
+    filter_criteria:
+      combine: and
+      conditions:
+        - { field: sleep_efficiency, op: "<", value: 0.70, default: 1 }
+    stats_override:
+      sleep_efficiency: 0.63
+      wake_count: 6
+      stage_proportions:
+        deep: 0.08
+        rem: 0.12
+        light: 0.65
+        awake: 0.15
+      total_sleep_s_override: 16200  # 270 * 60
+    phases_pattern_override:
+      - awake
+      - light
+      - awake
+      - light
+      - rem
+      - awake
+      - light
+      - awake
+      - deep
+      - light
+    disorder_tags: [insomnia]
+    description: "Mất ngủ kinh niên: ngủ < 5h, hiệu suất 63%, deep/REM thiếu hụt"
+
+  elderly_normal:
+    filter_criteria: null
+    stats_override:
+      stage_proportions:
+        deep: 0.11
+        rem: 0.19
+        light: 0.60
+        awake: 0.10
+    phases_pattern_override:
+      - light
+      - deep
+      - light
+      - rem
+      - light
+      - awake
+      - light
+      - rem
+      - light
+    disorder_tags: [age_related]
+    description: "Giấc ngủ người cao tuổi bình thường: N3 giảm (~11%), nhiều giai đoạn light hơn"

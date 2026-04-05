@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 from sqlalchemy import text
 
 try:
+    from Iot_Simulator.api_server.config import load_sleep_scenarios
     from Iot_Simulator.api_server.backend_admin_client import BackendAdminClient
     from Iot_Simulator.api_server.db import session_scope
     from Iot_Simulator.api_server.schemas import (
@@ -48,6 +49,7 @@ try:
     from Iot_Simulator.simulator_core.sleep_vitals_enricher import enrich_sleep_record
     from Iot_Simulator.transport import HttpPublisher, MqttPublisher, TransportRouter
 except ModuleNotFoundError:
+    from api_server.config import load_sleep_scenarios
     from api_server.backend_admin_client import BackendAdminClient
     from api_server.db import session_scope
     from api_server.schemas import (
@@ -141,162 +143,8 @@ def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> 
     }
 
 
-# A-system sleep patterns: scenario phase traces for internal simulator state,
-# not the separate DB push profiles used elsewhere in the plan set.
-SLEEP_SCENARIO_PHASES: dict[str, list[tuple[str, int]]] = {
-    "good_sleep_night": [
-        ("light", 35),
-        ("deep", 60),
-        ("rem", 25),
-        ("light", 45),
-        ("awake", 10),
-        ("deep", 55),
-        ("rem", 25),
-        ("light", 45),
-        ("awake", 7),
-        ("rem", 28),
-        ("light", 75),
-    ],
-    "fragmented_sleep": [
-        ("light", 20),
-        ("awake", 15),
-        ("light", 25),
-        ("awake", 20),
-        ("rem", 15),
-        ("light", 25),
-        ("awake", 12),
-        ("rem", 18),
-        ("light", 30),
-        ("deep", 15),
-        ("light", 25),
-    ],
-}
-
-
-SLEEP_SCENARIO_PROFILES: dict[str, dict[str, Any]] = {
-    "good_sleep_night": {
-        "filter": lambda s: (
-            (s.get("summary") or {}).get("sleep_efficiency", 0) > 0.82
-            and (s.get("summary") or {}).get("wake_count", 99) <= 2
-        ),
-        "stats_override": None,
-        "phases_pattern_override": None,
-        "disorder_tags": [],
-        "description": "Giấc ngủ lành mạnh theo chuẩn AASM: deep ≥15%, REM ≥20%, hiệu suất ≥85%",
-    },
-    "fragmented_sleep": {
-        "filter": lambda s: (
-            (s.get("summary") or {}).get("wake_count", 0) >= 3
-            or (s.get("summary") or {}).get("sleep_efficiency", 1) < 0.78
-        ),
-        "stats_override": None,
-        "phases_pattern_override": [
-            "light",
-            "awake",
-            "light",
-            "awake",
-            "rem",
-            "light",
-            "awake",
-            "rem",
-            "light",
-            "deep",
-            "light",
-        ],
-        "disorder_tags": ["arousal"],
-        "description": "Giấc ngủ phân mảnh: thức nhiều lần, hiệu suất ~72%",
-    },
-    "sleep_apnea_mild": {
-        "filter": None,
-        "stats_override": {
-            "sleep_efficiency": 0.76,
-            "wake_count": 8,
-            "stage_proportions": {"deep": 0.10, "rem": 0.15, "light": 0.59, "awake": 0.16},
-            "spo2_min_override": 91.0,
-        },
-        "phases_pattern_override": [
-            "light",
-            "rem",
-            "light",
-            "awake",
-            "light",
-            "rem",
-            "light",
-            "awake",
-            "deep",
-            "light",
-        ],
-        "disorder_tags": ["osa_mild"],
-        "description": "Ngưng thở nhẹ (AHI ~10): SpO2 dip đến 91%, 8 lần thức",
-    },
-    "sleep_apnea_severe": {
-        "filter": None,
-        "stats_override": {
-            "sleep_efficiency": 0.62,
-            "wake_count": 18,
-            "stage_proportions": {"deep": 0.05, "rem": 0.08, "light": 0.61, "awake": 0.26},
-            "spo2_min_override": 84.0,
-        },
-        "phases_pattern_override": [
-            "light",
-            "awake",
-            "light",
-            "awake",
-            "light",
-            "rem",
-            "awake",
-            "light",
-            "awake",
-            "deep",
-            "light",
-            "awake",
-        ],
-        "disorder_tags": ["osa_severe", "trigger_osa_alert"],
-        "description": "Ngưng thở nặng (AHI >30): SpO2 xuống 84%, 18 lần thức",
-    },
-    "insomnia_pattern": {
-        "filter": lambda s: ((s.get("summary") or {}).get("sleep_efficiency", 1) < 0.70),
-        "stats_override": {
-            "sleep_efficiency": 0.63,
-            "wake_count": 6,
-            "stage_proportions": {"deep": 0.08, "rem": 0.12, "light": 0.65, "awake": 0.15},
-            "total_sleep_s_override": 270 * 60,
-        },
-        "phases_pattern_override": [
-            "awake",
-            "light",
-            "awake",
-            "light",
-            "rem",
-            "awake",
-            "light",
-            "awake",
-            "deep",
-            "light",
-        ],
-        "disorder_tags": ["insomnia"],
-        "description": "Mất ngủ kinh niên: ngủ < 5h, hiệu suất 63%, deep/REM thiếu hụt",
-    },
-    "elderly_normal": {
-        "filter": None,
-        "stats_override": {
-            "stage_proportions": {"deep": 0.11, "rem": 0.19, "light": 0.60, "awake": 0.10},
-        },
-        "phases_pattern_override": [
-            "light",
-            "deep",
-            "light",
-            "rem",
-            "light",
-            "awake",
-            "light",
-            "rem",
-            "light",
-        ],
-        "disorder_tags": ["age_related"],
-        "description": "Giấc ngủ người cao tuổi bình thường: N3 giảm (~11%), nhiều giai đoạn light hơn",
-    },
-}
+# Sleep scenario data loaded from external YAML config (see api_server/config/sleep_scenarios.yaml)
+SLEEP_SCENARIO_PHASES, SLEEP_SCENARIO_PROFILES = load_sleep_scenarios()
 
 
 DAYTIME_THRESHOLDS: dict[str, float] = {
