@@ -188,6 +188,7 @@ class SleepService:
                 stage = str(seg.stage)
                 phases_dict[stage] = phases_dict.get(stage, 0) + minutes
             except Exception:
+                logger.warning("Failed to parse sleep phase segment: %s", seg, exc_info=True)
                 continue
 
         if not phases_dict:
@@ -632,6 +633,7 @@ class SleepService:
                     },
                 ).scalar()
         except Exception:
+            logger.warning("DB check for existing sleep session failed (db_device_id=%s, user_id=%s, target_date=%s)", db_device_id, user_id, target_date, exc_info=True)
             return False
         return bool(result)
 
@@ -681,6 +683,7 @@ class SleepService:
                     {"device_id": db_device_id},
                 ).scalar()
         except Exception:
+            logger.warning("Failed to resolve user_id for db_device_id=%s", db_device_id, exc_info=True)
             return None
         if value is None:
             return None
@@ -727,6 +730,7 @@ class SleepService:
                     },
                 ).fetchall()
         except Exception:
+            logger.warning("Failed to fetch sleep history from DB for db_device_id=%s", bound_db_device_id, exc_info=True)
             return []
 
         records: list[DbSleepHistoryRow] = []
@@ -867,6 +871,7 @@ class SleepService:
                     if filter_fn(session):
                         filtered.append(session)
                 except Exception:
+                    logger.warning("Sleep session filter_fn raised for session, skipping", exc_info=True)
                     continue
             if not filtered:
                 filtered = pool

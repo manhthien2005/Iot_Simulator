@@ -387,7 +387,7 @@ class SimulatorRuntime:
             else:
                 logger.warning("Sleep AI model not available — heuristic fallback active")
         except Exception:
-            pass
+            logger.warning("Sleep AI availability check failed", exc_info=True)
         self.devices: dict[str, DeviceRecord] = {}
         self.device_scenarios: dict[str, str] = {}
         self.sessions: dict[str, SessionRecord] = {}
@@ -579,6 +579,7 @@ class SimulatorRuntime:
                     signal_strength=None,
                 )
         except Exception:
+            logger.warning("Failed to update device heartbeat for db_device_id=%s", db_device_id, exc_info=True)
             return
 
     def _execute_pending_tick_publish(self, pending_publish: PendingTickPublish | None) -> None:
@@ -590,6 +591,7 @@ class SimulatorRuntime:
         try:
             publish_result = self.transport_router.publish(pending_publish.messages, mode="http")
         except Exception:
+            logger.warning("Transport publish failed for pending tick", exc_info=True)
             publish_result = None
         publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
 

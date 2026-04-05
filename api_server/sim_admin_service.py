@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from threading import RLock
 from time import monotonic
@@ -7,6 +8,8 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 class SimAdminService:
@@ -446,4 +449,5 @@ class SimAdminService:
             )
             db.commit()
         except Exception:
+            logger.warning("Heartbeat update failed for device_id=%s, rolling back", device_id, exc_info=True)
             db.rollback()
