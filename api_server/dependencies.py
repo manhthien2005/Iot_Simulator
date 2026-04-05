@@ -558,6 +558,14 @@ class SimulatorRuntime:
                 },
             )
 
+    # ── Thread-safe session accessor for WebSocket keepalive ─────────────
+
+    def get_session_last_tick(self, session_id: str) -> str | None:
+        """Return ``last_tick_at`` for the given session under lock (thread-safe)."""
+        with self._lock:
+            session = self.sessions.get(session_id)
+            return session.last_tick_at if session is not None else None
+
     # ── Alert push — delegated to AlertService (Task 3.5) ────────────────
 
     def _push_alert_to_backend(
