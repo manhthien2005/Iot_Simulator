@@ -1,5 +1,5 @@
 import { Copy, Play, Square, Trash2, UserPlus } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { DbDevice } from "../../types/device";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -17,7 +17,7 @@ interface DbDeviceTableProps {
   batchActivating?: boolean;
 }
 
-export function DbDeviceTable({
+export const DbDeviceTable = memo(function DbDeviceTable({
   devices,
   selectedIds,
   onSelectionChange,
@@ -380,4 +380,4 @@ export function DbDeviceTable({
       ) : null}
     </div>
   );
-}
+});
