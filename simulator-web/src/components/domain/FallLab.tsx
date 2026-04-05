@@ -4,6 +4,7 @@ import { injectEvent, injectFallEvent } from "../../services/eventApi";
 import { useRecentEvents } from "../../hooks/useRecentEvents";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
+import { notify } from "../../utils/toast";
 
 interface FallLabProps {
   devices: SimulatedDevice[];
@@ -13,6 +14,7 @@ export function FallLab({ devices }: FallLabProps) {
   const [targetId, setTargetId] = useState<string>("");
   const [countdown, setCountdown] = useState(0);
   const [lastVariant, setLastVariant] = useState<string>("");
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const resolvedTarget = useMemo(() => targetId || (devices[0]?.id ?? ""), [devices, targetId]);
@@ -44,7 +46,9 @@ export function FallLab({ devices }: FallLabProps) {
             clearInterval(timerRef.current);
             timerRef.current = null;
           }
-          injectFallEvent(resolvedTarget, "fall_no_response");
+          injectFallEvent(resolvedTarget, "fall_no_response").catch(() => {
+            notify.error("Gửi sự kiện fall_no_response thất bại");
+          });
           return 0;
         }
         return value - 1;
@@ -77,59 +81,120 @@ export function FallLab({ devices }: FallLabProps) {
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
           <Button
             variant="secondary"
-            onClick={() => {
-              setLastVariant("false_fall");
-              injectFallEvent(resolvedTarget, "false_fall");
+            disabled={!!pendingAction}
+            onClick={async () => {
+              setPendingAction("false_fall");
+              try {
+                setLastVariant("false_fall");
+                await injectFallEvent(resolvedTarget, "false_fall");
+              } catch {
+                notify.error("Gửi sự kiện 'Té ngã giả' thất bại");
+              } finally {
+                setPendingAction(null);
+              }
             }}
           >
-            Té ngã giả
+            {pendingAction === "false_fall" ? "Đang gửi…" : "Té ngã giả"}
           </Button>
           <Button
             variant="secondary"
-            onClick={() => {
-              setLastVariant("fall_brief");
-              injectFallEvent(resolvedTarget, "fall_brief");
+            disabled={!!pendingAction}
+            onClick={async () => {
+              setPendingAction("fall_brief");
+              try {
+                setLastVariant("fall_brief");
+                await injectFallEvent(resolvedTarget, "fall_brief");
+              } catch {
+                notify.error("Gửi sự kiện 'Té ngã nhẹ' thất bại");
+              } finally {
+                setPendingAction(null);
+              }
             }}
           >
-            Té ngã nhẹ
+            {pendingAction === "fall_brief" ? "Đang gửi…" : "Té ngã nhẹ"}
           </Button>
           <Button
             variant="danger"
-            onClick={() => {
-              setLastVariant("confirmed");
-              injectFallEvent(resolvedTarget, "confirmed");
-              startCountdown();
+            disabled={!!pendingAction}
+            onClick={async () => {
+              setPendingAction("confirmed");
+              try {
+                setLastVariant("confirmed");
+                await injectFallEvent(resolvedTarget, "confirmed");
+                startCountdown();
+              } catch {
+                notify.error("Gửi sự kiện 'Té ngã xác nhận' thất bại");
+              } finally {
+                setPendingAction(null);
+              }
             }}
           >
-            Té ngã xác nhận
+            {pendingAction === "confirmed" ? "Đang gửi…" : "Té ngã xác nhận"}
           </Button>
           <Button
             variant="danger"
-            onClick={() => {
-              setLastVariant("fall_no_response");
-              injectFallEvent(resolvedTarget, "fall_no_response");
+            disabled={!!pendingAction}
+            onClick={async () => {
+              setPendingAction("fall_no_response");
+              try {
+                setLastVariant("fall_no_response");
+                await injectFallEvent(resolvedTarget, "fall_no_response");
+              } catch {
+                notify.error("Gửi sự kiện 'Không phản hồi' thất bại");
+              } finally {
+                setPendingAction(null);
+              }
             }}
           >
-            Không phản hồi
+            {pendingAction === "fall_no_response" ? "Đang gửi…" : "Không phản hồi"}
           </Button>
           <Button
             variant="outline"
-            onClick={() => {
-              injectEvent(resolvedTarget, "stress");
+            disabled={!!pendingAction}
+            onClick={async () => {
+              setPendingAction("stress");
+              try {
+                await injectEvent(resolvedTarget, "stress");
+              } catch {
+                notify.error("Gửi sự kiện 'Gây căng thẳng' thất bại");
+              } finally {
+                setPendingAction(null);
+              }
             }}
           >
-            ⚡ Gây căng thẳng
+            {pendingAction === "stress" ? "Đang gửi…" : "⚡ Gây căng thẳng"}
           </Button>
           <Button
             variant="ghost"
-            onClick={() => {
-              injectEvent(resolvedTarget, "neutral");
+            disabled={!!pendingAction}
+            onClick={async () => {
+              setPendingAction("neutral");
+              try {
+                await injectEvent(resolvedTarget, "neutral");
+              } catch {
+                notify.error("Gửi sự kiện 'Trở về bình thường' thất bại");
+              } finally {
+                setPendingAction(null);
+              }
             }}
           >
-            Trở về bình thường
+            {pendingAction === "neutral" ? "Đang gửi…" : "Trở về bình thường"}
           </Button>
-          <Button variant="outline" onClick={() => injectEvent(resolvedTarget, "sos_triggered")}>
-            SOS thủ công
+          <Button
+            variant="outline"
+            disabled={!!pendingAction}
+            onClick={async () => {
+              setPendingAction("sos_triggered");
+              try {
+                await injectEvent(resolvedTarget, "sos_triggered");
+              } catch {
+                notify.error("Gửi sự kiện 'SOS thủ công' thất bại");
+              } finally {
+                setPendingAction(null);
+              }
+            }}
+          >
+            {pendingAction === "sos_triggered" ? "Đang gửi…" : "SOS thủ công"}
           </Button>
         </div>
         {lastVariant ? (
