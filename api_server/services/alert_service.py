@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import collections
 import json as _json
+import logging
+import time
 from threading import RLock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -22,6 +24,12 @@ try:
     from Iot_Simulator.api_server.schemas import AlertEvent
 except ModuleNotFoundError:
     from api_server.schemas import AlertEvent
+
+
+logger = logging.getLogger(__name__)
+
+_ALERT_PUSH_MAX_RETRIES = 3
+_ALERT_PUSH_BACKOFF_BASE = 1  # seconds; actual delays: 1, 2, 4
 
 
 def _utc_now_iso() -> str:
@@ -134,15 +142,45 @@ class AlertService:
         if prepared is None:
             return
         endpoint = self._telemetry_alert_endpoint(self._health_backend_url)
-        try:
-            status_code = self._http_sender(endpoint, prepared.payload_json)
-        except Exception as exc:
+
+        last_exc: Exception | None = None
+        status_code: int | None = None
+
+        for attempt in range(1, _ALERT_PUSH_MAX_RETRIES + 1):
+            try:
+                status_code = self._http_sender(endpoint, prepared.payload_json)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _ALERT_PUSH_MAX_RETRIES:
+                    delay = _ALERT_PUSH_BACKOFF_BASE * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Alert push attempt %d/%d failed for %s/%s, retrying in %ds: %s",
+                        attempt,
+                        _ALERT_PUSH_MAX_RETRIES,
+                        prepared.event_type,
+                        prepared.severity,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+
+        if last_exc is not None:
+            logger.error(
+                "Alert push failed after %d attempts for %s/%s: %s",
+                _ALERT_PUSH_MAX_RETRIES,
+                prepared.event_type,
+                prepared.severity,
+                last_exc,
+                exc_info=True,
+            )
             with self._lock:
                 self._alert_pushes_in_flight.discard(prepared.signature)
             self._publish_device_log(
                 prepared.sim_device_id,
                 level="ERROR",
-                message=f"alert push failed: {prepared.event_type}/{prepared.severity} ({exc})",
+                message=f"alert push failed after {_ALERT_PUSH_MAX_RETRIES} retries: {prepared.event_type}/{prepared.severity} ({last_exc})",
                 timestamp=prepared.timestamp,
             )
             return
