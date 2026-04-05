@@ -363,6 +363,20 @@ class LogHub:
 
 
 class SimulatorRuntime:
+    """Thin orchestration facade over extracted domain services.
+
+    Delegates business logic to:
+    - :class:`DeviceService`   – device CRUD, binding, admin-DB lifecycle
+    - :class:`VitalsService`   – vitals retrieval & severity classification
+    - :class:`AlertService`    – alert push, event recording & history
+    - :class:`SessionService`  – session CRUD (create/start/stop/list)
+    - :class:`SleepService`    – sleep session construction, scoring, push, history
+
+    Retains cross-cutting orchestration: ``_tick_session_locked``,
+    ``set_device_scenario``, ``inject_event``, ``tick_active``, background tick,
+    risk scoring, dashboard summary, and transport/publish plumbing.
+    """
+
     def __init__(self) -> None:
         self.registry = DatasetRegistry(self._resolve_artifacts_dir())
         self._sleep_ai_client = SleepAIClient()
@@ -546,15 +560,6 @@ class SimulatorRuntime:
 
     # ── Alert push — delegated to AlertService (Task 3.5) ────────────────
 
-    def _prepare_alert_push_locked(
-        self,
-        sim_device_id: str,
-        event_type: str,
-        severity: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> PreparedAlertPush | None:
-        return self.alert_service._prepare_alert_push_locked(sim_device_id, event_type, severity, metadata)
-
     def _push_alert_to_backend(
         self,
         sim_device_id: str,
@@ -634,65 +639,8 @@ class SimulatorRuntime:
 
     # ── Sleep — delegated to SleepService (Task 3.4) ─────────────────────
 
-    def _get_device_engine(self, device_id: str) -> Any | None:
-        return self.sleep_service._get_device_engine(device_id)
-
-    def _advance_sleep_phase_if_due(self, device_id: str) -> None:
-        self.sleep_service._advance_sleep_phase_if_due(device_id)
-
-    @staticmethod
-    def _compute_sleep_window(duration_minutes: int) -> tuple[date, datetime, datetime]:
-        return SleepService._compute_sleep_window(duration_minutes)
-
-    @staticmethod
-    def _compute_sleep_window_for_date(target_date: date, duration_minutes: int) -> tuple[date, datetime, datetime]:
-        return SleepService._compute_sleep_window_for_date(target_date, duration_minutes)
-
-    @staticmethod
-    def _phase_minutes_from_segments(
-        phases: list[SleepStageSegment],
-        fallback_duration_minutes: int | None = None,
-    ) -> tuple[dict[str, int], int]:
-        return SleepService._phase_minutes_from_segments(phases, fallback_duration_minutes)
-
-    def _push_sleep_to_backend(
-        self,
-        sim_device_id: str,
-        sleep_resp: SleepSessionResponse,
-        user_id: int | None = None,
-    ) -> None:
-        self.sleep_service._push_sleep_to_backend(sim_device_id, sleep_resp, user_id)
-
-    def _sleep_session_exists(self, *, db_device_id: int, user_id: int, target_date: date) -> bool:
-        return self.sleep_service._sleep_session_exists(db_device_id=db_device_id, user_id=user_id, target_date=target_date)
-
-    @staticmethod
-    def _coerce_phase_minutes_dict(phases_raw: Any) -> dict[str, int]:
-        return SleepService._coerce_phase_minutes_dict(phases_raw)
-
-    @staticmethod
-    def _coerce_datetime_value(value: Any) -> datetime | None:
-        return SleepService._coerce_datetime_value(value)
-
-    @staticmethod
-    def _datetime_to_iso(value: datetime | None) -> str:
-        return SleepService._datetime_to_iso(value)
-
     def sleep_db_history(self, device_id: str, days: int = 30) -> list[DbSleepHistoryRow]:
         return self.sleep_service.sleep_db_history(device_id, days)
-
-    @staticmethod
-    def _compute_sleep_score_from_summary(summary: dict[str, Any]) -> int:
-        return SleepService._compute_sleep_score_from_summary(summary)
-
-    def _build_sleep_ai_record(self, **kwargs: Any) -> dict[str, Any]:
-        return self.sleep_service._build_sleep_ai_record(**kwargs)
-
-    def _compute_sleep_score_with_ai(self, sleep_ai_record: dict) -> int:
-        return self.sleep_service._compute_sleep_score_with_ai(sleep_ai_record)
-
-    def _post_sleep_payload(self, *, payload: dict[str, Any], device_id: str) -> tuple[bool, int]:
-        return self.sleep_service._post_sleep_payload(payload=payload, device_id=device_id)
 
     def _trigger_risk_inference(self, sim_device_id: str) -> int | None:
         with self._lock:
@@ -1034,12 +982,6 @@ class SimulatorRuntime:
             }
 
 
-    def _build_sleep_session_locked(self, device_id: str) -> SleepSessionResponse:
-        return self.sleep_service._build_sleep_session_locked(device_id)
-
-    def _build_sleep_session_for_scenario_locked(self, device_id: str, scenario_id: str) -> SleepSessionResponse:
-        return self.sleep_service._build_sleep_session_for_scenario_locked(device_id, scenario_id)
-
     def sleep_session(self, device_id: str) -> SleepSessionResponse:
         return self.sleep_service.sleep_session(device_id)
 
@@ -1053,10 +995,6 @@ class SimulatorRuntime:
         scenario_id: str = "good_sleep_night",
     ) -> dict[str, Any]:
         return self.sleep_service.push_sleep_session_for_date(device_id, target_date, scenario_id)
-
-    @staticmethod
-    def _resolve_bound_device_user_id(db_device_id: int) -> int | None:
-        return SleepService._resolve_bound_device_user_id(db_device_id)
 
     def risk_score(self, device_id: str) -> RiskScoreResponse:
         with self._lock:
@@ -1142,9 +1080,6 @@ class SimulatorRuntime:
     def latest_vitals(self, device_id: str) -> VitalsSample:
         return self.vitals_service.latest_vitals(device_id)
 
-    def _compute_bp_staleness(self, device_id: str, has_bp: bool) -> tuple[float | None, bool | None]:
-        return self.vitals_service._compute_bp_staleness(device_id, has_bp=has_bp)
-
     def verification(self, session_id: str) -> VerificationResult:
         with self._lock:
             record = self._require_session(session_id)
@@ -1195,7 +1130,7 @@ class SimulatorRuntime:
         for payload in outputs:
             device_id = str(payload.get("device_id") or "")
             if device_id in self.devices:
-                self._advance_sleep_phase_if_due(device_id)
+                self.sleep_service._advance_sleep_phase_if_due(device_id)
         record.last_tick_monotonic = now
         record.last_tick_outputs = outputs
         record.last_tick_at = _utc_now_iso()
@@ -1556,33 +1491,6 @@ class SimulatorRuntime:
     def _require_device(self, device_id: str) -> DeviceRecord:
         return self.device_service._require_device(device_id)
 
-
-    @staticmethod
-    def _build_sleep_segments(anchor_date: datetime.date, start_hour: int = 22, start_minute: int = 0) -> list[SleepStageSegment]:
-        return SleepService._build_sleep_segments(anchor_date, start_hour, start_minute)
-
-    @staticmethod
-    def _segment_minutes(start_iso: str, end_iso: str) -> int:
-        return SleepService._segment_minutes(start_iso, end_iso)
-
-    @staticmethod
-    def _build_sleep_history(device_id: str, anchor_date: datetime.date) -> list[SleepHistoryRow]:
-        return SleepService._build_sleep_history(device_id, anchor_date)
-
-    def _fallback_sleep_session(self, device_id: str) -> SleepSessionResponse:
-        return self.sleep_service._fallback_sleep_session(device_id)
-
-    def _real_sleep_session_from_registry(self, **kwargs: Any) -> SleepSessionResponse:
-        return self.sleep_service._real_sleep_session_from_registry(**kwargs)
-
-    def _sleep_stage_segments_from_raw(self, raw: dict[str, Any]) -> list[SleepStageSegment]:
-        return self.sleep_service._sleep_stage_segments_from_raw(raw)
-
-    def _sleep_history_from_registry(self, limit: int = 7) -> list[SleepHistoryRow]:
-        return self.sleep_service._sleep_history_from_registry(limit)
-
-    def _calc_sleep_score(self, raw: dict[str, Any]) -> int:
-        return self.sleep_service._calc_sleep_score(raw)
 
     def _upsert_risk_snapshot(
         self,
