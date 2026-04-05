@@ -14,7 +14,7 @@ def latest_vitals(
     runtime: SimulatorRuntime = Depends(get_runtime),
 ) -> VitalsSample:
     try:
-        return runtime.latest_vitals(device_id)
+        return runtime.vitals_service.latest_vitals(device_id)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

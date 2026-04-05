@@ -44,6 +44,7 @@ try:
     )
     from Iot_Simulator.api_server.sim_admin_service import SimAdminService
     from Iot_Simulator.api_server.services.device_service import DeviceService
+    from Iot_Simulator.api_server.services.vitals_service import VitalsService
     from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
     from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
@@ -73,6 +74,7 @@ except ModuleNotFoundError:
     )
     from api_server.sim_admin_service import SimAdminService
     from api_server.services.device_service import DeviceService
+    from api_server.services.vitals_service import VitalsService
     from simulator_core.dataset_registry import DatasetRegistry
     from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from simulator_core.sleep_ai_client import SleepAIClient
@@ -422,6 +424,13 @@ class SimulatorRuntime:
             publish_device_log_fn=self._publish_device_log,
         )
         self.device_service.set_runtime_session_ops(self)
+
+        # ── VitalsService (Task 3.3) ─────────────────────────────────────
+        self.vitals_service = VitalsService(
+            sessions=self.sessions,
+            bp_last_observed=self._bp_last_observed,
+            lock=self._lock,
+        )
 
     @staticmethod
     def _resolve_artifacts_dir() -> Path:
@@ -2155,46 +2164,10 @@ class SimulatorRuntime:
             )
 
     def latest_vitals(self, device_id: str) -> VitalsSample:
-        with self._lock:
-            for record in self.sessions.values():
-                for payload in reversed(record.last_tick_outputs):
-                    if payload.get("device_id") == device_id:
-                        raw_vitals = payload.get("vitals") or {}
-                        payload_state = payload.get("state") or {}
-                        source_mode = str(record.source_modes.get(device_id, "synthetic") or "synthetic").strip().lower()
-                        has_bp = (
-                            raw_vitals.get("blood_pressure_sys") is not None
-                            and raw_vitals.get("blood_pressure_dia") is not None
-                        )
-                        bp_observation_age_sec, bp_is_stale = self._compute_bp_staleness(device_id, has_bp=has_bp)
-                        sample = self._to_vitals(
-                            raw_vitals,
-                            stale=record.status != "running",
-                            emitted_at=str(payload.get("emitted_at") or ""),
-                            activity_state=str(payload_state.get("activity_state") or "unknown"),
-                            is_sleeping=_is_sleeping_state(payload_state.get("activity_state")),
-                            source_mode=source_mode,
-                            device_id=device_id,
-                            bp_observation_age_sec=bp_observation_age_sec,
-                            bp_is_stale=bp_is_stale,
-                        )
-                        activity_state = str(payload_state.get("activity_state") or "").strip().lower()
-                        fall_variant = str(payload_state.get("fall_variant") or "").strip().lower()
-                        if activity_state == "fall" and fall_variant != "fall_brief":
-                            return sample.model_copy(update={"severity": "critical"})
-                        return sample
-            raise KeyError(f"No vitals found for device: {device_id}")
+        return self.vitals_service.latest_vitals(device_id)
 
     def _compute_bp_staleness(self, device_id: str, has_bp: bool) -> tuple[float | None, bool | None]:
-        """Track replay NIBP freshness using the latest observed blood pressure sample."""
-        now = monotonic()
-        if has_bp:
-            self._bp_last_observed[device_id] = now
-        last = self._bp_last_observed.get(device_id)
-        if last is None:
-            return None, None
-        age = round(now - last, 1)
-        return age, age > 300.0
+        return self.vitals_service._compute_bp_staleness(device_id, has_bp=has_bp)
 
     def verification(self, session_id: str) -> VerificationResult:
         with self._lock:
@@ -2591,103 +2564,16 @@ class SimulatorRuntime:
         bp_observation_age_sec: float | None = None,
         bp_is_stale: bool | None = None,
     ) -> VitalsSample:
-        heart_rate = SimulatorRuntime._safe_float(vitals.get("heart_rate"), 72.0)
-        spo2_val   = SimulatorRuntime._safe_float(vitals.get("spo2"), 98.0)
-        bp_sys_val = SimulatorRuntime._safe_float(vitals.get("blood_pressure_sys"), 120.0)
-        bp_dia_val = SimulatorRuntime._safe_float(vitals.get("blood_pressure_dia"), 80.0)
-        raw_temp = vitals.get("temperature")
-        raw_rr = vitals.get("respiratory_rate")
-        if raw_rr is None:
-            raw_rr = vitals.get("respiration_rate")
-        replay_mode = source_mode == "replay"
-        provenance: dict[str, str] | None = None
-        if replay_mode:
-            provenance = {
-                "heartRate": "measured" if vitals.get("heart_rate") is not None else "unknown",
-                "spo2": "measured" if vitals.get("spo2") is not None else "unknown",
-                "bloodPressureSys": "measured" if vitals.get("blood_pressure_sys") is not None else "unknown",
-                "bloodPressureDia": "measured" if vitals.get("blood_pressure_dia") is not None else "unknown",
-                "temperature": "unknown",
-                "respiratoryRate": "measured" if raw_rr is not None else "unknown",
-                "hrv": "unknown",
-            }
-        temperature = SimulatorRuntime._safe_float(raw_temp, 36.7)
-        respiratory_rate = (
-            SimulatorRuntime._safe_float(raw_rr, None)
-            if replay_mode and raw_rr is None
-            else SimulatorRuntime._safe_float(raw_rr, 15.0)
-        )
-        blood_pressure_sys = (
-            None
-            if replay_mode and bp_is_stale is True
-            else SimulatorRuntime._safe_float(vitals.get("blood_pressure_sys"), 120.0)
-        )
-        blood_pressure_dia = (
-            None
-            if replay_mode and bp_is_stale is True
-            else SimulatorRuntime._safe_float(vitals.get("blood_pressure_dia"), 80.0)
-        )
-        thresholds = SLEEP_THRESHOLDS if is_sleeping else DAYTIME_THRESHOLDS
-        critical_rr = (
-            respiratory_rate is not None
-            and (
-                respiratory_rate < thresholds["rr_critical_low"]
-                or respiratory_rate > thresholds["rr_critical_high"]
-            )
-        )
-        low_sys_critical = blood_pressure_sys is not None and blood_pressure_sys < 80.0
-        # Multi-signal severity with context-aware thresholds for waking vs sleeping.
-        severity = "normal"
-        if (
-            heart_rate >= thresholds["hr_critical_high"]
-            or heart_rate < thresholds["hr_critical_low"]
-            or spo2_val < thresholds["spo2_critical"]
-            or low_sys_critical
-            or bp_sys_val >= thresholds["bp_sys_critical"]
-            or bp_dia_val >= thresholds["bp_dia_critical"]
-            or critical_rr
-        ):
-            severity = "critical"
-        elif (
-            heart_rate >= thresholds["hr_warning_high"]
-            or heart_rate < thresholds["hr_warning_low"]
-            or spo2_val < thresholds["spo2_warning"]
-            or bp_sys_val >= thresholds["bp_sys_warning"]
-            or bp_dia_val >= thresholds["bp_dia_warning"]
-        ):
-            severity = "warning"
-        activity_map: dict[str, str] = {
-            "resting": "resting",
-            "walking": "walking",
-            "running": "running",
-            "fall": "falling",
-            "recovery": "recovery",
-            "sleeping": "sleeping",
-            "standing": "resting",
-        }
-        label = activity_map.get(str(activity_state or "unknown").strip().lower(), "unknown")
-        generator_label = str(vitals.get("activity_label") or "").strip().lower()
-        if generator_label in {"sleeping", "resting", "walking", "running", "falling", "recovery", "unknown"}:
-            label = generator_label
-        return VitalsSample(
-            timestamp=emitted_at or vitals.get("timestamp") or _utc_now_iso(),
-            heartRate=heart_rate,
-            spo2=spo2_val,
-            temperature=temperature,
-            bloodPressureSys=blood_pressure_sys,
-            bloodPressureDia=blood_pressure_dia,
-            respiratoryRate=respiratory_rate,
-            hrv=None,
-            signalQuality=None,
-            motionArtifact=False,
-            isStale=stale,
-            severity=severity,  # type: ignore[arg-type]
-            activityLabel=label,  # type: ignore[arg-type]
-            motionTag=label,  # type: ignore[arg-type]
-            fieldProvenance=provenance,
-            bpObservationAgeSec=bp_observation_age_sec,
-            bpIsStale=bp_is_stale,
-            sourceMode=source_mode if source_mode != "synthetic" else None,
+        return VitalsService.to_vitals(
+            vitals,
+            stale=stale,
+            emitted_at=emitted_at,
+            activity_state=activity_state,
+            is_sleeping=is_sleeping,
+            source_mode=source_mode,
+            device_id=device_id,
+            bp_observation_age_sec=bp_observation_age_sec,
+            bp_is_stale=bp_is_stale,
         )
 
     # Delegate to module-level _safe_float for backward compatibility
