@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { notify } from "../../utils/toast";
@@ -14,12 +14,65 @@ export interface CreateDbDeviceModalProps {
   }) => Promise<void>;
 }
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea, input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function CreateDbDeviceModal({ open, onClose, onCreate }: CreateDbDeviceModalProps) {
   const [deviceName, setDeviceName] = useState("");
   const [deviceType, setDeviceType] = useState<DeviceType>("smartwatch");
   const [userEmail, setUserEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // Auto-focus first input when modal opens
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => {
+      const firstInput = modalRef.current?.querySelector<HTMLElement>("input, select, textarea");
+      firstInput?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [open]);
+
+  // ESC close + focus trap
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+
+      if (event.key === "Tab" && modalRef.current) {
+        const focusable = Array.from(
+          modalRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+        );
+        if (focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (event.shiftKey) {
+          if (document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+      }
+    },
+    [onClose],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, handleKeyDown]);
 
   if (!open) return null;
 
@@ -59,9 +112,21 @@ export function CreateDbDeviceModal({ open, onClose, onCreate }: CreateDbDeviceM
         display: "grid",
         placeItems: "center",
       }}
+      onClick={(event) => {
+        // Close on backdrop click (only when clicking the overlay itself)
+        if (event.target === event.currentTarget) onClose();
+      }}
+      role="presentation"
     >
-      <div className="surface-card" style={{ width: "520px", padding: "18px" }}>
-        <h3 style={{ marginTop: 0 }}>Tạo thiết bị</h3>
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+        className="surface-card"
+        style={{ width: "520px", padding: "18px" }}
+      >
+        <h3 id="modal-title" style={{ marginTop: 0 }}>Tạo thiết bị</h3>
         <label htmlFor="db-device-name" style={{ display: "block", marginBottom: "6px", color: "var(--text-secondary)" }}>
           Tên thiết bị
         </label>
