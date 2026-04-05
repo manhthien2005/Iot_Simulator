@@ -16,9 +16,7 @@ export type DeviceType = "smartwatch" | "fitness_band" | "medical_device";
 export interface PersonaConfig {
   age?: number;
   weightKg?: number;
-  weight_kg?: number;
   heightCm?: number;
-  height_cm?: number;
   gender?: string | null;
   seed?: number;
 }
@@ -37,7 +35,6 @@ export interface SimulatedDevice {
   state: DeviceState;
   boundDbDeviceId: number | null;
   personaConfig?: PersonaConfig;
-  persona_config?: PersonaConfig;
 }
 
 export interface BindDeviceResponse {
