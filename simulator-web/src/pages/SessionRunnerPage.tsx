@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { DeviceAssignPanel } from "../components/domain/DeviceAssignPanel";
 import { FallLab } from "../components/domain/FallLab";
@@ -83,7 +83,7 @@ export function SessionRunnerPage() {
 
   // Removing obsolete start/stop logic since sessions are managed per device from the DevicesPage
 
-  const changeScenario = async (deviceId: string, scenarioId: string) => {
+  const changeScenario = useCallback(async (deviceId: string, scenarioId: string) => {
     setScenarioByDevice((prev) => ({ ...prev, [deviceId]: scenarioId }));
     if (activeSession?.status !== "running") return;
     try {
@@ -92,7 +92,7 @@ export function SessionRunnerPage() {
     } catch {
       notify.error("Không áp dụng được kịch bản cho thiết bị này.");
     }
-  };
+  }, [activeSession?.status]);
 
   const activeDevices = useMemo(() => devices.filter((d) => d.isOnline), [devices]);
 

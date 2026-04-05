@@ -1,5 +1,5 @@
 import { Plus, Watch } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { DbDeviceTable } from "../components/domain/DbDeviceTable";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -43,9 +43,12 @@ export function DevicesPage() {
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
   }, [filtered]);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["db-devices"] });
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: ["db-devices"] }),
+    [queryClient]
+  );
 
-  const handleCreate = async (payload: {
+  const handleCreate = useCallback(async (payload: {
     device_name: string;
     device_type: DeviceType;
     user_email?: string;
@@ -53,33 +56,33 @@ export function DevicesPage() {
     await createDbDevice(payload);
     notify.success("Đã tạo thiết bị trong DB");
     await invalidate();
-  };
+  }, [invalidate]);
 
-  const handleAssign = async (deviceId: number, email: string) => {
+  const handleAssign = useCallback(async (deviceId: number, email: string) => {
     await assignDbDevice(deviceId, email);
     notify.success(`Đã gán thiết bị cho ${email}`);
     await invalidate();
-  };
+  }, [invalidate]);
 
-  const handleActivateSim = async (device: DbDevice) => {
+  const handleActivateSim = useCallback(async (device: DbDevice) => {
     await activateDbDevice(device.id);
     notify.success(`Đã bật sim cho ${device.device_name} — hệ thống đang truyền dữ liệu`);
     await invalidate();
-  };
+  }, [invalidate]);
 
-  const handleDeactivateSim = async (device: DbDevice) => {
+  const handleDeactivateSim = useCallback(async (device: DbDevice) => {
     await deactivateDbDevice(device.id);
     notify.warning(`Đã tắt sim cho ${device.device_name} — mobile app sẽ mất dữ liệu`);
     await invalidate();
-  };
+  }, [invalidate]);
 
-  const handleDelete = async (deviceId: number) => {
+  const handleDelete = useCallback(async (deviceId: number) => {
     await deleteDbDevice(deviceId);
     notify.success("Đã xóa thiết bị");
     await invalidate();
-  };
+  }, [invalidate]);
 
-  const handleBatchActivate = async (deviceIds: number[]) => {
+  const handleBatchActivate = useCallback(async (deviceIds: number[]) => {
     const eligibleDevices = filtered.filter((device) => deviceIds.includes(device.id) && device.user_id !== null);
 
     // Single-Active Rule Validation: Block activating multiple devices for the same user
@@ -131,7 +134,7 @@ export function DevicesPage() {
     } finally {
       setBatchActivating(false);
     }
-  };
+  }, [filtered, invalidate]);
 
   return (
     <section style={{ display: "grid", gap: "14px" }}>
