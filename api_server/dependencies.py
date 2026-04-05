@@ -333,6 +333,23 @@ class LogHub:
         self._history: dict[str, list[dict[str, Any]]] = {}
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._lock = RLock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _get_loop(self) -> asyncio.AbstractEventLoop | None:
+        """Return the cached event loop, lazily resolving on first call."""
+        if self._loop is None:
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    self._loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    pass
+        return self._loop
+
+    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Allow external code (e.g. FastAPI startup) to inject the event loop."""
+        self._loop = loop
 
     def publish(self, session_id: str, entry: dict[str, Any]) -> None:
         with self._lock:
@@ -340,10 +357,17 @@ class LogHub:
             history.append(entry)
             if len(history) > 500:
                 history[:] = history[-500:]
+            loop = self._get_loop()
             for queue in self._subscribers.get(session_id, []):
                 try:
-                    queue.put_nowait(entry)
+                    if loop is not None and loop.is_running():
+                        loop.call_soon_threadsafe(queue.put_nowait, entry)
+                    else:
+                        queue.put_nowait(entry)
                 except asyncio.QueueFull:
+                    continue
+                except RuntimeError:
+                    # Loop closed or queue invalidated — skip gracefully
                     continue
 
     def subscribe(self, session_id: str) -> asyncio.Queue[dict[str, Any]]:
