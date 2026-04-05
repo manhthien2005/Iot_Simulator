@@ -35,6 +35,30 @@ class TestPersonaEngine(unittest.TestCase):
 
         self.assertEqual(state.activity_state, "standing")
 
+    def test_inject_sleep_start_sets_sleeping_state(self) -> None:
+        self.engine.inject_event("sleep_start", "deep")
+        self.assertEqual(self.engine.state.activity_state, "sleeping")
+        self.assertEqual(self.engine.state.sleep_phase, "deep")
+
+    def test_inject_sleep_start_defaults_to_light(self) -> None:
+        self.engine.inject_event("sleep_start")
+        self.assertEqual(self.engine.state.sleep_phase, "light")
+
+    def test_inject_sleep_end_returns_to_resting(self) -> None:
+        self.engine.inject_event("sleep_start", "deep")
+        self.engine.inject_event("sleep_end")
+        self.assertEqual(self.engine.state.activity_state, "resting")
+        self.assertIsNone(self.engine.state.sleep_phase)
+
+    def test_sleep_phase_change_ignored_when_not_sleeping(self) -> None:
+        self.engine.inject_event("sleep_phase_change", "rem")
+        self.assertIsNone(self.engine.state.sleep_phase)
+
+    def test_transition_keeps_sleep_phase(self) -> None:
+        self.engine.inject_event("sleep_start", "deep")
+        self.engine.transition_to("sleeping")
+        self.assertEqual(self.engine.state.sleep_phase, "deep")
+
 
 if __name__ == "__main__":
     unittest.main()
