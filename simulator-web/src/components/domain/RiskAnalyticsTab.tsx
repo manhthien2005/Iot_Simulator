@@ -98,14 +98,24 @@ export function RiskAnalyticsTab({ deviceId, riskQuery }: RiskAnalyticsTabProps)
     };
   }, [riskQuery.data?.score]);
 
+  const [isTriggering, setIsTriggering] = useState(false);
+  const [isInjecting, setIsInjecting] = useState(false);
+
   const onTriggerRisk = async () => {
     if (!deviceId) {
       notify.error("Cần chọn thiết bị trước khi chạy tính toán rủi ro.");
       return;
     }
-    await triggerRiskCalculation(deviceId);
-    await riskQuery.refetch();
-    notify.success("Đã chạy tính toán rủi ro.");
+    setIsTriggering(true);
+    try {
+      await triggerRiskCalculation(deviceId);
+      await riskQuery.refetch();
+      notify.success("Đã chạy tính toán rủi ro.");
+    } catch {
+      notify.error("Không thể chạy tính toán rủi ro.");
+    } finally {
+      setIsTriggering(false);
+    }
   };
 
   const onInjectRisk = async () => {
@@ -118,14 +128,21 @@ export function RiskAnalyticsTab({ deviceId, riskQuery }: RiskAnalyticsTabProps)
       notify.error("Điểm phải nằm trong khoảng 0.0 đến 1.0.");
       return;
     }
-    await injectRiskScore({
-      device_id: deviceId,
-      risk_type: riskType,
-      risk_level: riskLevel,
-      score: parsed,
-    });
-    await riskQuery.refetch();
-    notify.success("Đã tiêm rủi ro và tạo XAI.");
+    setIsInjecting(true);
+    try {
+      await injectRiskScore({
+        device_id: deviceId,
+        risk_type: riskType,
+        risk_level: riskLevel,
+        score: parsed,
+      });
+      await riskQuery.refetch();
+      notify.success("Đã tiêm rủi ro và tạo XAI.");
+    } catch {
+      notify.error("Không thể tiêm rủi ro.");
+    } finally {
+      setIsInjecting(false);
+    }
   };
 
   return (
@@ -147,8 +164,8 @@ export function RiskAnalyticsTab({ deviceId, riskQuery }: RiskAnalyticsTabProps)
               <small style={{ color: "var(--text-secondary)" }}>Thuật toán: {riskQuery.data?.algorithm ?? "-"}</small>
               <small style={{ color: "var(--text-secondary)" }}>Lần tính gần nhất: {riskQuery.data?.calculatedAt ? new Date(riskQuery.data.calculatedAt).toLocaleString() : "-"}</small>
               <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
-                <Button variant="primary" onClick={onTriggerRisk}>
-                  Chạy tính toán rủi ro
+                <Button variant="primary" onClick={onTriggerRisk} loading={isTriggering} disabled={isTriggering}>
+                  {isTriggering ? "Đang tính toán…" : "Chạy tính toán rủi ro"}
                 </Button>
               </div>
             </div>
@@ -179,8 +196,8 @@ export function RiskAnalyticsTab({ deviceId, riskQuery }: RiskAnalyticsTabProps)
             Điểm
             <input value={injectScore} onChange={(event) => setInjectScore(event.target.value)} style={fieldStyle} />
           </label>
-          <Button variant="outline" onClick={onInjectRisk}>
-            Tiêm + tạo XAI
+          <Button variant="outline" onClick={onInjectRisk} loading={isInjecting} disabled={isInjecting}>
+            {isInjecting ? "Đang tiêm…" : "Tiêm + tạo XAI"}
           </Button>
         </div>
       </Card>

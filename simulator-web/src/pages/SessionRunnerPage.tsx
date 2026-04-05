@@ -83,14 +83,18 @@ export function SessionRunnerPage() {
 
   // Removing obsolete start/stop logic since sessions are managed per device from the DevicesPage
 
+  const [isApplying, setIsApplying] = useState(false);
   const changeScenario = useCallback(async (deviceId: string, scenarioId: string) => {
     setScenarioByDevice((prev) => ({ ...prev, [deviceId]: scenarioId }));
     if (activeSession?.status !== "running") return;
+    setIsApplying(true);
     try {
       await applyScenarioPreset(deviceId, scenarioId);
       notify.success("Đã áp dụng kịch bản cho thiết bị đang chạy.");
     } catch {
       notify.error("Không áp dụng được kịch bản cho thiết bị này.");
+    } finally {
+      setIsApplying(false);
     }
   }, [activeSession?.status]);
 
@@ -121,6 +125,7 @@ export function SessionRunnerPage() {
         scenarios={scenarios}
         scenarioByDevice={scenarioByDevice}
         onScenarioChange={changeScenario}
+        isApplying={isApplying}
       />
 
       <SessionVitalsPanel devices={activeDevices} deviceId={monitorDeviceId} onDeviceChange={setMonitorDeviceId} />

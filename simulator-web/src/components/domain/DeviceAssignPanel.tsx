@@ -8,9 +8,10 @@ interface DeviceAssignPanelProps {
   scenarios: ScenarioOption[];
   scenarioByDevice: Record<string, string>;
   onScenarioChange: (deviceId: string, scenarioId: string) => void;
+  isApplying?: boolean;
 }
 
-export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, onScenarioChange }: DeviceAssignPanelProps) {
+export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, onScenarioChange, isApplying = false }: DeviceAssignPanelProps) {
   const vitalsScenarios = scenarios.filter((scenario) => scenario.category !== "fall");
   const fallScenarios = scenarios.filter((scenario) => scenario.category === "fall");
   const defaultScenarioId = vitalsScenarios[0]?.id ?? "";
@@ -41,6 +42,7 @@ export function DeviceAssignPanel({ devices, scenarios, scenarioByDevice, onScen
               return (
                 <select
                   value={safeScenarioId}
+                  disabled={isApplying}
                   onChange={(event) => onScenarioChange(device.id, event.target.value)}
                   style={{
                     width: "100%",
