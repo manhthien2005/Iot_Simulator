@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { VitalsSample } from "../../types/vitals";
 import type { SimulatedDevice } from "../../types/device";
 import { Badge } from "../ui/Badge";
@@ -22,7 +22,7 @@ function pseudoMetric(seed: string, offset: number, timeSlice: number, amplitude
   return base + micro;
 }
 
-export function MotionPreviewPanel({ selectedDevice, currentVitals }: MotionPreviewPanelProps) {
+export const MotionPreviewPanel = memo(function MotionPreviewPanel({ selectedDevice, currentVitals }: MotionPreviewPanelProps) {
   const [timeSlice, setTimeSlice] = useState(0);
   const isFalling = currentVitals?.activityLabel === "falling";
   const fillColor = isFalling ? "var(--severity-critical)" : "var(--accent-cyan)";
@@ -30,7 +30,9 @@ export function MotionPreviewPanel({ selectedDevice, currentVitals }: MotionPrev
   useEffect(() => {
     if (!selectedDevice) return;
     const handle = window.setInterval(() => {
-      setTimeSlice((prev) => prev + 1);
+      if (!document.hidden) {
+        setTimeSlice((prev) => prev + 1);
+      }
     }, 1000);
     return () => window.clearInterval(handle);
   }, [selectedDevice?.id]);
@@ -103,4 +105,4 @@ export function MotionPreviewPanel({ selectedDevice, currentVitals }: MotionPrev
       )}
     </Card>
   );
-}
+});
