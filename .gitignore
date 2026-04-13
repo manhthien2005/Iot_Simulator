@@ -20,6 +20,7 @@ node_modules/
 dist/
 build/
 .vite/
+*.tsbuildinfo
 
 # Environment files
 .env
@@ -71,3 +72,9 @@ datasets/**/etl/
 
 # Normalized ETL artifacts — rebuilt locally by running etl_pipeline/normalize.py
 normalized_artifacts/
+
+
+.roo
+.rooignore
+.roomodes
+roo-code-settings-optimized.json
