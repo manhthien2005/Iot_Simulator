@@ -1,4 +1,4 @@
-import { BarChart3, Clapperboard, LayoutDashboard, Play, ShieldCheck, Watch, ChevronLeft, ChevronRight } from "lucide-react";
+import { BarChart3, Clapperboard, LayoutDashboard, Play, Settings, ShieldCheck, Watch, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { useUiStore } from "../../stores/uiStore";
@@ -10,6 +10,7 @@ const links = [
   { to: "/session", label: "Phiên mô phỏng", icon: Play },
   { to: "/analytics", label: "Phân tích", icon: BarChart3 },
   { to: "/verification", label: "Xác minh", icon: ShieldCheck },
+  { to: "/settings", label: "Cài đặt", icon: Settings },
 ];
 
 export function Sidebar() {
