@@ -25,6 +25,7 @@ from Iot_Simulator.api_server.routers.registry import router as registry_router
 from Iot_Simulator.api_server.routers.scenarios import router as scenarios_router
 from Iot_Simulator.api_server.routers.sessions import router as sessions_router
 from Iot_Simulator.api_server.routers.verification import router as verification_router
+from Iot_Simulator.api_server.routers.settings import router as settings_router
 from Iot_Simulator.api_server.routers.vitals import router as vitals_router
 from Iot_Simulator.api_server.ws.log_stream import handle_ws_logs
 
@@ -47,6 +48,7 @@ app.include_router(vitals_router, prefix="/api/sim")
 app.include_router(events_router, prefix="/api/sim")
 app.include_router(verification_router, prefix="/api/sim")
 app.include_router(analytics_router, prefix="/api/sim")
+app.include_router(settings_router, prefix="/api/sim")
 
 
 @app.get("/api/sim/health")

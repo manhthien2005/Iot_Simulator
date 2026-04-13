@@ -73,6 +73,35 @@ except ModuleNotFoundError:
     from simulator_core.sleep_vitals_enricher import enrich_sleep_record
     from transport import HttpPublisher, MqttPublisher, TransportRouter
 
+# Pre-model trigger imports — lazy-loaded inside _build_trigger_orchestrator
+# to avoid hard dependency when module is missing.
+_TRIGGER_AVAILABLE = True
+try:
+    from pre_model_trigger.orchestrator import TriggerOrchestrator
+    from pre_model_trigger.settings_provider import (
+        SystemSettingsProvider,
+        _FALLBACK_DAYTIME as _PROVIDER_FALLBACK_DAYTIME,
+        _FALLBACK_SLEEP as _PROVIDER_FALLBACK_SLEEP,
+    )
+    from pre_model_trigger.rule_engine import RuleEngine
+    from pre_model_trigger.fall_pre_trigger import FallPreTrigger
+    from pre_model_trigger.healthguard_client import HealthGuardAPIClient as TriggerAPIClient
+    from pre_model_trigger.response_handler import ResponseHandler
+    from pre_model_trigger.vitals_buffer import VitalsHistoryBuffer
+    from pre_model_trigger.types import PersonaProfile as TriggerPersonaProfile, TriggerActionItem
+except ImportError:
+    _TRIGGER_AVAILABLE = False
+    _PROVIDER_FALLBACK_DAYTIME = None  # type: ignore[assignment]
+    _PROVIDER_FALLBACK_SLEEP = None  # type: ignore[assignment]
+
+# Feature flag: when True AND _TRIGGER_AVAILABLE, the trigger orchestrator
+# replaces hard-coded threshold logic for severity evaluation and alert
+# generation.  When False, the orchestrator runs in shadow-only mode.
+_PRE_MODEL_TRIGGER_ENABLED = (
+    os.environ.get("PRE_MODEL_TRIGGER_ENABLED", "false").strip().lower()
+    in {"1", "true", "yes"}
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -296,39 +325,36 @@ SLEEP_SCENARIO_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
-DAYTIME_THRESHOLDS: dict[str, float] = {
-    "hr_critical_low": 50.0,
-    "hr_critical_high": 120.0,
-    "hr_warning_low": 55.0,
-    "hr_warning_high": 110.0,
-    "spo2_critical": 90.0,
-    "spo2_warning": 94.0,
-    "rr_critical_low": 10.0,
-    "rr_critical_high": 25.0,
-    "bp_sys_critical": 180.0,
-    "bp_dia_critical": 120.0,
-    "bp_sys_warning": 140.0,
-    "bp_dia_warning": 90.0,
-}
+# ---------------------------------------------------------------------------
+# Threshold defaults — sourced from pre_model_trigger.settings_provider
+# (single source of truth).  When the trigger module is unavailable we
+# define identical inline fallbacks so that legacy mode still works.
+# ---------------------------------------------------------------------------
+if _PROVIDER_FALLBACK_DAYTIME is not None:
+    DAYTIME_THRESHOLDS: dict[str, float] = dict(_PROVIDER_FALLBACK_DAYTIME)
+else:
+    DAYTIME_THRESHOLDS = {
+        "hr_critical_low": 50.0, "hr_critical_high": 120.0,
+        "hr_warning_low": 55.0, "hr_warning_high": 110.0,
+        "spo2_critical": 90.0, "spo2_warning": 94.0,
+        "rr_critical_low": 10.0, "rr_critical_high": 25.0,
+        "bp_sys_critical": 180.0, "bp_dia_critical": 120.0,
+        "bp_sys_warning": 140.0, "bp_dia_warning": 90.0,
+    }
 
-
-SLEEP_THRESHOLDS: dict[str, float] = {
-    "hr_critical_low": 38.0,
-    "hr_critical_high": 100.0,
-    "hr_warning_low": 42.0,
-    "hr_warning_high": 90.0,
-    "spo2_critical": 85.0,
-    "spo2_warning": 90.0,
-    "rr_critical_low": 6.0,
-    "rr_critical_high": 25.0,
-    "bp_sys_critical": 180.0,
-    "bp_dia_critical": 120.0,
-    "bp_sys_warning": 160.0,
-    "bp_dia_warning": 100.0,
-    "osa_alert_spo2_threshold": 88.0,
-    "nocturnal_tachy_hr": 120.0,
-    "apnea_rr_threshold": 6.0,
-}
+if _PROVIDER_FALLBACK_SLEEP is not None:
+    SLEEP_THRESHOLDS: dict[str, float] = dict(_PROVIDER_FALLBACK_SLEEP)
+else:
+    SLEEP_THRESHOLDS = {
+        "hr_critical_low": 38.0, "hr_critical_high": 100.0,
+        "hr_warning_low": 42.0, "hr_warning_high": 90.0,
+        "spo2_critical": 85.0, "spo2_warning": 90.0,
+        "rr_critical_low": 6.0, "rr_critical_high": 25.0,
+        "bp_sys_critical": 180.0, "bp_dia_critical": 120.0,
+        "bp_sys_warning": 160.0, "bp_dia_warning": 100.0,
+        "osa_alert_spo2_threshold": 88.0, "nocturnal_tachy_hr": 120.0,
+        "apnea_rr_threshold": 6.0,
+    }
 
 
 def _is_sleeping_state(activity_state: Any) -> bool:
@@ -548,6 +574,22 @@ class SimulatorRuntime:
             self._background_tick_interval = 1.0
         self._background_tick_stop = Event()
         self._background_tick_thread: Thread | None = None
+        self._trigger_orchestrator: TriggerOrchestrator | None = None  # type: ignore[name-defined]
+        self._pre_model_trigger_active: bool = False
+        self._shadow_tick_count: int = 0
+        self._shadow_match_count: int = 0
+        self._shadow_mismatch_count: int = 0
+        if _TRIGGER_AVAILABLE:
+            try:
+                enable_calls = _PRE_MODEL_TRIGGER_ENABLED
+                self._trigger_orchestrator = self._build_trigger_orchestrator(
+                    enable_model_calls=enable_calls,
+                )
+                self._pre_model_trigger_active = _PRE_MODEL_TRIGGER_ENABLED
+                mode_label = "ACTIVE" if self._pre_model_trigger_active else "shadow"
+                logger.info("Pre-model trigger orchestrator initialized (%s mode)", mode_label)
+            except Exception as exc:
+                logger.warning("Pre-model trigger init skipped: %s", exc)
 
     @staticmethod
     def _resolve_artifacts_dir() -> Path:
@@ -559,6 +601,99 @@ class SimulatorRuntime:
     def _resolve_backend_base_url() -> str:
         base_url = os.environ.get("HEALTH_BACKEND_URL", "http://localhost:8000").strip()
         return base_url.rstrip("/") or "http://localhost:8000"
+
+    def _build_trigger_orchestrator(  # type: ignore[name-defined]
+        self,
+        *,
+        enable_model_calls: bool = False,
+    ) -> TriggerOrchestrator:
+        """Build the pre-model trigger orchestrator with all dependencies.
+
+        Uses lazy imports so the module is optional — callers should catch
+        ``Exception`` and fall back to ``None``.
+
+        Args:
+            enable_model_calls: When *True* the orchestrator will call
+                HealthGuard-AI for health/fall predictions.  When *False*
+                (default) only rule evaluation runs — suitable for shadow mode.
+        """
+        settings_provider = SystemSettingsProvider()  # type: ignore[name-defined]
+        rule_engine = RuleEngine(settings_provider=settings_provider)  # type: ignore[name-defined]
+        fall_trigger = FallPreTrigger(settings_provider=settings_provider)  # type: ignore[name-defined]
+        api_client = TriggerAPIClient(  # type: ignore[name-defined]
+            base_url=self._health_backend_url,
+            http_sender=self._http_sender,
+        )
+        vitals_buffer = VitalsHistoryBuffer(max_size=60)  # type: ignore[name-defined]
+        return TriggerOrchestrator(  # type: ignore[name-defined]
+            settings_provider=settings_provider,
+            rule_engine=rule_engine,
+            fall_pre_trigger=fall_trigger,
+            api_client=api_client,
+            response_handler=ResponseHandler,  # type: ignore[name-defined]
+            vitals_buffer=vitals_buffer,
+            enable_model_calls=enable_model_calls,
+        )
+
+    def _get_trigger_persona(self, device_id: str) -> TriggerPersonaProfile:  # type: ignore[name-defined]
+        """Build a PersonaProfile for the trigger engine from device persona_config."""
+        device = self.devices.get(device_id)
+        persona_cfg = (device.persona_config if device else None) or {}
+        return TriggerPersonaProfile(  # type: ignore[name-defined]
+            age=int(persona_cfg.get("age", 35)),
+            gender=str(persona_cfg.get("gender", "unknown")).lower(),
+            weight_kg=float(persona_cfg.get("weight_kg", 70.0)),
+            height_cm=float(persona_cfg.get("height_cm", 170.0)),
+            medical_conditions=list(persona_cfg.get("medical_conditions") or []),
+        )
+
+    def _log_shadow_comparison(
+        self,
+        device_id: str,
+        shadow_actions: list[TriggerActionItem],  # type: ignore[name-defined]
+        existing_effects: SessionSideEffects,
+    ) -> None:
+        """Compare shadow trigger results with existing alert logic (T2.3).
+
+        Logs MATCH/MISMATCH between the old hard-coded alert system and the
+        new DB-driven trigger engine.  Shadow mode never affects behavior.
+        """
+        self._shadow_tick_count += 1
+        old_has_alert = bool(existing_effects.pending_alerts)
+        new_has_alert = any(a.action_type == "alert" for a in shadow_actions)
+        new_has_urgent = any(
+            a.action_type == "alert" and a.severity in {"critical", "urgent"}
+            for a in shadow_actions
+        )
+        if old_has_alert == new_has_alert:
+            self._shadow_match_count += 1
+            # Sample MATCH logs at 1-in-20 to avoid noise
+            if self._shadow_tick_count % 20 == 0:
+                logger.debug(
+                    "[shadow] MATCH device=%s tick=%d (match_rate=%.1f%%)",
+                    device_id,
+                    self._shadow_tick_count,
+                    self._shadow_match_count / max(self._shadow_tick_count, 1) * 100,
+                )
+        else:
+            self._shadow_mismatch_count += 1
+            old_types = [a.event_type for a in existing_effects.pending_alerts]
+            new_types = [a.action_type for a in shadow_actions]
+            logger.info(
+                "[shadow] MISMATCH device=%s old_alert=%s new_alert=%s "
+                "old_types=%s new_types=%s tick=%d",
+                device_id,
+                old_has_alert,
+                new_has_alert,
+                old_types,
+                new_types,
+                self._shadow_tick_count,
+            )
+        if new_has_urgent and not old_has_alert:
+            logger.warning(
+                "[shadow] NEW_URGENT device=%s — new engine detected urgent but old logic did not alert",
+                device_id,
+            )
 
     @staticmethod
     def _telemetry_ingest_endpoint(base_url: str) -> str:
@@ -972,6 +1107,20 @@ class SimulatorRuntime:
             "start_time": start_time.isoformat().replace("+00:00", "Z"),
             "end_time": end_time.isoformat().replace("+00:00", "Z"),
         }
+        # ---------------------------------------------------------------
+        # Sleep Telemetry — DB Storage (port 8000, health_system backend)
+        # ---------------------------------------------------------------
+        # This endpoint persists sleep session data to the PostgreSQL DB
+        # via health_system backend on port 8000.
+        #
+        # AI-based sleep stage inference is handled separately by
+        # SleepAIClient (simulator_core/sleep_ai_client.py) which targets
+        # healthguard-model-api on port 8001.
+        #
+        # Dual-endpoint design is intentional:
+        #   - Port 8001 → AI inference (sleep stage classification)
+        #   - Port 8000 → DB storage  (sleep session persistence)
+        # ---------------------------------------------------------------
         endpoint = f"{self._health_backend_url}/mobile/telemetry/sleep"
         try:
             req = Request(
@@ -1349,6 +1498,20 @@ class SimulatorRuntime:
         return fallback_score
 
     def _post_sleep_payload(self, *, payload: dict[str, Any], device_id: str) -> tuple[bool, int]:
+        # ---------------------------------------------------------------
+        # Sleep Telemetry — DB Storage (port 8000, health_system backend)
+        # ---------------------------------------------------------------
+        # This endpoint persists sleep session data to the PostgreSQL DB
+        # via health_system backend on port 8000.
+        #
+        # AI-based sleep stage inference is handled separately by
+        # SleepAIClient (simulator_core/sleep_ai_client.py) which targets
+        # healthguard-model-api on port 8001.
+        #
+        # Dual-endpoint design is intentional:
+        #   - Port 8001 → AI inference (sleep stage classification)
+        #   - Port 8000 → DB storage  (sleep session persistence)
+        # ---------------------------------------------------------------
         endpoint = f"{self._health_backend_url}/mobile/telemetry/sleep"
         req = Request(
             endpoint,
@@ -2433,10 +2596,59 @@ class SimulatorRuntime:
         with self._lock:
             self._require_device(request.device_id)
 
+        # ── ACTIVE MODE: use orchestrator's force_health_prediction ──
+        if (
+            self._pre_model_trigger_active
+            and self._trigger_orchestrator is not None
+        ):
+            try:
+                vitals_snap = self._trigger_orchestrator._extract_vitals_snapshot(
+                    self._get_latest_vitals_dict(request.device_id),
+                )
+                persona = self._get_trigger_persona(request.device_id)
+                actions = self._trigger_orchestrator.force_health_prediction(
+                    device_id=request.device_id,
+                    vitals=vitals_snap,
+                    persona=persona,
+                )
+                severity = "normal"
+                message = "Trigger orchestrator health prediction completed"
+                metadata: dict[str, str] = {
+                    "action_count": str(len(actions)),
+                    "source": "trigger_orchestrator",
+                }
+                for action in actions:
+                    if action.action_type == "alert":
+                        self._record_event(
+                            device_id=request.device_id,
+                            event_type="risk_prediction_alert",
+                            severity=action.severity,
+                            message=action.message,
+                            metadata=action.metadata,
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "Trigger force_health_prediction failed for %s: %s — falling back to legacy",
+                    request.device_id, exc,
+                )
+                severity = "warning"
+                message = f"Trigger prediction failed, legacy fallback: {exc}"
+                metadata = {"error": str(exc)}
+            with self._lock:
+                self._record_event(
+                    device_id=request.device_id,
+                    event_type="risk_inference_triggered",
+                    severity=severity,
+                    message=message,
+                    metadata=metadata,
+                )
+            return
+
+        # ── LEGACY MODE: call backend risk inference ──
         status_code = self._trigger_risk_inference(request.device_id)
-        metadata: dict[str, str] = {}
+        metadata_legacy: dict[str, str] = {}
         if status_code is not None:
-            metadata["http_status"] = str(status_code)
+            metadata_legacy["http_status"] = str(status_code)
 
         if status_code is not None and 200 <= status_code < 300:
             severity = "normal"
@@ -2451,7 +2663,7 @@ class SimulatorRuntime:
                 event_type="risk_inference_triggered",
                 severity=severity,
                 message=message,
-                metadata=metadata,
+                metadata=metadata_legacy,
             )
 
     def latest_vitals(self, device_id: str) -> VitalsSample:
@@ -2495,6 +2707,15 @@ class SimulatorRuntime:
             return None, None
         age = round(now - last, 1)
         return age, age > 300.0
+
+    def _get_latest_vitals_dict(self, device_id: str) -> dict[str, Any]:
+        """Return the raw vitals dict for *device_id* from the latest tick output."""
+        with self._lock:
+            for record in self.sessions.values():
+                for payload in reversed(record.last_tick_outputs):
+                    if payload.get("device_id") == device_id:
+                        return payload.get("vitals") or {}
+        return {}
 
     def verification(self, session_id: str) -> VerificationResult:
         with self._lock:
@@ -2608,16 +2829,81 @@ class SimulatorRuntime:
                 continue
 
             vitals_payload = payload.get("vitals") or {}
+            is_sleeping = _is_sleeping_state(state.get("activity_state"))
+
+            # ── ACTIVE MODE: delegate to trigger orchestrator ──
+            if self._pre_model_trigger_active and self._trigger_orchestrator is not None:
+                db_thresholds: dict[str, float] | None = None
+                try:
+                    db_thresholds = self._trigger_orchestrator._settings.get_vitals_thresholds(
+                        is_sleeping=is_sleeping,
+                    )
+                except Exception:
+                    pass  # Fall back to hard-coded if DB unavailable
+                vitals_sample = self._to_vitals(
+                    vitals_payload,
+                    stale=False,
+                    emitted_at=emitted_at,
+                    activity_state=str(state.get("activity_state") or "unknown"),
+                    is_sleeping=is_sleeping,
+                    source_mode=str(vitals_payload.get("source_mode") or record.source_modes.get(str(device_id), "synthetic")),
+                    device_id=str(device_id),
+                    thresholds_override=db_thresholds,
+                )
+                try:
+                    trigger_actions: list[TriggerActionItem] = self._trigger_orchestrator.evaluate_tick(
+                        device_id=str(device_id),
+                        vitals=vitals_payload,
+                        motion=payload.get("motion"),
+                        state=state,
+                        persona=self._get_trigger_persona(str(device_id)),
+                    )
+                    for action in trigger_actions:
+                        if action.action_type == "alert":
+                            effects.pending_alerts.append(
+                                PendingAlertCall(
+                                    sim_device_id=str(device_id),
+                                    event_type=action.metadata.get("event_type", "vitals_out_of_range"),
+                                    severity=action.severity,
+                                    metadata={
+                                        "source": action.source or "trigger_orchestrator",
+                                        "timestamp": emitted_at,
+                                        "message": action.message,
+                                        "scenario_id": self.device_scenarios.get(str(device_id), "normal_rest"),
+                                        **{k: v for k, v in action.metadata.items() if k != "event_type"},
+                                    },
+                                )
+                            )
+                except Exception as exc:
+                    logger.warning("Trigger orchestrator evaluate_tick failed for %s: %s", device_id, exc)
+                    # Fall back to severity-based alert from _to_vitals
+                    if vitals_sample.severity in {"warning", "critical"}:
+                        effects.pending_alerts.append(
+                            PendingAlertCall(
+                                sim_device_id=str(device_id),
+                                event_type="vitals_out_of_range",
+                                severity=vitals_sample.severity,
+                                metadata={
+                                    "source": "tick",
+                                    "timestamp": emitted_at,
+                                    "heart_rate": vitals_sample.heartRate,
+                                    "spo2": vitals_sample.spo2,
+                                    "scenario_id": self.device_scenarios.get(str(device_id), "normal_rest"),
+                                },
+                            )
+                        )
+                continue
+
+            # ── LEGACY MODE: hard-coded thresholds ──
             vitals_sample = self._to_vitals(
                 vitals_payload,
                 stale=False,
                 emitted_at=emitted_at,
                 activity_state=str(state.get("activity_state") or "unknown"),
-                is_sleeping=_is_sleeping_state(state.get("activity_state")),
+                is_sleeping=is_sleeping,
                 source_mode=str(vitals_payload.get("source_mode") or record.source_modes.get(str(device_id), "synthetic")),
                 device_id=str(device_id),
             )
-            is_sleeping = _is_sleeping_state(state.get("activity_state"))
             if is_sleeping:
                 spo2 = vitals_sample.spo2 or 99.0
                 rr = vitals_sample.respiratoryRate or 15.0
@@ -2692,6 +2978,25 @@ class SimulatorRuntime:
                         },
                     )
                 )
+
+        # ── SHADOW MODE: evaluate new trigger engine (does NOT affect behavior) ──
+        if self._trigger_orchestrator is not None and not self._pre_model_trigger_active:
+            for payload in outputs:
+                device_id = str(payload.get("device_id") or "")
+                state = payload.get("state") or {}
+                vitals_payload = payload.get("vitals") or {}
+                try:
+                    shadow_actions = self._trigger_orchestrator.evaluate_tick(
+                        device_id=device_id,
+                        vitals=vitals_payload,
+                        motion=payload.get("motion"),
+                        state=state,
+                        persona=self._get_trigger_persona(device_id),
+                    )
+                    self._log_shadow_comparison(device_id, shadow_actions, effects)
+                except Exception:
+                    pass  # Shadow mode NEVER affects main flow
+
         return effects
 
     def _publish_tick_buffer_locked(self, now: float, force: bool) -> PendingTickPublish | None:
@@ -2896,6 +3201,7 @@ class SimulatorRuntime:
         device_id: str = "",
         bp_observation_age_sec: float | None = None,
         bp_is_stale: bool | None = None,
+        thresholds_override: dict[str, float] | None = None,
     ) -> VitalsSample:
         heart_rate = SimulatorRuntime._safe_float(vitals.get("heart_rate"), 72.0)
         spo2_val   = SimulatorRuntime._safe_float(vitals.get("spo2"), 98.0)
@@ -2933,7 +3239,11 @@ class SimulatorRuntime:
             if replay_mode and bp_is_stale is True
             else SimulatorRuntime._safe_float(vitals.get("blood_pressure_dia"), 80.0)
         )
-        thresholds = SLEEP_THRESHOLDS if is_sleeping else DAYTIME_THRESHOLDS
+        # Use DB-driven thresholds when provided, fall back to hard-coded.
+        if thresholds_override is not None:
+            thresholds = thresholds_override
+        else:
+            thresholds = SLEEP_THRESHOLDS if is_sleeping else DAYTIME_THRESHOLDS
         critical_rr = (
             respiratory_rate is not None
             and (

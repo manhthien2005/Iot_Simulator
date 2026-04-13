@@ -293,3 +293,40 @@ class AdminAssignUserRequest(BaseModel):
 
 class BatchActivateRequest(BaseModel):
     device_ids: list[int]
+
+
+# ── Settings schemas ──────────────────────────────────────────────────
+
+
+class RuntimeConfig(BaseModel):
+    """Current runtime configuration values (editable subset)."""
+
+    tick_interval_seconds: float = Field(ge=0.1, le=60, description="Background tick interval")
+    push_interval_seconds: int = Field(ge=1, le=300, description="Telemetry push interval")
+    sleep_speed_factor: float = Field(ge=1, le=3600, description="Sleep phase speed-up factor")
+    health_backend_url: str = Field(description="Health backend base URL (read-only)")
+
+
+class RuntimeConfigUpdate(BaseModel):
+    """PUT body for updating mutable runtime config."""
+
+    tick_interval_seconds: float | None = Field(default=None, ge=0.1, le=60)
+    push_interval_seconds: int | None = Field(default=None, ge=1, le=300)
+    sleep_speed_factor: float | None = Field(default=None, ge=1, le=3600)
+
+
+class FeatureFlags(BaseModel):
+    """Feature flag toggles."""
+
+    use_db_thresholds: bool = False
+
+
+class SimulatorSettingsResponse(BaseModel):
+    """Full settings response combining all sections."""
+
+    runtime: RuntimeConfig
+    daytime_thresholds: dict[str, float]
+    sleep_thresholds: dict[str, float]
+    rules_config: dict | None = None
+    fall_config: dict | None = None
+    feature_flags: FeatureFlags
