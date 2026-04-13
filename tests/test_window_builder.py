@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from Iot_Simulator.etl_pipeline.window_builder import build_motion_windows
+from etl_pipeline.window_builder import build_motion_windows
 
 
 class TestWindowBuilder(unittest.TestCase):

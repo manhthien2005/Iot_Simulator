@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from Iot_Simulator.api_server.dependencies import DeviceRecord, SessionRecord, SimulatorRuntime
+from api_server.dependencies import DeviceRecord, SessionRecord, SimulatorRuntime
 
 
 def _build_runtime(

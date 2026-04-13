@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
-from Iot_Simulator.api_server.schemas import DashboardSummary
+from api_server.dependencies import SimulatorRuntime, get_runtime
+from api_server.schemas import DashboardSummary
 
 router = APIRouter(tags=["dashboard"])
 

@@ -19,9 +19,9 @@ from urllib.request import Request, urlopen
 from sqlalchemy import text
 
 try:
-    from Iot_Simulator.api_server.backend_admin_client import BackendAdminClient
-    from Iot_Simulator.api_server.db import session_scope
-    from Iot_Simulator.api_server.schemas import (
+    from api_server.backend_admin_client import BackendAdminClient
+    from api_server.db import session_scope
+    from api_server.schemas import (
         AlertEvent,
         CreateDeviceRequest,
         DataBindingConfig,
@@ -39,12 +39,12 @@ try:
         VerificationResult,
         VitalsSample,
     )
-    from Iot_Simulator.api_server.sim_admin_service import SimAdminService
-    from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
-    from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
-    from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
-    from Iot_Simulator.simulator_core.sleep_vitals_enricher import enrich_sleep_record
-    from Iot_Simulator.transport import HttpPublisher, MqttPublisher, TransportRouter
+    from api_server.sim_admin_service import SimAdminService
+    from simulator_core.dataset_registry import DatasetRegistry
+    from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
+    from simulator_core.sleep_ai_client import SleepAIClient
+    from simulator_core.sleep_vitals_enricher import enrich_sleep_record
+    from transport import HttpPublisher, MqttPublisher, TransportRouter
 except ModuleNotFoundError:
     from api_server.backend_admin_client import BackendAdminClient
     from api_server.db import session_scope

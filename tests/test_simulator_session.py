@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from Iot_Simulator.etl_pipeline.normalize import NormalizedArtifactPipeline
-from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
-from Iot_Simulator.simulator_core.session import DataBinding, SimulatorSession, build_device
+from etl_pipeline.normalize import NormalizedArtifactPipeline
+from simulator_core.dataset_registry import DatasetRegistry
+from simulator_core.session import DataBinding, SimulatorSession, build_device
 
 
 class SessionRegistryStub:

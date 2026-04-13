@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from Iot_Simulator.api_server.dependencies import DeviceRecord, SessionRecord, SimulatorRuntime
-from Iot_Simulator.api_server.schemas import VitalsSample
+from api_server.dependencies import DeviceRecord, SessionRecord, SimulatorRuntime
+from api_server.schemas import VitalsSample
 
 
 def _build_runtime_with_payload(*, source_mode: str, vitals: dict[str, object]) -> tuple[SimulatorRuntime, str]:

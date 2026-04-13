@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from Iot_Simulator.dataset_adapters.bidmc_adapter import BIDMCAdapter, SOURCE_DATASET
+from dataset_adapters.bidmc_adapter import BIDMCAdapter, SOURCE_DATASET
 
 
 def write_plain_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:

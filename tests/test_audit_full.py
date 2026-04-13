@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 import unittest
 from fastapi.testclient import TestClient
-from Iot_Simulator.api_server.dependencies import SimulatorRuntime, reset_runtime_for_tests
-from Iot_Simulator.api_server.main import app
+from api_server.dependencies import SimulatorRuntime, reset_runtime_for_tests
+from api_server.main import app
 
 
 ELDERLY = {"age": 72, "weight_kg": 68, "height_cm": 168}

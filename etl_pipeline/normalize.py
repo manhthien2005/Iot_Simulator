@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from Iot_Simulator.dataset_adapters import (
+from dataset_adapters import (
     BIDMCAdapter,
     PAMAP2Adapter,
     PIFV3Adapter,
@@ -17,9 +17,9 @@ from Iot_Simulator.dataset_adapters import (
     VitalDBAdapter,
     WESADAdapter,
 )
-from Iot_Simulator.dataset_adapters.vitaldb_adapter import BP_DIA_TRACK, BP_SYS_TRACK, SPO2_TRACK
-from Iot_Simulator.dataset_adapters.sleep_edf_adapter import SleepEdfAdapter
-from Iot_Simulator.simulator_core.dataset_registry import normalize_stress_state
+from dataset_adapters.vitaldb_adapter import BP_DIA_TRACK, BP_SYS_TRACK, SPO2_TRACK
+from dataset_adapters.sleep_edf_adapter import SleepEdfAdapter
+from simulator_core.dataset_registry import normalize_stress_state
 
 from .artifact_writer import ArtifactWriter
 from .window_builder import build_motion_windows

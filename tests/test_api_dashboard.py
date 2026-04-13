@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 try:
     from fastapi.testclient import TestClient
 
-    from Iot_Simulator.api_server.dependencies import SessionRecord, SimulatorRuntime, reset_runtime_for_tests
-    from Iot_Simulator.api_server.main import app
+    from api_server.dependencies import SessionRecord, SimulatorRuntime, reset_runtime_for_tests
+    from api_server.main import app
 
     FASTAPI_READY = True
 except Exception:

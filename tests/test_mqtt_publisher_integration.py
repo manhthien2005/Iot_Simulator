@@ -4,7 +4,7 @@ import socket
 import unittest
 from importlib import util
 
-from Iot_Simulator.transport.mqtt_publisher import MqttPublisher
+from transport.mqtt_publisher import MqttPublisher
 
 
 def _has_paho() -> bool:

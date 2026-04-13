@@ -7,8 +7,8 @@ from datetime import datetime
 try:
     from fastapi.testclient import TestClient
 
-    from Iot_Simulator.api_server.dependencies import reset_runtime_for_tests
-    from Iot_Simulator.api_server.main import app
+    from api_server.dependencies import reset_runtime_for_tests
+    from api_server.main import app
 
     FASTAPI_READY = True
 except Exception:
@@ -26,7 +26,7 @@ class TestActivityLabel(unittest.TestCase):
         self.client = _client()
 
     def test_schema_has_activity_label(self):
-        from Iot_Simulator.api_server.schemas import VitalsSample
+        from api_server.schemas import VitalsSample
 
         self.assertIn("activityLabel", VitalsSample.model_fields)
         self.assertIn("motionTag", VitalsSample.model_fields)
@@ -58,7 +58,7 @@ class TestClinicalProfiles(unittest.TestCase):
     }
 
     def _snap(self, scenario_id):
-        from Iot_Simulator.api_server.dependencies import SimulatorRuntime
+        from api_server.dependencies import SimulatorRuntime
 
         payload = {
             "device_id": "t",
@@ -79,7 +79,7 @@ class TestClinicalProfiles(unittest.TestCase):
                     self.assertTrue(lo <= value <= hi, f"{scenario_id}.{param}={value:.1f} not in [{lo},{hi}]")
 
     def test_two_devices_differ(self):
-        from Iot_Simulator.api_server.dependencies import SimulatorRuntime
+        from api_server.dependencies import SimulatorRuntime
 
         ts = "2026-06-01T12:00:00+00:00"
         p1 = {"device_id": "aaa", "vitals": {}, "emitted_at": ts, "state": {}, "persona_config": {}}
@@ -91,7 +91,7 @@ class TestClinicalProfiles(unittest.TestCase):
 
 class TestFallArchitecture(unittest.TestCase):
     def _snap(self, activity, scenario="normal_rest"):
-        from Iot_Simulator.api_server.dependencies import SimulatorRuntime
+        from api_server.dependencies import SimulatorRuntime
 
         payload = {
             "device_id": "f",
@@ -104,7 +104,7 @@ class TestFallArchitecture(unittest.TestCase):
         return payload["vitals"]
 
     def _sev(self, hr, spo2, sys, dia):
-        from Iot_Simulator.api_server.dependencies import SimulatorRuntime
+        from api_server.dependencies import SimulatorRuntime
 
         return SimulatorRuntime._to_vitals(
             {
@@ -137,7 +137,7 @@ class TestFallArchitecture(unittest.TestCase):
 
 class TestFallDuration(unittest.TestCase):
     def test_fall_persists_min_ticks(self):
-        from Iot_Simulator.simulator_core.persona_engine import Persona, PersonaEngine
+        from simulator_core.persona_engine import Persona, PersonaEngine
 
         engine = PersonaEngine(persona=Persona())
         engine.inject_event("fall_detected", "fall_1")
@@ -146,7 +146,7 @@ class TestFallDuration(unittest.TestCase):
             self.assertIn(engine.tick().activity_state, {"fall", "recovery"}, f"tick {i + 1}")
 
     def test_fall_to_recovery_to_standing(self):
-        from Iot_Simulator.simulator_core.persona_engine import Persona, PersonaEngine
+        from simulator_core.persona_engine import Persona, PersonaEngine
 
         engine = PersonaEngine(persona=Persona())
         engine.inject_event("fall_detected")
@@ -162,7 +162,7 @@ class TestFallDuration(unittest.TestCase):
 
 class TestPersonaVitals(unittest.TestCase):
     def _v(self, age, w, h):
-        from Iot_Simulator.api_server.dependencies import SimulatorRuntime
+        from api_server.dependencies import SimulatorRuntime
 
         payload = {
             "device_id": "p45",
@@ -217,7 +217,7 @@ class TestInterSignalCouplings(unittest.TestCase):
         )
 
     def _snap(self, scenario_id, *, state=None, persona_config=None, device_id="coupling-test"):
-        from Iot_Simulator.api_server.dependencies import SimulatorRuntime
+        from api_server.dependencies import SimulatorRuntime
 
         payload = {
             "device_id": device_id,

@@ -4,8 +4,8 @@ import json
 import os
 import unittest
 
-from Iot_Simulator.api_server.dependencies import SimulatorRuntime
-from Iot_Simulator.api_server.schemas import CreateDeviceRequest, DataBindingConfig
+from api_server.dependencies import SimulatorRuntime
+from api_server.schemas import CreateDeviceRequest, DataBindingConfig
 
 
 class RuntimeBindingRegistryStub:

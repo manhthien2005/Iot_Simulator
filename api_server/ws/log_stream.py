@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from Iot_Simulator.api_server.dependencies import get_runtime
+from api_server.dependencies import get_runtime
 
 
 async def handle_ws_logs(websocket: WebSocket, session_id: str) -> None:

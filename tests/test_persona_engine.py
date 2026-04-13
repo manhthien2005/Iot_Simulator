@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from Iot_Simulator.simulator_core.persona_engine import Persona, PersonaEngine
+from simulator_core.persona_engine import Persona, PersonaEngine
 
 
 class TestPersonaEngine(unittest.TestCase):

@@ -6,8 +6,8 @@ from math import nan
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from Iot_Simulator.etl_pipeline.normalize import NormalizedArtifactPipeline
-from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
+from etl_pipeline.normalize import NormalizedArtifactPipeline
+from simulator_core.dataset_registry import DatasetRegistry
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:

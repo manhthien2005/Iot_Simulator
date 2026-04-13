@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from Iot_Simulator.dataset_adapters import SimpleDataFrame, WESADAdapter
+from dataset_adapters import SimpleDataFrame, WESADAdapter
 
 
 class TestWESADAdapter(unittest.TestCase):

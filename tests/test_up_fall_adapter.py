@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from Iot_Simulator.dataset_adapters import SimpleDataFrame, UPFallAdapter
+from dataset_adapters import SimpleDataFrame, UPFallAdapter
 
 
 class TestUPFallAdapter(unittest.TestCase):

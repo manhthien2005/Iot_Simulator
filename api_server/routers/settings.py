@@ -7,13 +7,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from Iot_Simulator.api_server.dependencies import (
+from api_server.dependencies import (
     DAYTIME_THRESHOLDS,
     SLEEP_THRESHOLDS,
     SimulatorRuntime,
     get_runtime,
 )
-from Iot_Simulator.api_server.schemas import (
+from api_server.schemas import (
     FeatureFlags,
     RuntimeConfig,
     RuntimeConfigUpdate,

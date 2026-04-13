@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from Iot_Simulator.etl_pipeline.normalize import NormalizedArtifactPipeline
+from etl_pipeline.normalize import NormalizedArtifactPipeline
 from tests.test_bidmc_adapter import build_bidmc_fixture
 from tests.test_vitaldb_adapter import build_vitaldb_fixture
 
