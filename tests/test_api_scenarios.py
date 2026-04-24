@@ -46,6 +46,11 @@ class TestApiScenarios(unittest.TestCase):
         self.assertLess(float(hypoxia["spo2"]), float(normal["spo2"]))
         self.assertGreater(float(hypoxia["heartRate"]), float(normal["heartRate"]))
 
+        listed = self.client.get("/api/sim/devices")
+        self.assertEqual(listed.status_code, 200)
+        updated_device = next(item for item in listed.json() if item["id"] == device["id"])
+        self.assertEqual(updated_device["currentScenarioId"], "hypoxia_critical")
+
 
 if __name__ == "__main__":
     unittest.main()

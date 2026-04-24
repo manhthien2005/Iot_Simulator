@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 # Load repo-local environment before importing the API stack.
 from pathlib import Path
 
@@ -29,7 +33,23 @@ from api_server.routers.settings import router as settings_router
 from api_server.routers.vitals import router as vitals_router
 from api_server.ws.log_stream import handle_ws_logs
 
-app = FastAPI(title="IoT Simulator API", version="1.0.0")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Startup: recover active device sessions.  Shutdown: stop tick thread."""
+    runtime = get_runtime()
+    recovered = runtime.recover_active_sessions()
+    if recovered:
+        logger.info("Auto-recovered %d active device session(s) on startup", recovered)
+    else:
+        logger.info("No active DB devices to recover on startup")
+    yield
+    runtime.shutdown()
+
+
+app = FastAPI(title="IoT Simulator API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

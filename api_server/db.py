@@ -3,13 +3,30 @@ from __future__ import annotations
 import os
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
+
+
+def _load_repo_env() -> None:
+    """Load repo-local .env so direct runtime/test imports can resolve config."""
+    env_candidates = [
+        Path(__file__).resolve().parents[1] / ".env",
+        Path(__file__).resolve().parents[2] / ".env",
+    ]
+    for env_path in env_candidates:
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
+            break
+
+
+_load_repo_env()
 
 
 def _get_database_url() -> str:

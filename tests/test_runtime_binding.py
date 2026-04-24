@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import unittest
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
-from api_server.dependencies import SimulatorRuntime
+from api_server.dependencies import PendingTickPublish, SimulatorRuntime
 from api_server.schemas import CreateDeviceRequest, DataBindingConfig
 
 
@@ -165,7 +167,8 @@ class TestRuntimeBinding(unittest.TestCase):
 
         runtime._push_alert_to_backend = fake_push  # type: ignore[method-assign]
 
-        runtime._tick_session_locked(record, force=False)
+        effects = runtime._tick_session_locked(record, force=False)
+        runtime._run_session_side_effects(effects)
 
         self.assertTrue(pushed)
         event_type, severity, metadata = pushed[0]
@@ -211,6 +214,135 @@ class TestRuntimeBinding(unittest.TestCase):
         self.assertEqual({payload.get("device_id") for payload in runtime._tick_buffer}, {bound.id})
         self.assertTrue(runtime.devices[bound.id].has_pending_sync)
         self.assertFalse(runtime.devices[unbound.id].has_pending_sync)
+
+    def test_tick_publish_commits_vitals_without_motion_table(self) -> None:
+        runtime = SimulatorRuntime()
+        created = runtime.create_device(CreateDeviceRequest(name="Persist Watch", type="smartwatch"))
+        runtime.bind_device(created.id, 303)
+        session = runtime.create_session([created.id], speed=1)
+        record = runtime.sessions[session["id"]]
+        record.status = "running"
+
+        class RecordingSession:
+            def __init__(self) -> None:
+                self.statements: list[str] = []
+                self.commits = 0
+
+            def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
+                self.statements.append(str(statement))
+                return None
+
+            def commit(self) -> None:
+                self.commits += 1
+
+        fake_session = RecordingSession()
+
+        @contextmanager
+        def fake_scope():
+            yield fake_session
+
+        pending_publish = PendingTickPublish(
+            messages=[
+                {
+                    "db_device_id": 303,
+                    "emitted_at": "2026-01-01T00:00:00Z",
+                    "vitals": {
+                        "heart_rate": 72.0,
+                        "spo2": 98.0,
+                        "temperature": 36.7,
+                        "blood_pressure_sys": 118.0,
+                        "blood_pressure_dia": 76.0,
+                        "respiratory_rate": 16.0,
+                    },
+                    "motion": {"accel_x": [0.1, 0.2, 0.3]},
+                }
+            ],
+            clear_count=1,
+        )
+
+        original_scope = None
+        from api_server import dependencies as dependencies_module
+
+        original_scope = dependencies_module.session_scope
+        dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
+        try:
+            runtime._execute_pending_tick_publish(pending_publish)
+        finally:
+            dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+
+        self.assertEqual(fake_session.commits, 1)
+        self.assertTrue(any("INSERT INTO vitals" in stmt for stmt in fake_session.statements))
+        self.assertTrue(any("UPDATE devices SET last_sync_at = NOW()" in stmt for stmt in fake_session.statements))
+        self.assertFalse(any("motion_data" in stmt for stmt in fake_session.statements))
+        self.assertTrue(record.last_publish_ok)
+        self.assertEqual(record.last_publish_ack_count, 1)
+        self.assertEqual(record.last_publish_count, 1)
+        self.assertIsNotNone(record.last_publish_latency_ms)
+
+    def test_health_payload_marks_db_down_when_session_scope_fails(self) -> None:
+        runtime = SimulatorRuntime()
+        from api_server import dependencies as dependencies_module
+
+        original_scope = dependencies_module.session_scope
+        original_backend_healthy = runtime._backend_healthy
+
+        def failing_scope():
+            raise RuntimeError("database unavailable")
+
+        dependencies_module.session_scope = failing_scope  # type: ignore[assignment]
+        runtime._backend_healthy = lambda: False  # type: ignore[method-assign]
+        try:
+            payload = runtime.health_payload()
+        finally:
+            dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+            runtime._backend_healthy = original_backend_healthy  # type: ignore[method-assign]
+
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["backend"], "down")
+        self.assertEqual(payload["db"], "down")
+
+    def test_tick_publish_failure_does_not_report_ack(self) -> None:
+        runtime = SimulatorRuntime()
+        created = runtime.create_device(CreateDeviceRequest(name="Fail Watch", type="smartwatch"))
+        runtime.bind_device(created.id, 404)
+        session = runtime.create_session([created.id], speed=1)
+        record = runtime.sessions[session["id"]]
+        record.status = "running"
+
+        class FailingSession:
+            def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
+                raise RuntimeError("insert failed")
+
+            def commit(self) -> None:
+                raise AssertionError("commit should not be reached when insert fails")
+
+        @contextmanager
+        def fake_scope():
+            yield FailingSession()
+
+        pending_publish = PendingTickPublish(
+            messages=[
+                {
+                    "db_device_id": 404,
+                    "emitted_at": "2026-01-01T00:00:00Z",
+                    "vitals": {"heart_rate": 65.0, "spo2": 97.0},
+                }
+            ],
+            clear_count=1,
+        )
+
+        from api_server import dependencies as dependencies_module
+
+        original_scope = dependencies_module.session_scope
+        dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
+        try:
+            runtime._execute_pending_tick_publish(pending_publish)
+        finally:
+            dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+
+        self.assertFalse(record.last_publish_ok)
+        self.assertEqual(record.last_publish_ack_count, 0)
+        self.assertEqual(record.last_publish_count, 1)
 
     def test_create_device_with_data_binding(self) -> None:
         runtime = SimulatorRuntime()
@@ -311,6 +443,32 @@ class TestRuntimeBinding(unittest.TestCase):
         self.assertEqual(first_tick[1]["vitals"]["timestamp"], "2024-02-01T00:00:01Z")
         self.assertEqual(second_tick[0]["vitals"]["timestamp"], "2024-01-01T00:00:02Z")
         self.assertEqual(second_tick[1]["vitals"]["timestamp"], "2024-02-01T00:00:02Z")
+
+    def test_verification_stays_pending_before_first_publish(self) -> None:
+        runtime = SimulatorRuntime()
+        created = runtime.create_device(CreateDeviceRequest(name="Pending Watch", type="smartwatch"))
+        session = runtime.create_session([created.id], speed=1)
+        record = runtime.sessions[session["id"]]
+        record.status = "running"
+        record.last_tick_outputs = [{"device_id": created.id, "vitals": {"heart_rate": 72}}]
+        record.last_tick_at = datetime.now(timezone.utc).isoformat()
+
+        verification = runtime.verification(session["id"])
+
+        self.assertEqual(verification.status, "PENDING")
+
+    def test_verification_marks_running_session_delayed_when_tick_is_stale(self) -> None:
+        runtime = SimulatorRuntime()
+        created = runtime.create_device(CreateDeviceRequest(name="Delayed Watch", type="smartwatch"))
+        session = runtime.create_session([created.id], speed=1)
+        record = runtime.sessions[session["id"]]
+        record.status = "running"
+        record.last_tick_outputs = [{"device_id": created.id, "vitals": {"heart_rate": 68}}]
+        record.last_tick_at = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+
+        verification = runtime.verification(session["id"])
+
+        self.assertEqual(verification.status, "DELAYED")
 
 
 if __name__ == "__main__":

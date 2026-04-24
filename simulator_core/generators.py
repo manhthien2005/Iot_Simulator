@@ -5,8 +5,27 @@ from math import isnan
 from random import Random
 from typing import Any
 
+import numpy as np
+
 from .dataset_registry import DatasetRegistry
 from .persona_engine import DeviceState, Persona
+
+
+def _to_scalar(value: Any, default: float = 0.0) -> float:
+    """Safely convert *value* to a Python float.
+
+    Handles plain numbers, 0-d numpy arrays, and multi-dimensional numpy
+    arrays (takes the first element).  Returns *default* when *value* is
+    ``None`` or conversion fails.
+    """
+    if value is None:
+        return default
+    try:
+        if isinstance(value, np.ndarray):
+            return float(value.flat[0]) if value.size > 0 else default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 SLEEP_PHASE_VITALS: dict[str, dict[str, float]] = {
@@ -207,10 +226,15 @@ class MotionGenerator:
 
     def _integrate_orientation(self, window: dict[str, Any]) -> None:
         """Integrate gyro data into orientation and inject ``orientation`` key."""
-        gyro = window.get("gyro") or {}
-        gyro_x = float(gyro.get("x", 0.0) if gyro else window.get("gyro_x", 0.0))
-        gyro_y = float(gyro.get("y", 0.0) if gyro else window.get("gyro_y", 0.0))
-        gyro_z = float(gyro.get("z", 0.0) if gyro else window.get("gyro_z", 0.0))
+        gyro = window.get("gyro")
+        if isinstance(gyro, dict) and gyro:
+            gyro_x = _to_scalar(gyro.get("x", 0.0))
+            gyro_y = _to_scalar(gyro.get("y", 0.0))
+            gyro_z = _to_scalar(gyro.get("z", 0.0))
+        else:
+            gyro_x = _to_scalar(window.get("gyro_x", 0.0))
+            gyro_y = _to_scalar(window.get("gyro_y", 0.0))
+            gyro_z = _to_scalar(window.get("gyro_z", 0.0))
 
         dt = 1.0  # ~1 second per tick
         self._pitch = max(-90.0, min(90.0, self._pitch + gyro_x * dt))

@@ -11,6 +11,7 @@ from api_server.dependencies import (
     DAYTIME_THRESHOLDS,
     SLEEP_THRESHOLDS,
     SimulatorRuntime,
+    _PRE_MODEL_TRIGGER_ENABLED,
     get_runtime,
 )
 from api_server.schemas import (
@@ -23,7 +24,7 @@ from api_server.schemas import (
 router = APIRouter(tags=["settings"])
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_RULES_CONFIG_PATH = _PROJECT_ROOT / "pre_model_trigger" / "NguongHeath" / "rules_config.json"
+_RULES_CONFIG_PATH = _PROJECT_ROOT / "pre_model_trigger" / "health_rules" / "rules_config.json"
 _FALL_CONFIG_PATH = _PROJECT_ROOT / "pre_model_trigger" / "fall" / "fall_pipeline_wrist_config.json"
 
 
@@ -50,6 +51,29 @@ def get_settings(
     runtime: SimulatorRuntime = Depends(get_runtime),
 ) -> SimulatorSettingsResponse:
     """Return the full simulator settings (runtime + thresholds + configs + flags)."""
+    # ── Try reading DB thresholds via trigger orchestrator ──
+    db_daytime: dict[str, float] | None = None
+    db_sleep: dict[str, float] | None = None
+    try:
+        orchestrator = runtime._trigger_orchestrator
+        if orchestrator is not None and hasattr(orchestrator, "_settings"):
+            settings_provider = orchestrator._settings
+            raw_day = settings_provider.get_vitals_thresholds(is_sleeping=False)
+            if raw_day is not None:
+                db_daytime = {k: float(v) for k, v in raw_day.items()}
+            raw_sleep = settings_provider.get_vitals_thresholds(is_sleeping=True)
+            if raw_sleep is not None:
+                db_sleep = {k: float(v) for k, v in raw_sleep.items()}
+    except Exception:
+        db_daytime = None
+        db_sleep = None
+
+    threshold_source: str
+    if db_daytime is not None or db_sleep is not None:
+        threshold_source = "db"
+    else:
+        threshold_source = "fallback"
+
     return SimulatorSettingsResponse(
         runtime=_build_runtime_config(runtime),
         daytime_thresholds=dict(DAYTIME_THRESHOLDS),
@@ -58,7 +82,11 @@ def get_settings(
         fall_config=_read_json_file(_FALL_CONFIG_PATH),
         feature_flags=FeatureFlags(
             use_db_thresholds=os.environ.get("USE_DB_THRESHOLDS", "").lower() in ("1", "true", "yes"),
+            pre_model_trigger_enabled=_PRE_MODEL_TRIGGER_ENABLED,
         ),
+        db_daytime_thresholds=db_daytime,
+        db_sleep_thresholds=db_sleep,
+        threshold_source=threshold_source,
     )
 
 

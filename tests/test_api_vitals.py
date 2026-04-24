@@ -124,7 +124,7 @@ def test_bp_stale_after_300s() -> None:
         },
     )
 
-    with patch("Iot_Simulator.api_server.dependencies.monotonic", side_effect=[100.0, 401.2]):
+    with patch("api_server.dependencies.monotonic", side_effect=[100.0, 401.2]):
         first = runtime.latest_vitals(device_id)
         record.last_tick_outputs = [
             {
@@ -171,6 +171,45 @@ def test_latest_vitals_maps_respiration_rate_alias() -> None:
     sample = runtime.latest_vitals(device_id)
 
     assert sample.respiratoryRate == 18.5
+
+
+def test_latest_vitals_prefers_newest_session_payload() -> None:
+    runtime, stale_record, device_id = _build_runtime_with_payload(
+        source_mode="synthetic",
+        vitals={
+            "heart_rate": 65.0,
+            "spo2": 97.0,
+        },
+    )
+    stale_record.status = "stopped"
+
+    fresh_record = SessionRecord(
+        id="session-2",
+        device_ids=[device_id],
+        speed=1,
+        simulator=MagicMock(),
+        status="running",
+        last_tick_outputs=[
+            {
+                "device_id": device_id,
+                "vitals": {
+                    "heart_rate": 88.0,
+                    "spo2": 99.0,
+                },
+                "state": {"activity_state": "walking"},
+                "emitted_at": "2026-01-01T00:00:05+00:00",
+            }
+        ],
+        source_modes={device_id: "synthetic"},
+    )
+    runtime.sessions[fresh_record.id] = fresh_record
+
+    sample = runtime.latest_vitals(device_id)
+
+    assert sample.timestamp == "2026-01-01T00:00:05+00:00"
+    assert sample.heartRate == 88.0
+    assert sample.activityLabel == "walking"
+    assert sample.isStale is False
 
 
 def test_verification_uses_measured_publish_latency() -> None:

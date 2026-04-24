@@ -447,3 +447,22 @@ class SimAdminService:
             db.commit()
         except Exception:
             db.rollback()
+
+    @staticmethod
+    def list_active_devices(db: Session) -> list[dict[str, Any]]:
+        """Return full device info for every active (non-deleted) device.
+
+        Used by startup auto-recovery to re-create simulator sessions.
+        """
+        rows = db.execute(
+            text(
+                "SELECT id FROM devices "
+                "WHERE is_active = TRUE AND deleted_at IS NULL"
+            )
+        ).mappings().all()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            info = SimAdminService._fetch_device(int(row["id"]), db)
+            if info is not None:
+                results.append(info)
+        return results

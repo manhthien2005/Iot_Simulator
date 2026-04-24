@@ -29,7 +29,8 @@ class TestApiDevices(unittest.TestCase):
 
         listed = self.client.get("/api/sim/devices")
         self.assertEqual(listed.status_code, 200)
-        self.assertTrue(any(item["id"] == device_id for item in listed.json()))
+        created_device = next(item for item in listed.json() if item["id"] == device_id)
+        self.assertEqual(created_device["currentScenarioId"], "normal_rest")
 
         deleted = self.client.delete(f"/api/sim/devices/{device_id}")
         self.assertEqual(deleted.status_code, 204)

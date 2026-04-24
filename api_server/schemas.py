@@ -66,6 +66,7 @@ class SimulatedDevice(BaseModel):
     hasPendingSync: bool
     state: DeviceStateValue
     boundDbDeviceId: int | None = None
+    currentScenarioId: str | None = None
     personaConfig: PersonaConfig | None = None
     dataBinding: DataBindingConfig | None = None
 
@@ -319,6 +320,7 @@ class FeatureFlags(BaseModel):
     """Feature flag toggles."""
 
     use_db_thresholds: bool = False
+    pre_model_trigger_enabled: bool = False
 
 
 class SimulatorSettingsResponse(BaseModel):
@@ -330,3 +332,6 @@ class SimulatorSettingsResponse(BaseModel):
     rules_config: dict | None = None
     fall_config: dict | None = None
     feature_flags: FeatureFlags
+    db_daytime_thresholds: dict[str, float] | None = None
+    db_sleep_thresholds: dict[str, float] | None = None
+    threshold_source: str = "fallback"
