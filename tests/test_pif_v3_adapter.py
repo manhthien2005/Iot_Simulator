@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from Iot_Simulator.dataset_adapters import PIFV3Adapter, SimpleDataFrame
+from dataset_adapters import PIFV3Adapter, SimpleDataFrame
 
 
 class TestPIFV3Adapter(unittest.TestCase):

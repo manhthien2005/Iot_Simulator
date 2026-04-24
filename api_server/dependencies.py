@@ -14,8 +14,8 @@ from pathlib import Path
 from threading import Event, RLock, Thread
 from time import monotonic
 from typing import Any
+from urllib.request import Request, urlopen
 from uuid import uuid4
-import httpx
 
 from sqlalchemy import text
 
@@ -122,6 +122,15 @@ def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> 
     }
 
 
+def _safe_float_db(value: Any) -> float | None:
+    return _safe_float(value, None)
+
+
+def _safe_int(value: Any) -> int | None:
+    cast = _safe_float(value, None)
+    return int(round(cast)) if cast is not None else None
+
+
 # Sleep scenario data loaded from external YAML config (see api_server/config/sleep_scenarios.yaml)
 SLEEP_SCENARIO_PHASES, SLEEP_SCENARIO_PROFILES = load_sleep_scenarios()
 
@@ -151,7 +160,7 @@ class DeviceRecord:
     persona_config: dict[str, Any] = field(default_factory=dict)
     data_binding: dict[str, Any] | None = None
 
-    def to_schema(self) -> SimulatedDevice:
+    def to_schema(self, current_scenario_id: str | None = None) -> SimulatedDevice:
         return SimulatedDevice(
             id=self.id,
             name=self.name,
@@ -165,6 +174,7 @@ class DeviceRecord:
             hasPendingSync=self.has_pending_sync,
             state=self.state,  # type: ignore[arg-type]
             boundDbDeviceId=self.bound_db_device_id,
+            currentScenarioId=current_scenario_id,
             personaConfig=self.persona_config or None,
             dataBinding=DataBindingConfig(**self.data_binding) if self.data_binding else None,
         )
@@ -583,25 +593,58 @@ class SimulatorRuntime:
             return
 
         publish_started = monotonic()
-        publish_result = None
-        try:
-            publish_result = self.transport_router.publish(pending_publish.messages, mode="http")
-        except Exception:
-            logger.warning("Transport publish failed for pending tick", exc_info=True)
-            publish_result = None
-        publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
-
-        publish_ok = False
         ack_count = 0
         message_count = len(pending_publish.messages)
-        if publish_result is not None:
-            publish_ok = publish_result.primary.ok or (
-                publish_result.fallback is not None and publish_result.fallback.ok
-            )
-            ack_count = publish_result.primary.ack_count + (
-                publish_result.fallback.ack_count if publish_result.fallback else 0
-            )
-            message_count = publish_result.primary.message_count
+        synced_device_ids: set[int] = set()
+        try:
+            with session_scope() as db:
+                for msg in pending_publish.messages:
+                    db_device_id = msg.get("db_device_id")
+                    if db_device_id is None:
+                        continue
+                    emitted_at = msg.get("emitted_at") or _utc_now_iso()
+                    vitals = msg.get("vitals") or {}
+                    db.execute(
+                        text(
+                            "INSERT INTO vitals "
+                            "(time, device_id, heart_rate, spo2, temperature, "
+                            "blood_pressure_sys, blood_pressure_dia, hrv, "
+                            "respiratory_rate, signal_quality, motion_artifact) "
+                            "VALUES (:ts, :dev, :hr, :spo2, :temp, :sys, :dia, "
+                            ":hrv, :rr, :sq, :ma)"
+                        ),
+                        {
+                            "ts": emitted_at,
+                            "dev": int(db_device_id),
+                            "hr": _safe_int(vitals.get("heart_rate")),
+                            "spo2": _safe_float_db(vitals.get("spo2")),
+                            "temp": _safe_float_db(vitals.get("temperature")),
+                            "sys": _safe_int(vitals.get("blood_pressure_sys")),
+                            "dia": _safe_int(vitals.get("blood_pressure_dia")),
+                            "hrv": _safe_int(vitals.get("hrv")),
+                            "rr": _safe_int(vitals.get("respiratory_rate")),
+                            "sq": None,
+                            "ma": None,
+                        },
+                    )
+                    synced_device_ids.add(int(db_device_id))
+                    ack_count += 1
+                for db_device_id in synced_device_ids:
+                    db.execute(
+                        text(
+                            "UPDATE devices "
+                            "SET last_sync_at = NOW(), updated_at = NOW() "
+                            "WHERE id = :device_id AND deleted_at IS NULL"
+                        ),
+                        {"device_id": db_device_id},
+                    )
+                db.commit()
+        except Exception:
+            ack_count = 0
+            logger.warning("Direct DB write failed for tick publish", exc_info=True)
+        publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
+
+        publish_ok = ack_count == message_count if message_count > 0 else False
 
         with self._lock:
             self._publish_in_flight = False
@@ -615,6 +658,23 @@ class SimulatorRuntime:
                 del self._tick_buffer[: pending_publish.clear_count]
                 self._last_push_time = monotonic()
                 self._refresh_pending_sync_flags()
+
+    @staticmethod
+    def _local_database_healthy() -> bool:
+        try:
+            with session_scope() as db:
+                db.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+
+    def _backend_healthy(self) -> bool:
+        endpoint = f"{self._health_backend_url.rstrip('/')}/mobile/health"
+        try:
+            with urlopen(Request(endpoint, method="GET"), timeout=3.0) as response:
+                return int(response.getcode() or 0) == 200
+        except Exception:
+            return False
 
     def _run_session_side_effects(self, effects: SessionSideEffects) -> None:
         self._execute_pending_tick_publish(effects.pending_publish)
@@ -741,6 +801,32 @@ class SimulatorRuntime:
 
     def _stop_sim_session_for_db_device(self, db_device_id: int) -> None:
         self.device_service._stop_sim_session_for_db_device(db_device_id)
+
+    def recover_active_sessions(self) -> int:
+        recovered = 0
+        try:
+            with session_scope() as db:
+                active_devices = SimAdminService.list_active_devices(db)
+            for device_info in active_devices:
+                db_device_id = int(device_info["id"])
+                try:
+                    self._ensure_sim_session_for_db_device(db_device_id, device_info)
+                    recovered += 1
+                    logger.info(
+                        "Auto-recovered session for DB device %d (%s)",
+                        db_device_id,
+                        device_info.get("device_name", "unknown"),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to recover session for DB device %d: %s",
+                        db_device_id,
+                        exc,
+                        exc_info=True,
+                    )
+        except Exception as exc:
+            logger.warning("Auto-recovery DB query failed: %s", exc, exc_info=True)
+        return recovered
 
     # ── Session CRUD — delegated to SessionService (Task 3.2) ────────────
 
@@ -989,16 +1075,18 @@ class SimulatorRuntime:
         with self._lock:
             api_status = "running"
             mqtt_status = "connected"
-            db_status = "local-ok"
             if not self.sessions:
                 mqtt_status = "idle"
-            return {
-                "status": "ok",
-                "api": api_status,
-                "mqtt": mqtt_status,
-                "db": db_status,
-                "version": "simulator-api-0.3.0",
-            }
+        backend_status = "connected" if self._backend_healthy() else "down"
+        db_status = "healthy" if self._local_database_healthy() else "down"
+        return {
+            "status": api_status,
+            "api": api_status,
+            "backend": backend_status,
+            "mqtt": mqtt_status,
+            "db": db_status,
+            "version": "simulator-api-0.3.0",
+        }
 
 
     def sleep_session(self, device_id: str) -> SleepSessionResponse:
@@ -1103,11 +1191,7 @@ class SimulatorRuntime:
         with self._lock:
             record = self._require_session(session_id)
             device_id = record.device_ids[0] if record.device_ids else "unknown"
-            status = "PENDING"
-            if record.status == "running":
-                status = "PASS" if record.last_publish_ok else "FAILED"
-            elif record.status == "stopped" and record.last_tick_outputs:
-                status = "DELAYED"
+            status = self._verification_status_locked(record)
             risk_received = device_id in self.risk_snapshots
             return VerificationResult(
                 deviceId=device_id,
@@ -1121,6 +1205,33 @@ class SimulatorRuntime:
 
     def _require_session(self, session_id: str) -> SessionRecord:
         return self.session_service._require_session(session_id)
+
+    def _verification_is_stale_locked(self, record: SessionRecord) -> bool:
+        if not record.last_tick_at:
+            return False
+        try:
+            last_tick_at = datetime.fromisoformat(record.last_tick_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        stale_after_seconds = max(float(self._push_interval) * 2.0, 10.0)
+        age_seconds = (datetime.now(timezone.utc) - last_tick_at).total_seconds()
+        return age_seconds > stale_after_seconds
+
+    def _verification_status_locked(self, record: SessionRecord) -> str:
+        if record.last_publish_count > 0:
+            if not record.last_publish_ok:
+                return "FAILED"
+            if record.status == "running" and self._verification_is_stale_locked(record):
+                return "DELAYED"
+            return "PASS"
+
+        if record.status != "running":
+            return "PENDING"
+        if not record.last_tick_outputs:
+            return "PENDING"
+        if self._verification_is_stale_locked(record):
+            return "DELAYED"
+        return "PENDING"
 
     def _tick_session_locked(self, record: SessionRecord, force: bool) -> SessionSideEffects:
         effects = SessionSideEffects()

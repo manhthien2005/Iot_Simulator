@@ -5,8 +5,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from Iot_Simulator.dataset_adapters.sleep_edf_adapter import SleepEdfAdapter
-from Iot_Simulator.dataset_adapters.types import SleepPhase
+from dataset_adapters.sleep_edf_adapter import SleepEdfAdapter
+from dataset_adapters.types import SleepPhase
 
 
 class TestSleepEdfAdapterUnit(unittest.TestCase):

@@ -54,6 +54,23 @@ export function SessionRunnerPage() {
   }, [normalizeScenarioId, preselectedDeviceId, preselectedScenarioId]);
 
   useEffect(() => {
+    if (!devices.length) return;
+    setScenarioByDevice((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const device of devices) {
+        const scenarioId = normalizeScenarioId(device.currentScenarioId);
+        if (!scenarioId) continue;
+        if (next[device.id] !== scenarioId) {
+          next[device.id] = scenarioId;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [devices, normalizeScenarioId]);
+
+  useEffect(() => {
     if (!devices.length) {
       setMonitorDeviceId("");
       return;
@@ -125,7 +142,16 @@ export function SessionRunnerPage() {
         isApplying={isApplying}
       />
 
-      <SessionVitalsPanel devices={activeDevices} deviceId={monitorDeviceId} onDeviceChange={setMonitorDeviceId} />
+      <SessionVitalsPanel
+        devices={activeDevices}
+        deviceId={monitorDeviceId}
+        runtimeTickAt={
+          sessions.find((session) => session.status === "running" && session.deviceIds.includes(monitorDeviceId))?.lastTickAt
+          ?? sessions.find((session) => session.id === activeSessionId && session.deviceIds.includes(monitorDeviceId))?.lastTickAt
+          ?? null
+        }
+        onDeviceChange={setMonitorDeviceId}
+      />
 
       <FallLab devices={activeDevices} />
       <MotionPreviewPanel selectedDevice={activeDevices.find((item) => item.id === monitorDeviceId) ?? null} currentVitals={currentVitals} />

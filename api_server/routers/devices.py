@@ -5,24 +5,44 @@ import time as _time
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from Iot_Simulator.api_server.db import get_db
-from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
-from Iot_Simulator.api_server.middleware.auth import require_admin_key
-from Iot_Simulator.api_server.schemas import (
-    AdminAssignUserRequest,
-    AdminBatchActivateItem,
-    AdminDeviceActionResponse,
-    AdminDeviceAssignResponse,
-    AdminDeviceResponse,
-    AdminUserResponse,
-    BatchActivateRequest,
-    AdminCreateDeviceSimRequest,
-    BindDeviceRequest,
-    BindDeviceResponse,
-    CreateDeviceRequest,
-    SimulatedDevice,
-)
-from Iot_Simulator.api_server.sim_admin_service import SimAdminService
+try:
+    from Iot_Simulator.api_server.db import get_db
+    from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
+    from Iot_Simulator.api_server.middleware.auth import require_admin_key
+    from Iot_Simulator.api_server.schemas import (
+        AdminAssignUserRequest,
+        AdminBatchActivateItem,
+        AdminDeviceActionResponse,
+        AdminDeviceAssignResponse,
+        AdminDeviceResponse,
+        AdminUserResponse,
+        BatchActivateRequest,
+        AdminCreateDeviceSimRequest,
+        BindDeviceRequest,
+        BindDeviceResponse,
+        CreateDeviceRequest,
+        SimulatedDevice,
+    )
+    from Iot_Simulator.api_server.sim_admin_service import SimAdminService
+except ModuleNotFoundError:
+    from api_server.db import get_db
+    from api_server.dependencies import SimulatorRuntime, get_runtime
+    from api_server.middleware.auth import require_admin_key
+    from api_server.schemas import (
+        AdminAssignUserRequest,
+        AdminBatchActivateItem,
+        AdminDeviceActionResponse,
+        AdminDeviceAssignResponse,
+        AdminDeviceResponse,
+        AdminUserResponse,
+        BatchActivateRequest,
+        AdminCreateDeviceSimRequest,
+        BindDeviceRequest,
+        BindDeviceResponse,
+        CreateDeviceRequest,
+        SimulatedDevice,
+    )
+    from api_server.sim_admin_service import SimAdminService
 
 router = APIRouter(tags=["devices"])
 

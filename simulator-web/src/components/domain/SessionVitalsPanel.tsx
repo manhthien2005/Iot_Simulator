@@ -7,6 +7,7 @@ import type { VitalsSample } from "../../types/vitals";
 import { fetchLatestVitals } from "../../services/vitalsApi";
 import { useSessionVitalsStore } from "../../stores/sessionVitalsStore";
 import { getVitalSeverity } from "../../utils/severity";
+import { isVitalsStreamStale, resolveVitalsFreshnessTimestamp } from "../../utils/vitalsFreshness";
 import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
 import { Skeleton } from "../ui/Skeleton";
@@ -17,6 +18,7 @@ const ReactECharts = React.lazy(() => import("echarts-for-react"));
 interface SessionVitalsPanelProps {
   devices: SimulatedDevice[];
   deviceId: string;
+  runtimeTickAt?: string | null;
   onDeviceChange: (deviceId: string) => void;
 }
 
@@ -39,7 +41,7 @@ const UTC7_TIME = new Intl.DateTimeFormat("vi-VN", {
   hour12: false,
 });
 
-export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: SessionVitalsPanelProps) {
+export function SessionVitalsPanel({ devices, deviceId, runtimeTickAt = null, onDeviceChange }: SessionVitalsPanelProps) {
   const { activeDeviceId, streamData, appendSample, resetForDevice } = useSessionVitalsStore();
   const selectedDevice = devices.find((device) => device.id === deviceId) ?? null;
   const isConnected = Boolean(selectedDevice?.isOnline);
@@ -71,9 +73,17 @@ export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: Sessio
 
   const current = streamData[streamData.length - 1] ?? latestSample ?? null;
   const expectedIntervalMs = inferExpectedIntervalMs(streamData);
-  const stale = current ? Date.now() - parseTimestamp(current.timestamp).getTime() > Math.max(expectedIntervalMs * 2, 10000) : false;
-  const statusLabel = !isConnected ? "ngắt kết nối" : !current ? "chưa có dữ liệu" : stale ? "trễ dữ liệu" : "đang trực tiếp";
-  const statusSeverity = !isConnected ? "offline" : !current ? "offline" : stale ? "warning" : "normal";
+  const freshnessAt = resolveVitalsFreshnessTimestamp(runtimeTickAt, selectedDevice?.lastSeenAt, current?.timestamp);
+  const stale = current
+    ? isVitalsStreamStale({
+        sampleTimestamp: current.timestamp,
+        runtimeTickAt,
+        deviceLastSeenAt: selectedDevice?.lastSeenAt,
+        expectedIntervalMs,
+      })
+    : false;
+  const statusLabel = !isConnected ? "thiết bị ngắt" : error ? "lỗi lấy mẫu" : !current ? "chưa có mẫu" : stale ? "chậm cập nhật" : "trực tiếp";
+  const statusSeverity = !isConnected ? "offline" : error ? "critical" : !current ? "offline" : stale ? "warning" : "normal";
   const hrSeverity = current ? getVitalSeverity("heartRate", current.heartRate) : null;
   const spo2Severity = current ? getVitalSeverity("spo2", current.spo2) : null;
   const tempSeverity = current?.temperature != null ? getVitalSeverity("temperature", current.temperature) : null;
@@ -127,11 +137,11 @@ export function SessionVitalsPanel({ devices, deviceId, onDeviceChange }: Sessio
       ) : isLoading && streamData.length === 0 ? (
         <Skeleton style={{ height: "280px" }} />
       ) : error && streamData.length === 0 ? (
-        <p style={{ margin: 0, color: "var(--text-secondary)" }}>Chưa có dữ liệu sinh hiệu. Hãy bắt đầu phiên mô phỏng.</p>
+        <p style={{ margin: 0, color: "var(--text-secondary)" }}>Không lấy được mẫu sinh hiệu. Kiểm tra runtime, backend hoặc phiên mô phỏng.</p>
       ) : (
         <div style={{ display: "grid", gap: "10px" }}>
           <small style={{ color: "var(--text-muted)" }}>
-            Múi giờ hiển thị: UTC+7. Lần cập nhật gần nhất: {current ? formatUtc7Time(current.timestamp) : "--"}.
+            Múi giờ hiển thị: UTC+7. Lần cập nhật gần nhất: {formatUtc7Time(freshnessAt)}.
           </small>
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
             <Activity size={13} style={{ color: "var(--text-secondary)" }} />

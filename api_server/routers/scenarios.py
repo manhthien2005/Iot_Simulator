@@ -7,8 +7,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from pydantic import BaseModel
 from typing import Literal
 
-from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
-from Iot_Simulator.api_server.schemas import (
+from api_server.dependencies import SimulatorRuntime, get_runtime
+from api_server.schemas import (
     ApplyScenarioRequest,
     BackfillSleepRequest,
     BackfillSleepResponse,

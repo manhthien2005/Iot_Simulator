@@ -9,6 +9,7 @@ const ScenariosPage = lazy(() => import("./pages/ScenariosPage").then((module) =
 const SessionRunnerPage = lazy(() => import("./pages/SessionRunnerPage").then((module) => ({ default: module.SessionRunnerPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
 const VerificationPage = lazy(() => import("./pages/VerificationPage").then((module) => ({ default: module.VerificationPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
 function NotFoundPage() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="session" element={withBoundary(<SessionRunnerPage />)} />
         <Route path="analytics" element={withBoundary(<AnalyticsPage />)} />
         <Route path="verification" element={withBoundary(<VerificationPage />)} />
+        <Route path="settings" element={withBoundary(<SettingsPage />)} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

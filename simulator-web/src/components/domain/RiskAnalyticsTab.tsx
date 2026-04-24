@@ -223,4 +223,3 @@ function riskLevelLabel(level: RiskLevel) {
   if (level === "HIGH") return "Cao";
   return "Nguy kịch";
 }
-

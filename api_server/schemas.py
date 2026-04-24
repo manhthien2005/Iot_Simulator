@@ -67,6 +67,7 @@ class SimulatedDevice(BaseModel):
     hasPendingSync: bool
     state: DeviceStateValue
     boundDbDeviceId: int | None = None
+    currentScenarioId: str | None = None
     personaConfig: PersonaConfig | None = None
     dataBinding: DataBindingConfig | None = None
 
@@ -294,6 +295,36 @@ class AdminAssignUserRequest(BaseModel):
 
 class BatchActivateRequest(BaseModel):
     device_ids: list[int]
+
+
+class RuntimeConfig(BaseModel):
+    tick_interval_seconds: float = Field(ge=0.1, le=60, description="Background tick interval")
+    push_interval_seconds: int = Field(ge=1, le=300, description="Telemetry push interval")
+    sleep_speed_factor: float = Field(ge=1, le=3600, description="Sleep phase speed-up factor")
+    health_backend_url: str = Field(description="Health backend base URL (read-only)")
+
+
+class RuntimeConfigUpdate(BaseModel):
+    tick_interval_seconds: float | None = Field(default=None, ge=0.1, le=60)
+    push_interval_seconds: int | None = Field(default=None, ge=1, le=300)
+    sleep_speed_factor: float | None = Field(default=None, ge=1, le=3600)
+
+
+class FeatureFlags(BaseModel):
+    use_db_thresholds: bool = False
+    pre_model_trigger_enabled: bool = False
+
+
+class SimulatorSettingsResponse(BaseModel):
+    runtime: RuntimeConfig
+    daytime_thresholds: dict[str, float]
+    sleep_thresholds: dict[str, float]
+    rules_config: dict | None = None
+    fall_config: dict | None = None
+    feature_flags: FeatureFlags
+    db_daytime_thresholds: dict[str, float] | None = None
+    db_sleep_thresholds: dict[str, float] | None = None
+    threshold_source: str = "fallback"
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,14 @@
-"""HTTP client for the local Sleep AI inference API."""
+"""HTTP client for the local Sleep AI inference API.
+
+This client targets **port 8001** (healthguard-model-api) for AI-based sleep
+stage prediction.  Database persistence of sleep records is handled separately
+by :mod:`api_server.dependencies` which POSTs to the health_system backend on
+**port 8000** via ``/mobile/telemetry/sleep``.
+
+This dual-endpoint design is intentional:
+  - Port 8001 → AI inference (sleep stage classification)
+  - Port 8000 → DB storage  (sleep session persistence)
+"""
 
 from __future__ import annotations
 

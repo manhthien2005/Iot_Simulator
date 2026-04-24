@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from Iot_Simulator.dataset_adapters.vitaldb_adapter import (
+from dataset_adapters.vitaldb_adapter import (
     BP_DIA_TRACK,
     BP_SYS_TRACK,
     HR_TRACK,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
+from api_server.dependencies import SimulatorRuntime, get_runtime
 
 router = APIRouter(tags=["registry"])
 

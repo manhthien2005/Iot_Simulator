@@ -14,7 +14,10 @@ from typing import Any
 
 import pytest
 
-from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry, normalize_stress_state
+try:
+    from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry, normalize_stress_state
+except ModuleNotFoundError:
+    from simulator_core.dataset_registry import DatasetRegistry, normalize_stress_state
 
 
 # ---------------------------------------------------------------------------

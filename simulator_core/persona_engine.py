@@ -105,4 +105,3 @@ class PersonaEngine:
         elif event_type == "neutral":
             self.state.stress_state = "neutral"
         return self.state
-

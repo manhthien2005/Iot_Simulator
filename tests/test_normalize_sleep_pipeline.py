@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from Iot_Simulator.dataset_adapters.types import SleepPhase, SleepSessionRecord
-from Iot_Simulator.etl_pipeline.normalize import normalize_sleep
+from dataset_adapters.types import SleepPhase, SleepSessionRecord
+from etl_pipeline.normalize import normalize_sleep
 
 
 class _FakeSleepAdapter:

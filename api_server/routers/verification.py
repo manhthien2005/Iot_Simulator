@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime
-from Iot_Simulator.api_server.schemas import VerificationResult
+from api_server.dependencies import SimulatorRuntime, get_runtime
+from api_server.schemas import VerificationResult
 
 router = APIRouter(tags=["verification"])
 

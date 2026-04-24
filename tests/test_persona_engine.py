@@ -9,12 +9,20 @@ from __future__ import annotations
 
 import pytest
 
-from Iot_Simulator.simulator_core.persona_engine import (
-    DeviceState,
-    Persona,
-    PersonaEngine,
-    _BATTERY_DRAIN_FACTORS,
-)
+try:
+    from Iot_Simulator.simulator_core.persona_engine import (
+        DeviceState,
+        Persona,
+        PersonaEngine,
+        _BATTERY_DRAIN_FACTORS,
+    )
+except ModuleNotFoundError:
+    from simulator_core.persona_engine import (
+        DeviceState,
+        Persona,
+        PersonaEngine,
+        _BATTERY_DRAIN_FACTORS,
+    )
 
 
 # ---------------------------------------------------------------------------

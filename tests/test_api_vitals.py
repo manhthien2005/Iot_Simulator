@@ -6,13 +6,22 @@ from unittest.mock import MagicMock, patch
 try:
     from fastapi.testclient import TestClient
 
-    from Iot_Simulator.api_server.dependencies import (
-        DeviceRecord,
-        SessionRecord,
-        SimulatorRuntime,
-        reset_runtime_for_tests,
-    )
-    from Iot_Simulator.api_server.main import app
+    try:
+        from Iot_Simulator.api_server.dependencies import (
+            DeviceRecord,
+            SessionRecord,
+            SimulatorRuntime,
+            reset_runtime_for_tests,
+        )
+        from Iot_Simulator.api_server.main import app
+    except ModuleNotFoundError:
+        from api_server.dependencies import (
+            DeviceRecord,
+            SessionRecord,
+            SimulatorRuntime,
+            reset_runtime_for_tests,
+        )
+        from api_server.main import app
 
     FASTAPI_READY = True
 except Exception:
@@ -205,6 +214,45 @@ def test_latest_vitals_prefers_generator_activity_label_for_sleeping() -> None:
 
     assert sample.activityLabel == "sleeping"
     assert sample.motionTag == "sleeping"
+
+
+def test_latest_vitals_prefers_newest_session_payload() -> None:
+    runtime, stale_record, device_id = _build_runtime_with_payload(
+        source_mode="synthetic",
+        vitals={
+            "heart_rate": 65.0,
+            "spo2": 97.0,
+        },
+    )
+    stale_record.status = "stopped"
+
+    fresh_record = SessionRecord(
+        id="session-2",
+        device_ids=[device_id],
+        speed=1,
+        simulator=MagicMock(),
+        status="running",
+        last_tick_outputs=[
+            {
+                "device_id": device_id,
+                "vitals": {
+                    "heart_rate": 88.0,
+                    "spo2": 99.0,
+                },
+                "state": {"activity_state": "walking"},
+                "emitted_at": "2026-01-01T00:00:05+00:00",
+            }
+        ],
+        source_modes={device_id: "synthetic"},
+    )
+    runtime.sessions[fresh_record.id] = fresh_record
+
+    sample = runtime.latest_vitals(device_id)
+
+    assert sample.timestamp == "2026-01-01T00:00:05+00:00"
+    assert sample.heartRate == 88.0
+    assert sample.activityLabel == "walking"
+    assert sample.isStale is False
 
 
 def test_verification_uses_measured_publish_latency() -> None:

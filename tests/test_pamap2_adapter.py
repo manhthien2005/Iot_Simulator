@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from Iot_Simulator.dataset_adapters import PAMAP2Adapter, SimpleDataFrame
+from dataset_adapters import PAMAP2Adapter, SimpleDataFrame
 
 
 class TestPAMAP2Adapter(unittest.TestCase):

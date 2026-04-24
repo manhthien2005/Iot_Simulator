@@ -117,7 +117,10 @@ class DeviceService:
 
     def list_devices(self) -> list[SimulatedDevice]:
         with self._lock:
-            return [device.to_schema() for device in self.devices.values()]
+            return [
+                device.to_schema(current_scenario_id=self.device_scenarios.get(device.id))
+                for device in self.devices.values()
+            ]
 
     def create_device(self, request: CreateDeviceRequest) -> SimulatedDevice:
         try:
@@ -140,7 +143,7 @@ class DeviceService:
             )
             self.devices[device_id] = device
             self.device_scenarios[device_id] = "normal_rest"
-            return device.to_schema()
+            return device.to_schema(current_scenario_id=self.device_scenarios.get(device_id))
 
     def delete_device(self, device_id: str) -> None:
         with self._lock:

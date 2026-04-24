@@ -6,8 +6,12 @@ import unittest
 try:
     from fastapi.testclient import TestClient
 
-    from Iot_Simulator.api_server.dependencies import get_runtime, reset_runtime_for_tests
-    from Iot_Simulator.api_server.main import app
+    try:
+        from Iot_Simulator.api_server.dependencies import get_runtime, reset_runtime_for_tests
+        from Iot_Simulator.api_server.main import app
+    except ModuleNotFoundError:
+        from api_server.dependencies import get_runtime, reset_runtime_for_tests
+        from api_server.main import app
 
     FASTAPI_READY = True
 except Exception:
@@ -46,6 +50,11 @@ class TestApiScenarios(unittest.TestCase):
 
         self.assertLess(float(hypoxia["spo2"]), float(normal["spo2"]))
         self.assertGreater(float(hypoxia["heartRate"]), float(normal["heartRate"]))
+
+        listed = self.client.get("/api/sim/devices")
+        self.assertEqual(listed.status_code, 200)
+        updated_device = next(item for item in listed.json() if item["id"] == device["id"])
+        self.assertEqual(updated_device["currentScenarioId"], "hypoxia_critical")
 
     def test_push_sleep_for_date_rejects_today_and_future(self) -> None:
         today = datetime.now(timezone.utc).date()

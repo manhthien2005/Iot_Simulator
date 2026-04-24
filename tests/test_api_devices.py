@@ -5,8 +5,8 @@ import unittest
 try:
     from fastapi.testclient import TestClient
 
-    from Iot_Simulator.api_server.dependencies import reset_runtime_for_tests
-    from Iot_Simulator.api_server.main import app
+    from api_server.dependencies import reset_runtime_for_tests
+    from api_server.main import app
 
     FASTAPI_READY = True
 except Exception:
@@ -29,7 +29,8 @@ class TestApiDevices(unittest.TestCase):
 
         listed = self.client.get("/api/sim/devices")
         self.assertEqual(listed.status_code, 200)
-        self.assertTrue(any(item["id"] == device_id for item in listed.json()))
+        created_device = next(item for item in listed.json() if item["id"] == device_id)
+        self.assertEqual(created_device["currentScenarioId"], "normal_rest")
 
         deleted = self.client.delete(f"/api/sim/devices/{device_id}")
         self.assertEqual(deleted.status_code, 204)

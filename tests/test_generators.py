@@ -5,12 +5,12 @@ from math import nan
 from random import Random
 from pathlib import Path
 
-from Iot_Simulator.etl_pipeline.normalize import NormalizedArtifactPipeline
-from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
-from Iot_Simulator.simulator_core.generators import MotionGenerator, VitalsGenerator
-from Iot_Simulator.simulator_core.persona_engine import DeviceState, Persona
-from Iot_Simulator.simulator_core.session import DataBinding, DeviceContext
-from Iot_Simulator.simulator_core.persona_engine import PersonaEngine
+from etl_pipeline.normalize import NormalizedArtifactPipeline
+from simulator_core.dataset_registry import DatasetRegistry
+from simulator_core.generators import MotionGenerator, VitalsGenerator
+from simulator_core.persona_engine import DeviceState, Persona
+from simulator_core.session import DataBinding, DeviceContext
+from simulator_core.persona_engine import PersonaEngine
 
 
 class ReplayRegistryStub:

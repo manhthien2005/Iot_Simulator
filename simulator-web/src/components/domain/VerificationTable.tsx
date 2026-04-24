@@ -60,9 +60,9 @@ function VerificationTableInner({ rows, onRefresh }: VerificationTableProps) {
 
 function statusLabel(status: VerificationResult["status"]) {
   if (status === "PASS") return "Đạt";
-  if (status === "DELAYED") return "Trễ";
-  if (status === "FAILED") return "Thất bại";
-  return "Đang chờ";
+  if (status === "DELAYED") return "Chậm cập nhật";
+  if (status === "FAILED") return "Lỗi publish";
+  return "Chờ";
 }
 
 export const VerificationTable = React.memo(VerificationTableInner);

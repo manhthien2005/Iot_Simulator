@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from Iot_Simulator.transport import HttpPublisher, MqttPublisher, TransportRouter
+from transport import HttpPublisher, MqttPublisher, TransportRouter
 
 
 class TestTransportRouter(unittest.TestCase):
