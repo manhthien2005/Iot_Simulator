@@ -1,13 +1,25 @@
 from __future__ import annotations
 
-import json
-import os
-import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import json
+import os
+import time
+import unittest
+from threading import Event, Thread
 
-from api_server.dependencies import PendingTickPublish, SimulatorRuntime
-from api_server.schemas import CreateDeviceRequest, DataBindingConfig
+try:
+    from Iot_Simulator.api_server import dependencies as dependencies_module
+    from Iot_Simulator.api_server.dependencies import PendingTickPublish, SessionSideEffects, SimulatorRuntime
+    from Iot_Simulator.api_server.schemas import CreateDeviceRequest, DataBindingConfig
+    from Iot_Simulator.transport import PublishResult
+    from Iot_Simulator.transport.router import RoutedPublishResult
+except ModuleNotFoundError:
+    from api_server import dependencies as dependencies_module
+    from api_server.dependencies import PendingTickPublish, SessionSideEffects, SimulatorRuntime
+    from api_server.schemas import CreateDeviceRequest, DataBindingConfig
+    from transport import PublishResult
+    from transport.router import RoutedPublishResult
 
 
 class RuntimeBindingRegistryStub:
@@ -71,6 +83,27 @@ class TestRuntimeBinding(unittest.TestCase):
 
         self.assertEqual(runtime._push_interval, 60)
 
+    def test_background_tick_advances_running_session(self) -> None:
+        runtime = SimulatorRuntime()
+        runtime._background_tick_interval = 0.1
+        runtime._publish_tick_buffer_locked = lambda **kwargs: None  # type: ignore[method-assign]
+
+        created = runtime.create_device(CreateDeviceRequest(name="Background Tick Watch", type="smartwatch"))
+        session = runtime.create_session([created.id], speed=1)
+        runtime.start_session(session["id"])
+        record = runtime.sessions[session["id"]]
+        first_tick_at = record.last_tick_at
+
+        runtime.start_background_tick()
+        try:
+            time.sleep(1.25)
+        finally:
+            runtime.shutdown()
+
+        self.assertIsNotNone(first_tick_at)
+        self.assertIsNotNone(record.last_tick_at)
+        self.assertNotEqual(record.last_tick_at, first_tick_at)
+
     def test_backend_url_reads_env_for_http_ingest(self) -> None:
         original = os.environ.get("HEALTH_BACKEND_URL")
         os.environ["HEALTH_BACKEND_URL"] = "http://backend.example:9000/"
@@ -94,6 +127,74 @@ class TestRuntimeBinding(unittest.TestCase):
             runtime._telemetry_alert_endpoint(runtime._health_backend_url),
             "http://backend.example:9000/mobile/telemetry/alert",
         )
+
+    def test_tick_active_releases_runtime_lock_before_db_persist(self) -> None:
+        runtime = SimulatorRuntime()
+        created = runtime.create_device(CreateDeviceRequest(name="Lock Watch", type="smartwatch"))
+        runtime.bind_device(created.id, 321)
+        session = runtime.create_session([created.id], speed=1)
+        record = runtime.sessions[session["id"]]
+        record.status = "running"
+
+        def fake_tick_session(_record: object, *, force: bool) -> SessionSideEffects:
+            return SessionSideEffects(
+                pending_publish=PendingTickPublish(
+                    messages=[
+                        {
+                            "device_id": created.id,
+                            "db_device_id": 321,
+                            "emitted_at": "2026-01-01T00:00:00Z",
+                            "vitals": {"heart_rate": 72.0, "spo2": 98.0},
+                        }
+                    ],
+                    clear_count=1,
+                )
+            )
+
+        runtime._tick_session_locked = fake_tick_session  # type: ignore[method-assign]
+
+        entered_persist = Event()
+        allow_persist = Event()
+        sessions_read = Event()
+        read_result: dict[str, object] = {}
+
+        class BlockingSession:
+            def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
+                entered_persist.set()
+                allow_persist.wait(timeout=2.0)
+                return None
+
+            def commit(self) -> None:
+                return None
+
+        @contextmanager
+        def fake_scope():
+            yield BlockingSession()
+
+        original_scope = dependencies_module.session_scope
+        dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
+
+        try:
+            tick_thread = Thread(target=runtime.tick_active, daemon=True)
+            tick_thread.start()
+            self.assertTrue(entered_persist.wait(1.0))
+
+            def read_sessions() -> None:
+                read_result["sessions"] = runtime.list_sessions()
+                sessions_read.set()
+
+            read_thread = Thread(target=read_sessions, daemon=True)
+            read_thread.start()
+            self.assertTrue(sessions_read.wait(0.5))
+
+            allow_persist.set()
+            tick_thread.join(1.0)
+            read_thread.join(1.0)
+        finally:
+            dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+
+        self.assertFalse(tick_thread.is_alive())
+        self.assertIn("sessions", read_result)
 
     def test_push_alert_to_backend_posts_bound_device_payload_once_per_signature(self) -> None:
         runtime = SimulatorRuntime()
@@ -128,6 +229,48 @@ class TestRuntimeBinding(unittest.TestCase):
         self.assertEqual(payload["severity"], "warning")
         self.assertEqual(payload["metadata"]["heart_rate"], 118)
 
+    def test_inject_event_releases_runtime_lock_before_alert_push(self) -> None:
+        runtime = SimulatorRuntime()
+        created = runtime.create_device(CreateDeviceRequest(name="Inject Lock Watch", type="smartwatch"))
+        runtime.bind_device(created.id, 654)
+        session = runtime.create_session([created.id], speed=1)
+        record = runtime.sessions[session["id"]]
+        record.status = "idle"
+
+        entered_sender = Event()
+        allow_sender = Event()
+        sessions_read = Event()
+        read_result: dict[str, object] = {}
+
+        def fake_sender(endpoint: str, payload: str, headers: dict[str, str] | None = None) -> int:
+            entered_sender.set()
+            allow_sender.wait(timeout=2.0)
+            return 202
+
+        runtime._http_sender = fake_sender  # type: ignore[method-assign]
+
+        inject_thread = Thread(
+            target=lambda: runtime.inject_event(created.id, "fall_detected", "fall_1"),
+            daemon=True,
+        )
+        inject_thread.start()
+        self.assertTrue(entered_sender.wait(1.0))
+
+        def read_sessions() -> None:
+            read_result["sessions"] = runtime.list_sessions()
+            sessions_read.set()
+
+        read_thread = Thread(target=read_sessions, daemon=True)
+        read_thread.start()
+        self.assertTrue(sessions_read.wait(0.5))
+
+        allow_sender.set()
+        inject_thread.join(1.0)
+        read_thread.join(1.0)
+
+        self.assertFalse(inject_thread.is_alive())
+        self.assertIn("sessions", read_result)
+
     def test_inject_event_pushes_fall_alert(self) -> None:
         runtime = SimulatorRuntime()
         created = runtime.create_device(CreateDeviceRequest(name="Fall Watch", type="smartwatch"))
@@ -150,6 +293,48 @@ class TestRuntimeBinding(unittest.TestCase):
         self.assertEqual(severity, "critical")
         self.assertEqual(metadata["variant"], "fall_1")
 
+    def test_ensure_sim_session_for_db_device_starts_runtime_session(self) -> None:
+        runtime = SimulatorRuntime()
+        runtime._update_device_heartbeat = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+        runtime._push_alert_to_backend = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+        runtime._run_session_side_effects = lambda _effects: None  # type: ignore[method-assign]
+
+        runtime._ensure_sim_session_for_db_device(
+            900,
+            {
+                "id": 900,
+                "device_name": "DB Device 900",
+                "device_type": "smartwatch",
+                "user_id": None,
+                "date_of_birth": "1980-01-01",
+                "weight_kg": 70.0,
+                "height_cm": 170.0,
+                "gender": "male",
+            },
+        )
+
+        self.assertTrue(runtime.is_db_device_sim_running(900))
+        self.assertEqual(runtime.list_running_db_device_ids(), {900})
+
+    def test_running_db_device_cache_tracks_session_lifecycle(self) -> None:
+        runtime = SimulatorRuntime()
+        runtime._run_session_side_effects = lambda _effects: None  # type: ignore[method-assign]
+        created = runtime.create_device(CreateDeviceRequest(name="Cached Watch", type="smartwatch"))
+
+        runtime.bind_device(created.id, 321)
+        session = runtime.create_session([created.id], speed=1)
+
+        self.assertFalse(runtime.is_db_device_sim_running(321))
+        self.assertEqual(runtime.list_running_db_device_ids(), set())
+
+        runtime.start_session(session["id"])
+        self.assertTrue(runtime.is_db_device_sim_running(321))
+        self.assertEqual(runtime.list_running_db_device_ids(), {321})
+
+        runtime.stop_session(session["id"])
+        self.assertFalse(runtime.is_db_device_sim_running(321))
+        self.assertEqual(runtime.list_running_db_device_ids(), set())
+
     def test_tick_warning_pushes_threshold_alert(self) -> None:
         runtime = SimulatorRuntime()
         created = runtime.create_device(CreateDeviceRequest(name="Warning Watch", type="smartwatch"))
@@ -166,6 +351,7 @@ class TestRuntimeBinding(unittest.TestCase):
             pushed.append((event_type, severity, dict(metadata or {})))
 
         runtime._push_alert_to_backend = fake_push  # type: ignore[method-assign]
+        runtime._update_device_heartbeat = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
 
         effects = runtime._tick_session_locked(record, force=False)
         runtime._run_session_side_effects(effects)
@@ -260,9 +446,6 @@ class TestRuntimeBinding(unittest.TestCase):
             clear_count=1,
         )
 
-        original_scope = None
-        from api_server import dependencies as dependencies_module
-
         original_scope = dependencies_module.session_scope
         dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
         try:
@@ -281,7 +464,6 @@ class TestRuntimeBinding(unittest.TestCase):
 
     def test_health_payload_marks_db_down_when_session_scope_fails(self) -> None:
         runtime = SimulatorRuntime()
-        from api_server import dependencies as dependencies_module
 
         original_scope = dependencies_module.session_scope
         original_backend_healthy = runtime._backend_healthy
@@ -330,8 +512,6 @@ class TestRuntimeBinding(unittest.TestCase):
             ],
             clear_count=1,
         )
-
-        from api_server import dependencies as dependencies_module
 
         original_scope = dependencies_module.session_scope
         dependencies_module.session_scope = fake_scope  # type: ignore[assignment]

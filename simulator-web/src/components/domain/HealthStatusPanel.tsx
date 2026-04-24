@@ -1,7 +1,9 @@
+import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchHealth } from "../../services/healthApi";
 import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
+import { POLL_INTERVALS } from "../../config/defaults";
 
 type HealthKind = "runtime" | "backend" | "database";
 
@@ -23,11 +25,11 @@ function statusToSeverity(value: string, kind: HealthKind) {
   return "info" as const;
 }
 
-export function HealthStatusPanel() {
+function HealthStatusPanelInner() {
   const { data } = useQuery({
     queryKey: ["health"],
     queryFn: fetchHealth,
-    refetchInterval: 15000,
+    refetchInterval: POLL_INTERVALS.health,
   });
 
   return (
@@ -81,3 +83,5 @@ function healthLabel(value: string, kind: HealthKind) {
   if (normalized === "unknown") return "không rõ";
   return value;
 }
+
+export const HealthStatusPanel = React.memo(HealthStatusPanelInner);

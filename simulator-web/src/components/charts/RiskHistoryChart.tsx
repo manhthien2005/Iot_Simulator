@@ -8,7 +8,6 @@ interface RiskHistoryChartProps {
 
 export function RiskHistoryChart({ points }: RiskHistoryChartProps) {
   const option = useMemo(() => {
-    const series = points.map((point) => [point.date, point.score]);
     return {
       backgroundColor: "transparent",
       tooltip: { trigger: "axis" },
@@ -32,7 +31,7 @@ export function RiskHistoryChart({ points }: RiskHistoryChartProps) {
         {
           type: "line",
           smooth: true,
-          data: series.map((item) => item[1]),
+          data: points.map((p) => p.score),
           areaStyle: {
             color: {
               type: "linear",

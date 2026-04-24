@@ -136,6 +136,7 @@ export function ScenariosPage() {
           <button
             key={tab.id}
             onClick={() => setActiveCategory(tab.id)}
+            aria-label={`Lọc kịch bản theo nhóm: ${tab.label}`}
             style={{
               minHeight: "36px",
               padding: "8px 14px",

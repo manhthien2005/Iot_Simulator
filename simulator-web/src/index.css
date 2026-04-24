@@ -1,7 +1,3 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 :root {
   --bg-base: #0a0e1a;
   --bg-surface: #111827;
@@ -176,9 +172,107 @@ button:disabled {
   }
 }
 
+/* ── Hover utility classes ───────────────────────────────────────── */
+.hover-dim:hover {
+  opacity: 0.85;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+}
+
+/* ── Responsive utility classes ──────────────────────────────────── */
+
+/* KPI grid: 4 → 2 → 1 columns */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+/* Section header with flex wrap */
+.section-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 1024px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  /* AppShell: stack layout */
+  .app-shell {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Sidebar: hidden on mobile by default, shown as overlay when open */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: var(--z-modal);
+    width: 240px !important;
+    transform: translateX(-100%);
+    transition: transform var(--duration-normal) var(--ease-default);
+  }
+
+  .sidebar--open {
+    transform: translateX(0);
+  }
+
+  .sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg-overlay);
+    z-index: calc(var(--z-modal) - 1);
+  }
+
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Full-width main content on mobile */
+  .app-main {
+    padding: 16px !important;
+  }
+
+  /* Stack section header on mobile */
+  .section-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* Modal responsive */
+  .modal-panel {
+    width: calc(100vw - 32px) !important;
+    max-width: 520px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-main {
+    padding: 12px !important;
+  }
+
+  .page-title {
+    font-size: 22px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
     transition: none !important;
   }
 }
+
+/* TODO: Add light theme support via @media (prefers-color-scheme: light) */

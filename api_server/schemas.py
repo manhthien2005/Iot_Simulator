@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date as Date
+from datetime import date as Date, datetime as DateTime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -296,12 +297,7 @@ class BatchActivateRequest(BaseModel):
     device_ids: list[int]
 
 
-# ── Settings schemas ──────────────────────────────────────────────────
-
-
 class RuntimeConfig(BaseModel):
-    """Current runtime configuration values (editable subset)."""
-
     tick_interval_seconds: float = Field(ge=0.1, le=60, description="Background tick interval")
     push_interval_seconds: int = Field(ge=1, le=300, description="Telemetry push interval")
     sleep_speed_factor: float = Field(ge=1, le=3600, description="Sleep phase speed-up factor")
@@ -309,23 +305,17 @@ class RuntimeConfig(BaseModel):
 
 
 class RuntimeConfigUpdate(BaseModel):
-    """PUT body for updating mutable runtime config."""
-
     tick_interval_seconds: float | None = Field(default=None, ge=0.1, le=60)
     push_interval_seconds: int | None = Field(default=None, ge=1, le=300)
     sleep_speed_factor: float | None = Field(default=None, ge=1, le=3600)
 
 
 class FeatureFlags(BaseModel):
-    """Feature flag toggles."""
-
     use_db_thresholds: bool = False
     pre_model_trigger_enabled: bool = False
 
 
 class SimulatorSettingsResponse(BaseModel):
-    """Full settings response combining all sections."""
-
     runtime: RuntimeConfig
     daytime_thresholds: dict[str, float]
     sleep_thresholds: dict[str, float]
@@ -335,3 +325,83 @@ class SimulatorSettingsResponse(BaseModel):
     db_daytime_thresholds: dict[str, float] | None = None
     db_sleep_thresholds: dict[str, float] | None = None
     threshold_source: str = "fallback"
+
+
+# ---------------------------------------------------------------------------
+# Admin device response models (typed replacements for raw ``dict`` returns)
+# ---------------------------------------------------------------------------
+
+
+class AdminDeviceResponse(BaseModel):
+    """Typed response for a device row from the production DB."""
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    uuid: str | UUID | None = None
+    user_id: int | None = None
+    user_email: str | None = None
+    user_full_name: str | None = None
+    height_cm: float | None = None
+    weight_kg: float | None = None
+    date_of_birth: str | Date | None = None
+    gender: str | None = None
+    device_name: str | None = None
+    device_type: str | None = None
+    model: str | None = None
+    firmware_version: str | None = None
+    serial_number: str | None = None
+    mac_address: str | None = None
+    mqtt_client_id: str | None = None
+    is_active: bool = False
+    battery_level: int | None = None
+    signal_strength: int | None = None
+    last_seen_at: str | DateTime | None = None
+    last_sync_at: str | DateTime | None = None
+    registered_at: str | DateTime | None = None
+    updated_at: str | DateTime | None = None
+    deleted_at: str | DateTime | None = None
+    # enriched by the router layer
+    is_sim_running: bool = False
+
+
+class AdminDeviceActionResponse(AdminDeviceResponse):
+    """Extended response returned by mutating admin actions (activate, assign, etc.)."""
+
+    message: str | None = None
+
+
+class AdminDeviceAssignResponse(AdminDeviceActionResponse):
+    """Response for the assign endpoint — includes the assigned user's email."""
+
+    user_email: str | None = None  # type: ignore[assignment]
+
+
+class AdminBatchActivateItem(BaseModel):
+    """Single item in a batch-activate response list."""
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    status: str
+    detail: str | None = None
+    # all AdminDeviceResponse fields are optional here (present only on success)
+    uuid: str | None = None
+    user_id: int | None = None
+    user_email: str | None = None
+    user_full_name: str | None = None
+    device_name: str | None = None
+    device_type: str | None = None
+    is_active: bool | None = None
+    message: str | None = None
+
+
+class AdminUserResponse(BaseModel):
+    """Typed response for user search."""
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    email: str
+    full_name: str | None = None
+    is_active: bool = True

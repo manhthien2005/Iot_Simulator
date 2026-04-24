@@ -1,3 +1,4 @@
+import React from "react";
 import type { VerificationResult } from "../../types/verification";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -15,7 +16,7 @@ function statusSeverity(status: VerificationResult["status"]) {
   return "offline" as const;
 }
 
-export function VerificationTable({ rows, onRefresh }: VerificationTableProps) {
+function VerificationTableInner({ rows, onRefresh }: VerificationTableProps) {
   return (
     <Card
       header={
@@ -63,3 +64,5 @@ function statusLabel(status: VerificationResult["status"]) {
   if (status === "FAILED") return "Lỗi publish";
   return "Chờ";
 }
+
+export const VerificationTable = React.memo(VerificationTableInner);

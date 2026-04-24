@@ -5,27 +5,8 @@ from math import isnan
 from random import Random
 from typing import Any
 
-import numpy as np
-
 from .dataset_registry import DatasetRegistry
 from .persona_engine import DeviceState, Persona
-
-
-def _to_scalar(value: Any, default: float = 0.0) -> float:
-    """Safely convert *value* to a Python float.
-
-    Handles plain numbers, 0-d numpy arrays, and multi-dimensional numpy
-    arrays (takes the first element).  Returns *default* when *value* is
-    ``None`` or conversion fails.
-    """
-    if value is None:
-        return default
-    try:
-        if isinstance(value, np.ndarray):
-            return float(value.flat[0]) if value.size > 0 else default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 SLEEP_PHASE_VITALS: dict[str, dict[str, float]] = {
@@ -133,13 +114,9 @@ class VitalsGenerator:
         else:
             temperature = round(float(temperature), 2)
         heart_rate = (baseline.get("heart_rate") or 72.0) + stress_adjust + noise
-        # HRV (RMSSD ms) — inversely correlated with heart_rate
-        # Typical range: 20-80ms for adults. Higher HR → lower HRV.
-        hrv = max(10.0, round(120.0 - 0.8 * heart_rate + self._rng.uniform(-5.0, 5.0), 1))
         return {
             "timestamp": baseline.get("timestamp"),
             "heart_rate": round(heart_rate, 2),
-            "hrv": hrv,
             "spo2": spo2,
             "temperature": temperature,
             "blood_pressure_sys": blood_pressure_sys,
@@ -219,33 +196,6 @@ class MotionGenerator:
     def __init__(self, registry: DatasetRegistry, seed: int = 13) -> None:
         self.registry = registry
         self._rng = Random(seed)
-        # Orientation state — simple gyro integration (drift acceptable for sim)
-        self._pitch: float = 0.0
-        self._roll: float = 0.0
-        self._yaw: float = 0.0
-
-    def _integrate_orientation(self, window: dict[str, Any]) -> None:
-        """Integrate gyro data into orientation and inject ``orientation`` key."""
-        gyro = window.get("gyro")
-        if isinstance(gyro, dict) and gyro:
-            gyro_x = _to_scalar(gyro.get("x", 0.0))
-            gyro_y = _to_scalar(gyro.get("y", 0.0))
-            gyro_z = _to_scalar(gyro.get("z", 0.0))
-        else:
-            gyro_x = _to_scalar(window.get("gyro_x", 0.0))
-            gyro_y = _to_scalar(window.get("gyro_y", 0.0))
-            gyro_z = _to_scalar(window.get("gyro_z", 0.0))
-
-        dt = 1.0  # ~1 second per tick
-        self._pitch = max(-90.0, min(90.0, self._pitch + gyro_x * dt))
-        self._roll = max(-90.0, min(90.0, self._roll + gyro_y * dt))
-        self._yaw = ((self._yaw + gyro_z * dt + 180.0) % 360.0) - 180.0
-
-        window["orientation"] = {
-            "pitch": round(self._pitch, 2),
-            "roll": round(self._roll, 2),
-            "yaw": round(self._yaw, 2),
-        }
 
     def generate(self, state: DeviceState) -> dict[str, Any] | None:
         activity = state.activity_state
@@ -259,12 +209,9 @@ class MotionGenerator:
             windows = self.registry.get_motion_windows()
         if not windows:
             return None
-        window = deepcopy(windows[self._rng.randrange(len(windows))])
-        self._integrate_orientation(window)
-        return window
+        return deepcopy(windows[self._rng.randrange(len(windows))])
 
-    def get_window_for_state(self, state: DeviceState) -> dict[str, Any] | None:
-        return self.generate(state)
+    # Removed dead code: get_window_for_state (alias for generate, 0 callers)
 
     def inject_fall(self, variant: str) -> dict[str, Any] | None:
         windows = self.registry.get_motion_windows(fall_variant=variant)
@@ -272,20 +219,5 @@ class MotionGenerator:
             windows = self.registry.get_motion_windows(activity="fall")
         if not windows:
             event = self.registry.get_fall_event(variant)
-            if event is None:
-                return None
-            result: dict[str, Any] = {"event": event}
-            result["orientation"] = {
-                "pitch": round(self._rng.uniform(-45.0, 45.0), 2),
-                "roll": round(self._rng.uniform(-30.0, 30.0), 2),
-                "yaw": round(self._yaw, 2),
-            }
-            return result
-        window = deepcopy(windows[self._rng.randrange(len(windows))])
-        # Fall events produce spike orientation values
-        window["orientation"] = {
-            "pitch": round(self._rng.uniform(-45.0, 45.0), 2),
-            "roll": round(self._rng.uniform(-30.0, 30.0), 2),
-            "yaw": round(self._yaw, 2),
-        }
-        return window
+            return {"event": event} if event else None
+        return deepcopy(windows[self._rng.randrange(len(windows))])

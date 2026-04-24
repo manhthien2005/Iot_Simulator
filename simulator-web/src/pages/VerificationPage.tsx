@@ -15,7 +15,7 @@ export function VerificationPage() {
     [activeSessionId, sessions]
   );
   const { data: verification, refetch } = useVerification(active?.id ?? null);
-  const logs = useLogStream(active?.id ?? null);
+  const { logs } = useLogStream(active?.id ?? null);
 
   return (
     <section style={{ display: "grid", gap: "14px" }}>

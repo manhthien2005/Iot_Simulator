@@ -20,7 +20,8 @@ async def handle_ws_logs(websocket: WebSocket, session_id: str) -> None:
                 entry: dict[str, Any] = await asyncio.wait_for(queue.get(), timeout=10.0)
                 await websocket.send_json(entry)
             except asyncio.TimeoutError:
-                await websocket.send_json({"level": "INFO", "session_id": session_id, "device_id": "system", "message": "keepalive", "ts": runtime.sessions.get(session_id).last_tick_at if session_id in runtime.sessions else None})
+                last_tick = runtime.get_session_last_tick(session_id)
+                await websocket.send_json({"level": "INFO", "session_id": session_id, "device_id": "system", "message": "keepalive", "ts": last_tick})
     except WebSocketDisconnect:
         pass
     finally:

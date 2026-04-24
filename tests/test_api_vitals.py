@@ -6,13 +6,22 @@ from unittest.mock import MagicMock, patch
 try:
     from fastapi.testclient import TestClient
 
-    from api_server.dependencies import (
-        DeviceRecord,
-        SessionRecord,
-        SimulatorRuntime,
-        reset_runtime_for_tests,
-    )
-    from api_server.main import app
+    try:
+        from Iot_Simulator.api_server.dependencies import (
+            DeviceRecord,
+            SessionRecord,
+            SimulatorRuntime,
+            reset_runtime_for_tests,
+        )
+        from Iot_Simulator.api_server.main import app
+    except ModuleNotFoundError:
+        from api_server.dependencies import (
+            DeviceRecord,
+            SessionRecord,
+            SimulatorRuntime,
+            reset_runtime_for_tests,
+        )
+        from api_server.main import app
 
     FASTAPI_READY = True
 except Exception:
@@ -124,7 +133,7 @@ def test_bp_stale_after_300s() -> None:
         },
     )
 
-    with patch("api_server.dependencies.monotonic", side_effect=[100.0, 401.2]):
+    with patch("Iot_Simulator.api_server.dependencies.monotonic", side_effect=[100.0, 401.2]):
         first = runtime.latest_vitals(device_id)
         record.last_tick_outputs = [
             {
@@ -158,6 +167,21 @@ def test_synthetic_mode_no_provenance() -> None:
     assert sample.sourceMode is None
 
 
+def test_latest_vitals_does_not_tick_active() -> None:
+    runtime, _, device_id = _build_runtime_with_payload(
+        source_mode="synthetic",
+        vitals={
+            "heart_rate": 72.0,
+            "spo2": 98.0,
+        },
+    )
+    runtime.tick_active = MagicMock(side_effect=AssertionError("latest_vitals must be read-only"))  # type: ignore[method-assign]
+
+    sample = runtime.latest_vitals(device_id)
+
+    assert sample.heartRate == 72.0
+
+
 def test_latest_vitals_maps_respiration_rate_alias() -> None:
     runtime, _, device_id = _build_runtime_with_payload(
         source_mode="synthetic",
@@ -171,6 +195,25 @@ def test_latest_vitals_maps_respiration_rate_alias() -> None:
     sample = runtime.latest_vitals(device_id)
 
     assert sample.respiratoryRate == 18.5
+
+
+def test_latest_vitals_prefers_generator_activity_label_for_sleeping() -> None:
+    runtime, _, device_id = _build_runtime_with_payload(
+        source_mode="synthetic",
+        vitals={
+            "heart_rate": 55.5,
+            "spo2": 97.0,
+            "respiratory_rate": 12.0,
+            "activity_label": "sleeping",
+            "sleep_phase": "deep",
+        },
+        activity_state="resting",
+    )
+
+    sample = runtime.latest_vitals(device_id)
+
+    assert sample.activityLabel == "sleeping"
+    assert sample.motionTag == "sleeping"
 
 
 def test_latest_vitals_prefers_newest_session_payload() -> None:
@@ -226,6 +269,22 @@ def test_verification_uses_measured_publish_latency() -> None:
     verification = runtime.verification(record.id)
 
     assert verification.latencyMs == 41
+
+
+def test_verification_does_not_tick_active() -> None:
+    runtime, record, _ = _build_runtime_with_payload(
+        source_mode="synthetic",
+        vitals={
+            "heart_rate": 72.0,
+            "spo2": 98.0,
+            "respiratory_rate": 18.0,
+        },
+    )
+    runtime.tick_active = MagicMock(side_effect=AssertionError("verification must be read-only"))  # type: ignore[method-assign]
+
+    verification = runtime.verification(record.id)
+
+    assert verification.deviceId == "device-1"
 
 
 if __name__ == "__main__":

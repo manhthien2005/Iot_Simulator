@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { VitalsSample } from "../../types/vitals";
 import type { SimulatedDevice } from "../../types/device";
 import { Badge } from "../ui/Badge";
 import { Card } from "../ui/Card";
+import { POLL_INTERVALS } from "../../config/defaults";
 
 interface MotionPreviewPanelProps {
   selectedDevice: SimulatedDevice | null;
@@ -22,18 +23,41 @@ function pseudoMetric(seed: string, offset: number, timeSlice: number, amplitude
   return base + micro;
 }
 
-export function MotionPreviewPanel({ selectedDevice, currentVitals }: MotionPreviewPanelProps) {
+export const MotionPreviewPanel = memo(function MotionPreviewPanel({ selectedDevice, currentVitals }: MotionPreviewPanelProps) {
   const [timeSlice, setTimeSlice] = useState(0);
   const isFalling = currentVitals?.activityLabel === "falling";
   const fillColor = isFalling ? "var(--severity-critical)" : "var(--accent-cyan)";
 
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startInterval = useCallback(() => {
+    if (intervalRef.current) return;
+    intervalRef.current = window.setInterval(() => {
+      setTimeSlice((prev) => prev + 1);
+    }, POLL_INTERVALS.motionPreview);
+  }, []);
+
+  const stopInterval = useCallback(() => {
+    if (intervalRef.current) {
+      window.clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     if (!selectedDevice) return;
-    const handle = window.setInterval(() => {
-      setTimeSlice((prev) => prev + 1);
-    }, 1000);
-    return () => window.clearInterval(handle);
-  }, [selectedDevice?.id]);
+    if (!document.hidden) startInterval();
+
+    const handler = () => {
+      if (document.hidden) stopInterval();
+      else startInterval();
+    };
+    document.addEventListener("visibilitychange", handler);
+    return () => {
+      stopInterval();
+      document.removeEventListener("visibilitychange", handler);
+    };
+  }, [selectedDevice?.id, startInterval, stopInterval]);
 
   const rows = useMemo<MotionRow[]>(() => {
     const seed = selectedDevice?.id ?? "none";
@@ -103,4 +127,4 @@ export function MotionPreviewPanel({ selectedDevice, currentVitals }: MotionPrev
       )}
     </Card>
   );
-}
+});

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { DeviceAssignPanel } from "../components/domain/DeviceAssignPanel";
 import { FallLab } from "../components/domain/FallLab";
 import { MotionPreviewPanel } from "../components/domain/MotionPreviewPanel";
@@ -11,7 +12,6 @@ import { applyScenarioPreset, fetchScenarios } from "../services/scenarioApi";
 
 import { useSessionVitalsStore } from "../stores/sessionVitalsStore";
 import { useSessionStore } from "../stores/sessionStore";
-import type { ScenarioOption } from "../types/scenario";
 import type { VitalsSample } from "../types/vitals";
 import { notify } from "../utils/toast";
 
@@ -20,32 +20,30 @@ export function SessionRunnerPage() {
   const preselectedDeviceId = searchParams.get("deviceId") ?? searchParams.get("device");
   const preselectedScenarioId = searchParams.get("scenario");
   const { data: devices = [] } = useDevices(2000);
-  const { data: sessions = [], refetch: refetchSessions } = useSessions();
-  const [scenarios, setScenarios] = useState<ScenarioOption[]>([]);
+  const { data: sessions = [] } = useSessions();
+  const { data: scenarios = [] } = useQuery({
+    queryKey: ["scenarios"],
+    queryFn: fetchScenarios,
+    staleTime: 60_000,
+  });
   const [scenarioByDevice, setScenarioByDevice] = useState<Record<string, string>>({});
   const [monitorDeviceId, setMonitorDeviceId] = useState<string>("");
 
-  const { activeSessionId, setActiveSession, streamSpeed, setSpeed, isPaused, setPaused } = useSessionStore();
-
-  useEffect(() => {
-    fetchScenarios().then(setScenarios).catch(() => setScenarios([]));
-  }, []);
+  const { activeSessionId, setActiveSession } = useSessionStore();
 
   const defaultScenarioId = useMemo(
     () => scenarios.find((scenario) => scenario.category !== "fall")?.id ?? scenarios[0]?.id ?? "normal_rest",
     [scenarios]
   );
 
-  const normalizeScenarioId = (scenarioId?: string | null) => {
+  const normalizeScenarioId = useCallback((scenarioId?: string | null) => {
     if (!scenarioId) return defaultScenarioId;
     const scenario = scenarios.find((item) => item.id === scenarioId);
     if (!scenario || scenario.category === "fall") {
       return defaultScenarioId;
     }
     return scenario.id;
-  };
-
-
+  }, [scenarios, defaultScenarioId]);
 
   useEffect(() => {
     if (!preselectedDeviceId || !preselectedScenarioId) return;
@@ -53,7 +51,7 @@ export function SessionRunnerPage() {
       ...prev,
       [preselectedDeviceId]: normalizeScenarioId(preselectedScenarioId),
     }));
-  }, [defaultScenarioId, preselectedDeviceId, preselectedScenarioId, scenarios]);
+  }, [normalizeScenarioId, preselectedDeviceId, preselectedScenarioId]);
 
   useEffect(() => {
     if (!devices.length) return;
@@ -70,7 +68,7 @@ export function SessionRunnerPage() {
       }
       return changed ? next : prev;
     });
-  }, [defaultScenarioId, devices, scenarios]);
+  }, [devices, normalizeScenarioId]);
 
   useEffect(() => {
     if (!devices.length) {
@@ -90,7 +88,6 @@ export function SessionRunnerPage() {
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions.find((session) => session.status === "running") ?? null,
     [activeSessionId, sessions]
   );
-  const running = activeSession?.status === "running" && !isPaused;
   const currentVitals = useSessionVitalsStore((state) => {
     if (state.activeDeviceId !== monitorDeviceId) {
       return null;
@@ -100,16 +97,20 @@ export function SessionRunnerPage() {
 
   // Removing obsolete start/stop logic since sessions are managed per device from the DevicesPage
 
-  const changeScenario = async (deviceId: string, scenarioId: string) => {
+  const [isApplying, setIsApplying] = useState(false);
+  const changeScenario = useCallback(async (deviceId: string, scenarioId: string) => {
     setScenarioByDevice((prev) => ({ ...prev, [deviceId]: scenarioId }));
+    if (activeSession?.status !== "running") return;
+    setIsApplying(true);
     try {
       await applyScenarioPreset(deviceId, scenarioId);
-      notify.success("Đã lưu và áp dụng kịch bản cho thiết bị.");
-      await refetchSessions();
+      notify.success("Đã áp dụng kịch bản cho thiết bị đang chạy.");
     } catch {
       notify.error("Không áp dụng được kịch bản cho thiết bị này.");
+    } finally {
+      setIsApplying(false);
     }
-  };
+  }, [activeSession?.status]);
 
   const activeDevices = useMemo(() => devices.filter((d) => d.isOnline), [devices]);
 
@@ -138,6 +139,7 @@ export function SessionRunnerPage() {
         scenarios={scenarios}
         scenarioByDevice={scenarioByDevice}
         onScenarioChange={changeScenario}
+        isApplying={isApplying}
       />
 
       <SessionVitalsPanel

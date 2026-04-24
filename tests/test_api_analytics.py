@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 try:
     from fastapi.testclient import TestClient
 
-    from api_server.dependencies import reset_runtime_for_tests
-    from api_server.main import app
+    try:
+        from Iot_Simulator.api_server.dependencies import SimulatorRuntime, reset_runtime_for_tests
+        from Iot_Simulator.api_server.main import app
+    except ModuleNotFoundError:
+        from api_server.dependencies import SimulatorRuntime, reset_runtime_for_tests
+        from api_server.main import app
 
     FASTAPI_READY = True
 except Exception:
@@ -34,6 +39,22 @@ class TestApiAnalytics(unittest.TestCase):
         self.assertIn(payload["realismMode"], {"fallback", "real", "edf"})
         self.assertGreater(len(payload["phases"]), 0)
         self.assertGreater(len(payload["history"]), 0)
+
+    def test_sleep_session_get_does_not_push_sleep_data(self) -> None:
+        with patch.object(SimulatorRuntime, "_push_sleep_to_backend") as push_mock:
+            response = self.client.get(f"/api/sim/analytics/sleep?deviceId={self.device_id}")
+
+        self.assertEqual(response.status_code, 200)
+        push_mock.assert_not_called()
+
+    def test_sleep_push_endpoint_pushes_explicitly(self) -> None:
+        with patch.object(SimulatorRuntime, "_push_sleep_to_backend") as push_mock:
+            response = self.client.post(f"/api/sim/analytics/sleep/{self.device_id}/push")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["deviceId"], self.device_id)
+        push_mock.assert_called_once()
 
     def test_risk_trigger_and_fetch(self) -> None:
         trigger = self.client.post("/api/sim/analytics/risk/trigger", json={"device_id": self.device_id})

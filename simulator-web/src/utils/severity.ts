@@ -1,14 +1,3 @@
-export function getSeverityColor(severity: "normal" | "warning" | "critical" | "invalid"): string {
-  if (severity === "critical") return "#be123c";
-  if (severity === "warning") return "#c77005";
-  if (severity === "invalid") return "#475569";
-  return "#1f7a1f";
-}
-
-export function getSeverityLabel(severity: "normal" | "warning" | "critical" | "invalid"): string {
-  return severity.toUpperCase();
-}
-
 export function getVitalSeverity(
   vital: "heartRate" | "spo2" | "temperature" | "bloodPressureSys",
   value: number | null | undefined
