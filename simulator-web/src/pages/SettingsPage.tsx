@@ -100,32 +100,73 @@ function RuntimeSection({
 /* ── Section: Thresholds (read-only, daytime vs sleep side-by-side) ── */
 
 function ThresholdsSection({ data }: { data: SimulatorSettingsResponse }) {
+  const hasDb = data.db_daytime_thresholds !== null || data.db_sleep_thresholds !== null;
   const allKeys = Array.from(
-    new Set([...Object.keys(data.daytime_thresholds), ...Object.keys(data.sleep_thresholds)])
+    new Set([
+      ...Object.keys(data.daytime_thresholds),
+      ...Object.keys(data.sleep_thresholds),
+      ...Object.keys(data.db_daytime_thresholds ?? {}),
+      ...Object.keys(data.db_sleep_thresholds ?? {}),
+    ])
   );
 
   return (
-    <Card header={<strong>Ngưỡng Vitals (Read-Only)</strong>}>
-      <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "8px" }}>
-        Ngưỡng sẽ được quản lý qua DB khi MASTER_PLAN Phase 3 hoàn tất. Hiện tại chỉ hiển thị.
-      </p>
+    <Card
+      header={
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <strong>Ngưỡng Vitals (Read-Only)</strong>
+          <span
+            style={{
+              fontSize: "12px",
+              padding: "2px 8px",
+              borderRadius: "var(--radius-sm)",
+              background: data.threshold_source === "db" ? "var(--accent-green-dim, #1a3a2a)" : "var(--accent-yellow-dim, #3a3520)",
+              color: data.threshold_source === "db" ? "var(--accent-green, #4ade80)" : "var(--accent-yellow, #facc15)",
+            }}
+          >
+            {data.threshold_source === "db" ? "🟢 DB Thresholds" : "🟡 Fallback"}
+          </span>
+        </div>
+      }
+    >
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border-default)" }}>
               <th style={thStyle}>Chỉ số</th>
-              <th style={thStyle}>Ban ngày</th>
-              <th style={thStyle}>Ban đêm</th>
+              <th style={thStyle}>{hasDb ? "Fallback (Ngày)" : "Ban ngày"}</th>
+              {hasDb && <th style={thStyle}>DB (Ngày)</th>}
+              <th style={thStyle}>{hasDb ? "Fallback (Đêm)" : "Ban đêm"}</th>
+              {hasDb && <th style={thStyle}>DB (Đêm)</th>}
             </tr>
           </thead>
           <tbody>
-            {allKeys.map((key) => (
-              <tr key={key} style={{ borderBottom: "1px solid var(--border-default)" }}>
-                <td style={tdStyle}>{labelFor(key)}</td>
-                <td style={tdValueStyle}>{data.daytime_thresholds[key] ?? "—"}</td>
-                <td style={tdValueStyle}>{data.sleep_thresholds[key] ?? "—"}</td>
-              </tr>
-            ))}
+            {allKeys.map((key) => {
+              const fbDay = data.daytime_thresholds[key];
+              const fbNight = data.sleep_thresholds[key];
+              const dbDay = data.db_daytime_thresholds?.[key];
+              const dbNight = data.db_sleep_thresholds?.[key];
+              const dayDiff = hasDb && dbDay !== undefined && fbDay !== undefined && dbDay !== fbDay;
+              const nightDiff = hasDb && dbNight !== undefined && fbNight !== undefined && dbNight !== fbNight;
+
+              return (
+                <tr key={key} style={{ borderBottom: "1px solid var(--border-default)" }}>
+                  <td style={tdStyle}>{labelFor(key)}</td>
+                  <td style={tdValueStyle}>{fbDay ?? "—"}</td>
+                  {hasDb && (
+                    <td style={{ ...tdValueStyle, color: dayDiff ? "var(--accent-cyan)" : undefined }}>
+                      {dbDay ?? "—"}
+                    </td>
+                  )}
+                  <td style={tdValueStyle}>{fbNight ?? "—"}</td>
+                  {hasDb && (
+                    <td style={{ ...tdValueStyle, color: nightDiff ? "var(--accent-cyan)" : undefined }}>
+                      {dbNight ?? "—"}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -209,14 +250,35 @@ function CollapsibleJson({
 /* ── Section: Feature Flags ─────────────────────────────────────────── */
 
 function FeatureFlagsSection({ data }: { data: SimulatorSettingsResponse }) {
+  const { use_db_thresholds, pre_model_trigger_enabled } = data.feature_flags;
+
+  let triggerStatusText: string;
+  let triggerStatusColor: string;
+  if (pre_model_trigger_enabled && use_db_thresholds) {
+    triggerStatusText = "Active mode — trigger đang chạy với DB thresholds";
+    triggerStatusColor = "var(--accent-green, #4ade80)";
+  } else if (pre_model_trigger_enabled) {
+    triggerStatusText = "Shadow mode — trigger chạy nhưng chưa dùng DB thresholds";
+    triggerStatusColor = "var(--accent-yellow, #facc15)";
+  } else {
+    triggerStatusText = "Off — trigger chưa bật";
+    triggerStatusColor = "var(--text-muted)";
+  }
+
   return (
     <Card header={<strong>Feature Flags</strong>}>
-      <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 0" }}>
-        <ToggleSwitch checked={data.feature_flags.use_db_thresholds} disabled />
-        <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>USE_DB_THRESHOLDS</span>
-        <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-          (Sẽ bật được khi MASTER_PLAN Phase 3 hoàn tất)
-        </span>
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 0" }}>
+          <ToggleSwitch checked={use_db_thresholds} />
+          <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>USE_DB_THRESHOLDS</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 0" }}>
+          <ToggleSwitch checked={pre_model_trigger_enabled} />
+          <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>PRE_MODEL_TRIGGER_ENABLED</span>
+        </div>
+        <p style={{ fontSize: "12px", color: triggerStatusColor, margin: "4px 0 0 0" }}>
+          {triggerStatusText}
+        </p>
       </div>
     </Card>
   );

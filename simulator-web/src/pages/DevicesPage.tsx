@@ -63,13 +63,13 @@ export function DevicesPage() {
 
   const handleActivateSim = async (device: DbDevice) => {
     await activateDbDevice(device.id);
-    notify.success(`Đã bật sim cho ${device.device_name} — hệ thống đang truyền dữ liệu`);
+    notify.success(`Đã bật SIM cho ${device.device_name}. Chờ xác minh telemetry.`);
     await invalidate();
   };
 
   const handleDeactivateSim = async (device: DbDevice) => {
     await deactivateDbDevice(device.id);
-    notify.warning(`Đã tắt sim cho ${device.device_name} — mobile app sẽ mất dữ liệu`);
+    notify.warning(`Đã tắt SIM cho ${device.device_name}. Phiên sẽ dừng gửi dữ liệu.`);
     await invalidate();
   };
 

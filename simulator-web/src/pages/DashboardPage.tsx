@@ -26,7 +26,7 @@ export function DashboardPage() {
         ) : (
           <>
             <KpiCard title="Thiết bị" value={summary?.totalDevices ?? 0} subtitle="đã đăng ký" />
-            <KpiCard title="Đang hoạt động" value={summary?.activeDevices ?? 0} subtitle="đang truyền dữ liệu" />
+            <KpiCard title="Đang hoạt động" value={summary?.activeDevices ?? 0} subtitle="phiên đang chạy" />
             <KpiCard title="Cảnh báo" value={summary?.alertsLastHour ?? 0} subtitle="trong 1 giờ gần nhất" />
             <KpiCard title="Độ trễ" value={`${summary?.avgLatencyMs ?? 0}ms`} subtitle="độ trễ phát dữ liệu" />
           </>

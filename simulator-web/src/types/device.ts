@@ -36,6 +36,7 @@ export interface SimulatedDevice {
   hasPendingSync: boolean;
   state: DeviceState;
   boundDbDeviceId: number | null;
+  currentScenarioId?: string | null;
   personaConfig?: PersonaConfig;
   persona_config?: PersonaConfig;
 }

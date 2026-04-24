@@ -56,6 +56,23 @@ export function SessionRunnerPage() {
   }, [defaultScenarioId, preselectedDeviceId, preselectedScenarioId, scenarios]);
 
   useEffect(() => {
+    if (!devices.length) return;
+    setScenarioByDevice((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const device of devices) {
+        const scenarioId = normalizeScenarioId(device.currentScenarioId);
+        if (!scenarioId) continue;
+        if (next[device.id] !== scenarioId) {
+          next[device.id] = scenarioId;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [defaultScenarioId, devices, scenarios]);
+
+  useEffect(() => {
     if (!devices.length) {
       setMonitorDeviceId("");
       return;
@@ -85,10 +102,10 @@ export function SessionRunnerPage() {
 
   const changeScenario = async (deviceId: string, scenarioId: string) => {
     setScenarioByDevice((prev) => ({ ...prev, [deviceId]: scenarioId }));
-    if (activeSession?.status !== "running") return;
     try {
       await applyScenarioPreset(deviceId, scenarioId);
-      notify.success("Đã áp dụng kịch bản cho thiết bị đang chạy.");
+      notify.success("Đã lưu và áp dụng kịch bản cho thiết bị.");
+      await refetchSessions();
     } catch {
       notify.error("Không áp dụng được kịch bản cho thiết bị này.");
     }
@@ -123,7 +140,16 @@ export function SessionRunnerPage() {
         onScenarioChange={changeScenario}
       />
 
-      <SessionVitalsPanel devices={activeDevices} deviceId={monitorDeviceId} onDeviceChange={setMonitorDeviceId} />
+      <SessionVitalsPanel
+        devices={activeDevices}
+        deviceId={monitorDeviceId}
+        runtimeTickAt={
+          sessions.find((session) => session.status === "running" && session.deviceIds.includes(monitorDeviceId))?.lastTickAt
+          ?? sessions.find((session) => session.id === activeSessionId && session.deviceIds.includes(monitorDeviceId))?.lastTickAt
+          ?? null
+        }
+        onDeviceChange={setMonitorDeviceId}
+      />
 
       <FallLab devices={activeDevices} />
       <MotionPreviewPanel selectedDevice={activeDevices.find((item) => item.id === monitorDeviceId) ?? null} currentVitals={currentVitals} />

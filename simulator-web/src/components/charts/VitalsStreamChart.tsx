@@ -69,7 +69,7 @@ export function VitalsStreamChart({ data }: VitalsStreamChartProps) {
     <div style={{ display: "grid", gap: "8px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <strong>Sinh hiệu trực tiếp (60 giây)</strong>
-        {isStale ? <span className="stale-badge">TRỄ DỮ LIỆU</span> : null}
+        {isStale ? <span className="stale-badge">CHẬM CẬP NHẬT</span> : null}
       </div>
       <ReactECharts option={option} notMerge={false} lazyUpdate style={{ height: "280px", width: "100%" }} />
     </div>

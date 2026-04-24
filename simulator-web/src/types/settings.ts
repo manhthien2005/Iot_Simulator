@@ -13,6 +13,7 @@ export interface RuntimeConfigUpdate {
 
 export interface FeatureFlags {
   use_db_thresholds: boolean;
+  pre_model_trigger_enabled: boolean;
 }
 
 export interface SimulatorSettingsResponse {
@@ -22,4 +23,7 @@ export interface SimulatorSettingsResponse {
   rules_config: Record<string, unknown> | null;
   fall_config: Record<string, unknown> | null;
   feature_flags: FeatureFlags;
+  db_daytime_thresholds: Record<string, number> | null;
+  db_sleep_thresholds: Record<string, number> | null;
+  threshold_source: string;
 }
