@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "1.0",
+  "tickIntervalSeconds": 1.0,
+  "pushIntervalSeconds": 5,
+  "sleepSpeedFactor": 60.0
+}

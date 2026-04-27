@@ -5,6 +5,13 @@ export async function fetchVerification(sessionId: string): Promise<Verification
   const response = await apiClient.get<VerificationResult>("/api/sim/verification/latest", {
     params: { sessionId }
   });
-  return response.data;
+  return { ...response.data, sessionId };
+}
+
+export async function fetchAllVerifications(sessionIds: string[]): Promise<VerificationResult[]> {
+  const results = await Promise.allSettled(sessionIds.map(fetchVerification));
+  return results
+    .filter((r): r is PromiseFulfilledResult<VerificationResult> => r.status === "fulfilled")
+    .map((r) => r.value);
 }
 

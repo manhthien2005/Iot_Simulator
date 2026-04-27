@@ -130,6 +130,34 @@ class InjectEventRequest(BaseModel):
     variant: str | None = None
 
 
+PipelineStageStatusValue = Literal["ok", "pending", "failed", "skipped"]
+PipelineStageKeyValue = Literal[
+    "device_registered",
+    "session_started",
+    "telemetry_generated",
+    "telemetry_published",
+    "risk_evaluated",
+    "alert_dispatched",
+]
+
+
+class PipelineStage(BaseModel):
+    """One step of the device → publish → downstream evidence trail.
+
+    The frontend renders an ordered strip of these so an operator can
+    see exactly where a session is in the pipeline (or where it broke).
+    `at` is populated only for stages that have produced an artifact —
+    e.g. `telemetry_published.at` mirrors the most recent successful
+    publish timestamp.
+    """
+
+    key: PipelineStageKeyValue
+    label: str
+    status: PipelineStageStatusValue
+    detail: str | None = None
+    at: str | None = None
+
+
 class VerificationResult(BaseModel):
     deviceId: str
     vitalsReceived: bool
@@ -138,6 +166,13 @@ class VerificationResult(BaseModel):
     latencyMs: int
     status: VerificationStatusValue
     lastCheckedAt: str
+    # Module E additions ----------------------------------------------------
+    stages: list[PipelineStage] = Field(default_factory=list)
+    failureReason: str | None = None
+    lastGoodPublishAt: str | None = None
+    lastPublishAttemptAt: str | None = None
+    publishAckCount: int = 0
+    publishAttemptCount: int = 0
 
 
 class LogEntry(BaseModel):
@@ -146,6 +181,84 @@ class LogEntry(BaseModel):
     device_id: str
     message: str
     ts: str
+
+
+# ---------------------------------------------------------------------------
+# Module C — Sessions / Fall Lab. Motion + fall-state evidence contract.
+#
+# `MotionLatest` mirrors the most recent `motion` block emitted by the
+# simulator's `MotionGenerator`; arrays are short (~100 samples) and the
+# full vector is sent so the FE can render a sparkline without faking it.
+#
+# `FallState` is derived: `deviceState` is the canonical FSM state from
+# `SimulatedDevice.state`, `lastFallEventAt` is the timestamp of the most
+# recent `fall_detected` event, and `countdownRemainingSec` is computed
+# from that timestamp + the SOS countdown window.  No FE-only state.
+# ---------------------------------------------------------------------------
+
+
+class MotionLatest(BaseModel):
+    """Most recent motion window emitted for `deviceId` in `sessionId`.
+
+    The arrays are kept verbatim from the dataset registry so the frontend
+    can render the same trace the dataset produced (no synthetic fallback).
+    `accelMag` is the precomputed magnitude that the fall pipeline uses.
+    """
+
+    deviceId: str
+    sessionId: str
+    emittedAt: str
+    activityState: str
+    fallVariant: str | None = None
+    sampleRate: float | None = None
+    accelX: list[float] = Field(default_factory=list)
+    accelY: list[float] = Field(default_factory=list)
+    accelZ: list[float] = Field(default_factory=list)
+    accelMag: list[float] = Field(default_factory=list)
+    gyroX: list[float] = Field(default_factory=list)
+    gyroY: list[float] = Field(default_factory=list)
+    gyroZ: list[float] = Field(default_factory=list)
+
+
+FallStateValue = Literal[
+    "idle",
+    "fall_detected",
+    "fall_countdown",
+    "sos_active",
+    "fall_resolved",
+]
+
+
+class FallEventEntry(BaseModel):
+    """Lightweight fall-event reference for the operator panel."""
+
+    id: str
+    timestamp: str
+    eventType: str
+    severity: AlertSeverityValue
+    variant: str | None = None
+
+
+class FallState(BaseModel):
+    """Operator-visible fall pipeline state for one focal device.
+
+    All fields are derived from existing runtime state — no extra storage.
+    The frontend uses `countdownRemainingSec` to render an evidence-driven
+    countdown bar instead of a FE-only `setInterval`.
+    """
+
+    deviceId: str
+    sessionId: str
+    deviceState: DeviceStateValue
+    activityState: str
+    fallVariant: str | None = None
+    fallState: FallStateValue
+    lastFallEventAt: str | None = None
+    countdownStartedAt: str | None = None
+    countdownRemainingSec: int = 0
+    countdownTotalSec: int = 0
+    sosActive: bool = False
+    recentFallEvents: list[FallEventEntry] = Field(default_factory=list)
 
 
 class AlertEvent(BaseModel):
@@ -310,9 +423,43 @@ class RuntimeConfigUpdate(BaseModel):
     sleep_speed_factor: float | None = Field(default=None, ge=1, le=3600)
 
 
+TriggerModeValue = Literal["off", "shadow", "active"]
+PersistenceSourceValue = Literal["file", "defaults"]
+
+
 class FeatureFlags(BaseModel):
+    """Feature-flag block exposed by ``/api/sim/settings``.
+
+    ``triggerMode`` is the canonical, server-derived view of how the pre-model
+    trigger pipeline is running.  Module F requires the FE to consume it
+    instead of guessing from booleans (plan §10.4 / 1.2 #2):
+
+    * ``off``    — ``PRE_MODEL_TRIGGER_ENABLED`` is off (or the orchestrator
+      failed to wire); no rule evaluation happens.
+    * ``shadow`` — pipeline is on, ``enable_model_calls=False``: rules + fall
+      detection run locally, but the simulator never calls the model API.
+    * ``active`` — pipeline is on, ``enable_model_calls=True``: rules run
+      and the simulator escalates to the model API when triggered.
+
+    Legacy booleans ``use_db_thresholds`` and ``pre_model_trigger_enabled``
+    are kept on the response for one release cycle so existing FE code keeps
+    compiling.  Module F.6 retires them in favour of ``triggerMode`` +
+    ``thresholdSource``.
+    """
+
     use_db_thresholds: bool = False
     pre_model_trigger_enabled: bool = False
+    trigger_mode: TriggerModeValue = "off"
+    enable_model_calls: bool = False
+
+
+class RuntimePersistenceBlock(BaseModel):
+    """Where the live runtime config came from (Module F.1)."""
+
+    source: PersistenceSourceValue = "defaults"
+    path: str = ""
+    last_saved_at: str | None = None
+    last_error: str | None = None
 
 
 class SimulatorSettingsResponse(BaseModel):
@@ -325,6 +472,19 @@ class SimulatorSettingsResponse(BaseModel):
     db_daytime_thresholds: dict[str, float] | None = None
     db_sleep_thresholds: dict[str, float] | None = None
     threshold_source: str = "fallback"
+    persistence: RuntimePersistenceBlock = Field(default_factory=RuntimePersistenceBlock)
+
+
+class RuntimeConfigSaveResponse(BaseModel):
+    """Response shape for ``PUT /api/sim/settings/runtime`` (Module F.2).
+
+    Carries the live config plus the persistence echo so the FE can render
+    "Đã lưu lúc HH:MM — vẫn áp dụng sau khi restart" right after the call
+    completes, without waiting for the next ``/api/sim/settings`` poll.
+    """
+
+    runtime: RuntimeConfig
+    persistence: RuntimePersistenceBlock
 
 
 # ---------------------------------------------------------------------------
@@ -405,3 +565,75 @@ class AdminUserResponse(BaseModel):
     email: str
     full_name: str | None = None
     is_active: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Health payload v2 — single source of truth consumed by the dashboard hero,
+# settings, and verification surfaces.  See Phase 0 of the UX refactor plan.
+# ---------------------------------------------------------------------------
+
+
+HealthRuntimeStateValue = Literal["running", "idle", "stopped", "degraded"]
+HealthBackendStateValue = Literal["connected", "down", "slow", "unknown"]
+HealthDatabaseStateValue = Literal["connected", "down"]
+HealthModelApiStateValue = Literal["ready", "unavailable", "unknown"]
+HealthPreTriggerModeValue = Literal["off", "shadow", "active"]
+HealthThresholdSourceValue = Literal["db", "fallback", "unavailable"]
+HealthScoreSourceValue = Literal["ai", "heuristic"]
+
+
+class HealthRuntimeBlock(BaseModel):
+    state: HealthRuntimeStateValue = "running"
+    version: str = "simulator-api-0.4.0"
+    uptimeSeconds: int = 0
+
+
+class HealthDatabaseBlock(BaseModel):
+    state: HealthDatabaseStateValue = "connected"
+    lastCheckMs: int | None = None
+
+
+class HealthBackendBlock(BaseModel):
+    state: HealthBackendStateValue = "unknown"
+    url: str = ""
+    lastLatencyMs: int | None = None
+    lastError: str | None = None
+
+
+class HealthModelApiBlock(BaseModel):
+    state: HealthModelApiStateValue = "unknown"
+    url: str = "http://localhost:8001"
+    lastCheckedAt: str | None = None
+    lastScoreSource: HealthScoreSourceValue = "heuristic"
+    lastError: str | None = None
+
+
+class HealthPreTriggerBlock(BaseModel):
+    mode: HealthPreTriggerModeValue = "off"
+    enableModelCalls: bool = False
+    thresholdSource: HealthThresholdSourceValue = "fallback"
+
+
+class HealthTelemetryBlock(BaseModel):
+    devicesSimulated: int = 0
+    sessionsRunning: int = 0
+    alertsLastHour: int = 0
+    avgPublishLatencyMs: int = 0
+
+
+class HealthPayloadV2(BaseModel):
+    """Structured health payload returned by ``/api/sim/health`` (v2).
+
+    The legacy flat keys (``status``/``api``/``backend``/``mqtt``/``db``/``version``)
+    are still emitted on the same response object during the deprecation window
+    so existing consumers (``HealthStatusPanel`` etc.) keep working.
+    """
+
+    schemaVersion: Literal["2.0"] = "2.0"
+    runtime: HealthRuntimeBlock = Field(default_factory=HealthRuntimeBlock)
+    database: HealthDatabaseBlock = Field(default_factory=HealthDatabaseBlock)
+    backend: HealthBackendBlock = Field(default_factory=HealthBackendBlock)
+    modelApi: HealthModelApiBlock = Field(default_factory=HealthModelApiBlock)
+    preTrigger: HealthPreTriggerBlock = Field(default_factory=HealthPreTriggerBlock)
+    telemetry: HealthTelemetryBlock = Field(default_factory=HealthTelemetryBlock)
+    degradedReasons: list[str] = Field(default_factory=list)

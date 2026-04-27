@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal
 
 from api_server.dependencies import SimulatorRuntime, get_runtime
@@ -14,11 +14,42 @@ from api_server.schemas import (
     BackfillSleepResponse,
     PushSleepDateRequest,
     PushSleepDateResponse,
+    RiskInjectRequest,
 )
 
 _logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["scenarios"])
+
+
+# ---------------------------------------------------------------------------
+# Module B — Scenario manifest contract.
+#
+# `KeySignal` describes one observable change a scenario produces.  The FE
+# renders these as chips so an operator can pick the right scenario without
+# reading prose.  `direction` is optional ("up"/"down"/"flat"); `target`
+# holds the FSM key the signal lands on (vitals key, sleep_phase, etc.).
+# `followUp` declares any side-effects the scenario triggers when applied
+# — the FE no longer has to maintain a parallel `if (scenarioId === ...)`
+# chain to know that `hypoxia_critical` injects a HIGH risk score.
+# ---------------------------------------------------------------------------
+
+
+KeySignalDirection = Literal["up", "down", "flat"]
+ScenarioSeverity = Literal["normal", "warning", "critical"]
+ScenarioFollowUpKind = Literal["fall_event", "risk_inject", "sleep_phase", "wake"]
+
+
+class KeySignal(BaseModel):
+    label: str
+    direction: KeySignalDirection | None = None
+    target: str | None = None
+    severity: ScenarioSeverity = "normal"
+
+
+class ScenarioFollowUp(BaseModel):
+    kind: ScenarioFollowUpKind
+    detail: str
 
 
 class ScenarioOption(BaseModel):
@@ -27,16 +58,25 @@ class ScenarioOption(BaseModel):
     category: Literal["vitals", "fall", "sleep", "risk"]
     description: str
     expectedOutcome: str
+    severity: ScenarioSeverity = "normal"
+    keySignals: list[KeySignal] = Field(default_factory=list)
+    followUp: list[ScenarioFollowUp] = Field(default_factory=list)
 
 
 BUILT_IN_SCENARIOS: list[ScenarioOption] = [
-    # Vitals
+    # ── Vitals ─────────────────────────────────────────────────────────
     ScenarioOption(
         id="normal_rest",
         name="Nghỉ ngơi bình thường",
         category="vitals",
         description="Trạng thái nghỉ khỏe mạnh, nhịp tim 60-80 bpm và SpO2 98-99%.",
         expectedOutcome="Sinh hiệu duy trì ổn định ở mức bình thường.",
+        severity="normal",
+        keySignals=[
+            KeySignal(label="HR 60-80 bpm", direction="flat", target="heart_rate"),
+            KeySignal(label="SpO2 98-99%", direction="flat", target="spo2"),
+            KeySignal(label="Activity: resting", target="activity_state"),
+        ],
     ),
     ScenarioOption(
         id="tachycardia_warning",
@@ -44,6 +84,11 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
         category="vitals",
         description="Nhịp tim tăng cao kéo dài theo mô phỏng trạng thái căng thẳng.",
         expectedOutcome="Vùng cảnh báo nhịp tim được kích hoạt và mức rủi ro tăng.",
+        severity="warning",
+        keySignals=[
+            KeySignal(label="HR ↑ (110-140 bpm)", direction="up", target="heart_rate", severity="warning"),
+            KeySignal(label="Stress state: stress", target="stress_state", severity="warning"),
+        ],
     ),
     ScenarioOption(
         id="hypoxia_critical",
@@ -51,6 +96,17 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
         category="vitals",
         description="Xu hướng SpO2 giảm xuống dưới ngưỡng an toàn.",
         expectedOutcome="Sinh cảnh báo mức nguy cấp và ghi nhận vào dòng thời gian sự kiện.",
+        severity="critical",
+        keySignals=[
+            KeySignal(label="SpO2 ↓ (<90%)", direction="down", target="spo2", severity="critical"),
+            KeySignal(label="Risk: general HIGH", target="risk_level", severity="critical"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="risk_inject",
+                detail="general / HIGH @ score 0.78",
+            ),
+        ],
     ),
     ScenarioOption(
         id="hypertension_moderate",
@@ -58,14 +114,30 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
         category="vitals",
         description="Huyết áp tăng vượt nền cơ bản với mức kéo dài trung bình.",
         expectedOutcome="Trạng thái cảnh báo xuất hiện kèm chỉ số huyết áp tâm thu tăng.",
+        severity="warning",
+        keySignals=[
+            KeySignal(label="BP_sys ↑ (140-160)", direction="up", target="blood_pressure_sys", severity="warning"),
+        ],
     ),
-    # Fall
+    # ── Fall ───────────────────────────────────────────────────────────
     ScenarioOption(
         id="fall_high_confidence",
         name="Té ngã (độ tin cậy cao)",
         category="fall",
         description="Tín hiệu té ngã rõ ràng, có va chạm và bất động sau đó.",
         expectedOutcome="Sự kiện té ngã được phát hiện và luồng đếm ngược được kích hoạt.",
+        severity="critical",
+        keySignals=[
+            KeySignal(label="Fall variant: fall_1", target="fall_variant", severity="critical"),
+            KeySignal(label="Activity: fall → recovery", target="activity_state", severity="critical"),
+            KeySignal(label="Device → fall_countdown", target="device.state", severity="critical"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="fall_event",
+                detail="fall_detected variant=fall_1 (BE auto-injects)",
+            ),
+        ],
     ),
     ScenarioOption(
         id="fall_false_alarm",
@@ -73,6 +145,17 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
         category="fall",
         description="Chuyển động đột ngột giống té ngã nhưng hồi phục nhanh.",
         expectedOutcome="Không duy trì trạng thái nguy cấp sau khi hồi phục.",
+        severity="warning",
+        keySignals=[
+            KeySignal(label="Fall variant: fall_brief", target="fall_variant", severity="warning"),
+            KeySignal(label="Activity: fall → recovery (nhanh)", target="activity_state"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="fall_event",
+                detail="fall_detected variant=fall_brief (BE auto-injects)",
+            ),
+        ],
     ),
     ScenarioOption(
         id="fall_no_response",
@@ -80,8 +163,19 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
         category="fall",
         description="Xảy ra té ngã nhưng không có phản hồi phục hồi trong thời gian đếm ngược.",
         expectedOutcome="Luồng leo thang cảnh báo tiếp tục và mục xác minh hiển thị đường đi cảnh báo.",
+        severity="critical",
+        keySignals=[
+            KeySignal(label="Fall variant: fall_no_response", target="fall_variant", severity="critical"),
+            KeySignal(label="Device → sos_active sau countdown", target="device.state", severity="critical"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="fall_event",
+                detail="fall_detected variant=fall_no_response (BE auto-injects)",
+            ),
+        ],
     ),
-    # Sleep
+    # ── Sleep ──────────────────────────────────────────────────────────
     ScenarioOption(
         id="good_sleep_night",
         name="Đêm ngủ tốt",
@@ -96,6 +190,18 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
             "Điểm giấc ngủ ≥85, hiệu suất ≥85%, sinh hiệu giảm chuẩn AASM. "
             "activityLabel = 'sleeping', heart_rate ≈ 47-55 bpm lúc Deep sleep."
         ),
+        severity="normal",
+        keySignals=[
+            KeySignal(label="Sleep phases: Light → Deep → REM", target="sleep_phase"),
+            KeySignal(label="HR ↓ (40-55 bpm Deep)", direction="down", target="heart_rate"),
+            KeySignal(label="Hiệu suất ≥85%", target="sleep.efficiency"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="sleep_phase",
+                detail="sleep_start variant=light (BE auto-injects)",
+            ),
+        ],
     ),
     ScenarioOption(
         id="fragmented_sleep",
@@ -111,14 +217,37 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
             "Nhịp tim dao động bất thường khi chuyển phase. "
             "Phù hợp test AI risk scoring với sleep quality thấp."
         ),
+        severity="warning",
+        keySignals=[
+            KeySignal(label="Sleep phases: nhiều micro-arousal", target="sleep_phase", severity="warning"),
+            KeySignal(label="Hiệu suất ~72%", target="sleep.efficiency", severity="warning"),
+            KeySignal(label="wake_count ≥4", direction="up", target="sleep.wake_count", severity="warning"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="sleep_phase",
+                detail="sleep_start variant=light (BE auto-injects)",
+            ),
+        ],
     ),
-    # Risk
+    # ── Risk ───────────────────────────────────────────────────────────
     ScenarioOption(
         id="high_risk_cardiac",
         name="Rủi ro tim mạch cao",
         category="risk",
         description="Tiêm hồ sơ rủi ro tim mạch với mức đóng góp nguy cơ cao.",
         expectedOutcome="API rủi ro trả về hồ sơ mức CAO/NGUY KỊCH nhanh chóng.",
+        severity="critical",
+        keySignals=[
+            KeySignal(label="Risk: cardiac CRITICAL", target="risk_level", severity="critical"),
+            KeySignal(label="Score 0.90", direction="up", target="risk.score", severity="critical"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="risk_inject",
+                detail="cardiac / CRITICAL @ score 0.90",
+            ),
+        ],
     ),
     ScenarioOption(
         id="medium_risk_general",
@@ -126,8 +255,29 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
         category="risk",
         description="Hồ sơ rủi ro tổng quát với các chỉ báo cảnh báo mức vừa.",
         expectedOutcome="Kết quả rủi ro ổn định quanh mức TRUNG BÌNH.",
+        severity="warning",
+        keySignals=[
+            KeySignal(label="Risk: general MEDIUM", target="risk_level", severity="warning"),
+            KeySignal(label="Score 0.58", target="risk.score", severity="warning"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="risk_inject",
+                detail="general / MEDIUM @ score 0.58",
+            ),
+        ],
     ),
 ]
+
+
+# Side-effect routing table for `apply_scenario` — keeps the runtime
+# function pure of literal strings and lets new scenarios opt in by
+# adding a row here.  Format: scenario_id -> RiskInjectRequest kwargs.
+_SCENARIO_RISK_INJECTS: dict[str, dict[str, object]] = {
+    "hypoxia_critical": {"risk_type": "general", "risk_level": "HIGH", "score": 0.78},
+    "high_risk_cardiac": {"risk_type": "cardiac", "risk_level": "CRITICAL", "score": 0.90},
+    "medium_risk_general": {"risk_type": "general", "risk_level": "MEDIUM", "score": 0.58},
+}
 
 
 @router.get("/scenarios", response_model=list[ScenarioOption])
@@ -140,10 +290,37 @@ def apply_scenario(
     request: ApplyScenarioRequest,
     runtime: SimulatorRuntime = Depends(get_runtime),
 ) -> Response:
+    """Apply a scenario to a device — atomic, BE-driven side-effects.
+
+    Module B.2: this endpoint is now the single source of truth for the
+    apply pipeline.  Fall and sleep side-effects are already injected by
+    `runtime.set_device_scenario()`; the risk-inject side-effects are
+    looked up from `_SCENARIO_RISK_INJECTS` and dispatched here.  The FE
+    no longer fires its own follow-on `events/fall` / `events/risk-inject`
+    POSTs after a scenario apply.
+    """
     try:
         runtime.set_device_scenario(request.device_id, request.scenario_id)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    risk_payload = _SCENARIO_RISK_INJECTS.get(request.scenario_id)
+    if risk_payload is not None:
+        try:
+            runtime.inject_risk_score(
+                RiskInjectRequest(
+                    device_id=request.device_id,
+                    risk_type=risk_payload["risk_type"],  # type: ignore[arg-type]
+                    risk_level=risk_payload["risk_level"],  # type: ignore[arg-type]
+                    score=float(risk_payload["score"]),  # type: ignore[arg-type]
+                ),
+            )
+        except KeyError as exc:
+            # Device disappeared between the two calls — surface as 404
+            # so the operator can retry rather than silently leaving the
+            # scenario in a half-applied state.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

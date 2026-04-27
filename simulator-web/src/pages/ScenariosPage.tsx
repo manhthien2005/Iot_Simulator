@@ -1,14 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Clapperboard } from "lucide-react";
+import { Clapperboard } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card } from "../components/ui/Card";
+import { ScenarioCard } from "../components/domain/ScenarioCard";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorCard } from "../components/ui/ErrorCard";
 import { Skeleton } from "../components/ui/Skeleton";
 import { useDevices } from "../hooks/useDevices";
 import { fetchScenarios } from "../services/scenarioApi";
 import type { ScenarioOption } from "../types/scenario";
+
+// ---------------------------------------------------------------------------
+// ScenariosPage — Module B.5 rebuild.
+//
+// Each scenario is rendered through `<ScenarioCard/>` so keySignals,
+// severity, and follow-up side-effects are visible without opening the
+// session runner.  The "active devices" pill mirrors `device.currentScenarioId`
+// from `/api/sim/devices`, finally surfacing a piece of state the BE has
+// always exposed but the FE used to ignore.
+// ---------------------------------------------------------------------------
 
 type CategoryFilter = "all" | ScenarioOption["category"];
 
@@ -25,29 +35,6 @@ const categoryLabel: Record<ScenarioOption["category"], string> = {
   fall: "Té ngã",
   sleep: "Giấc ngủ",
   risk: "Rủi ro",
-};
-
-const categoryColor: Record<ScenarioOption["category"], { bg: string; text: string; border: string }> = {
-  vitals: {
-    bg: "rgba(6,182,212,0.2)",
-    text: "var(--accent-cyan)",
-    border: "rgba(6,182,212,0.35)",
-  },
-  fall: {
-    bg: "rgba(239,68,68,0.2)",
-    text: "var(--severity-critical)",
-    border: "rgba(239,68,68,0.35)",
-  },
-  sleep: {
-    bg: "rgba(139,92,246,0.2)",
-    text: "#8B5CF6",
-    border: "rgba(139,92,246,0.4)",
-  },
-  risk: {
-    bg: "rgba(245,158,11,0.2)",
-    text: "var(--severity-warning)",
-    border: "rgba(245,158,11,0.35)",
-  },
 };
 
 export function ScenariosPage() {
@@ -71,6 +58,18 @@ export function ScenariosPage() {
     }
   }, [devices, selectedDeviceId]);
 
+  // Map scenario id → number of devices currently running that scenario.
+  // Sourced from `device.currentScenarioId` so we render BE truth, not
+  // a FE-side guess.
+  const activeDevicesByScenario = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const device of devices) {
+      if (!device.currentScenarioId) continue;
+      counts[device.currentScenarioId] = (counts[device.currentScenarioId] ?? 0) + 1;
+    }
+    return counts;
+  }, [devices]);
+
   const filteredScenarios = useMemo(() => {
     if (activeCategory === "all") {
       return scenarios;
@@ -91,7 +90,8 @@ export function ScenariosPage() {
     return groups;
   }, [filteredScenarios]);
 
-  const categoriesToRender: ScenarioOption["category"][] = activeCategory === "all" ? ["vitals", "fall", "sleep", "risk"] : [activeCategory];
+  const categoriesToRender: ScenarioOption["category"][] =
+    activeCategory === "all" ? ["vitals", "fall", "sleep", "risk"] : [activeCategory];
 
   const runScenario = (scenarioId: string) => {
     const query = new URLSearchParams({ scenario: scenarioId });
@@ -106,7 +106,10 @@ export function ScenariosPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: "12px", flexWrap: "wrap" }}>
         <div>
           <h1 className="page-title">Kịch bản</h1>
-          <p className="page-subtitle">Duyệt các kịch bản mô phỏng sẵn sàng chạy và mở trực tiếp trong Phiên mô phỏng.</p>
+          <p className="page-subtitle">
+            Mỗi card hiển thị key signals, mức nghiêm trọng và side-effect mà BE sẽ tự kích hoạt khi áp dụng — không
+            cần đoán. Chạy trực tiếp trong Phiên mô phỏng.
+          </p>
         </div>
         <label style={{ display: "grid", gap: "6px", minWidth: "260px" }}>
           <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Thiết bị mục tiêu</span>
@@ -175,73 +178,21 @@ export function ScenariosPage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-                    gap: "12px",
+                    // Module H Block 3 — slightly wider min track + uniform
+                    // top-alignment so the redesigned compact cards line
+                    // up cleanly even when one is expanded.
+                    gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+                    gap: "14px",
+                    alignItems: "start",
                   }}
                 >
                   {items.map((scenario) => (
-                    <Card key={scenario.id} hoverable>
-                      <div style={{ display: "grid", gap: "10px" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
-                          <h3 style={{ margin: 0, fontSize: "17px", lineHeight: 1.3 }}>{scenario.name}</h3>
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              whiteSpace: "nowrap",
-                              borderRadius: "var(--radius-full)",
-                              border: `1px solid ${categoryColor[scenario.category].border}`,
-                              background: categoryColor[scenario.category].bg,
-                              color: categoryColor[scenario.category].text,
-                              padding: "2px 8px",
-                              fontSize: "11px",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.04em",
-                            }}
-                          >
-                            {categoryLabel[scenario.category]}
-                          </span>
-                        </div>
-
-                        <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "13px", lineHeight: 1.55 }}>{scenario.description}</p>
-
-                        <div
-                          style={{
-                            border: "1px solid var(--border-default)",
-                            borderRadius: "var(--radius-md)",
-                            padding: "10px",
-                            background: "var(--bg-base)",
-                          }}
-                        >
-                          <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                            Kết quả kỳ vọng
-                          </div>
-                          <div style={{ marginTop: "6px", fontSize: "13px", color: "var(--text-primary)", lineHeight: 1.5 }}>
-                            {scenario.expectedOutcome}
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => runScenario(scenario.id)}
-                          style={{
-                            minHeight: "36px",
-                            borderRadius: "var(--radius-md)",
-                            border: "1px solid var(--accent-cyan)",
-                            background: "rgba(6,182,212,0.12)",
-                            color: "var(--accent-cyan)",
-                            fontWeight: 600,
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: "8px",
-                            transition:
-                              "color var(--duration-fast) var(--ease-default), background-color var(--duration-fast) var(--ease-default), border-color var(--duration-fast) var(--ease-default)",
-                          }}
-                        >
-                          Chạy trong phiên <ArrowRight size={14} />
-                        </button>
-                      </div>
-                    </Card>
+                    <ScenarioCard
+                      key={scenario.id}
+                      scenario={scenario}
+                      activeDeviceCount={activeDevicesByScenario[scenario.id] ?? 0}
+                      onRun={runScenario}
+                    />
                   ))}
                 </div>
               </div>

@@ -1,0 +1,492 @@
+{
+  "version": "1.0.0",
+  "name": "fall_pipeline_wrist_config",
+  "description": "Two-stage wrist-worn fall detection pipeline with post-fall vital-sign validation. Designed for smartwatch/wrist IMU streams and downstream health-risk integration.",
+  "scope": {
+    "device_type": "wrist_worn_smartwatch",
+    "sampling_rate_hz_default": 50,
+    "population": "adults",
+    "notes": [
+      "Designed for continuous on-device pre-trigger plus event-based fall model execution.",
+      "Post-fall vital checks use general acute-deterioration thresholds, not fall-specific clinical thresholds."
+    ]
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "device_id",
+      "sampling_rate",
+      "window_size",
+      "data"
+    ],
+    "properties": {
+      "device_id": { "type": "string" },
+      "sampling_rate": { "type": "number" },
+      "window_size": { "type": "number" },
+      "data": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "timestamp",
+            "accel",
+            "gyro",
+            "orientation",
+            "environment"
+          ],
+          "properties": {
+            "timestamp": { "type": "number" },
+            "accel": {
+              "type": "object",
+              "required": ["x", "y", "z"],
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "z": { "type": "number" }
+              }
+            },
+            "gyro": {
+              "type": "object",
+              "required": ["x", "y", "z"],
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "z": { "type": "number" }
+              }
+            },
+            "orientation": {
+              "type": "object",
+              "required": ["pitch", "roll", "yaw"],
+              "properties": {
+                "pitch": { "type": "number" },
+                "roll": { "type": "number" },
+                "yaw": { "type": "number" }
+              }
+            },
+            "environment": {
+              "type": "object",
+              "required": ["floor_vibration", "pressure_mat"],
+              "properties": {
+                "floor_vibration": { "type": "number" },
+                "pressure_mat": { "type": "number" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "derived_features": {
+    "accel_mag_formula": "sqrt(accel.x^2 + accel.y^2 + accel.z^2)",
+    "gyro_mag_formula": "sqrt(gyro.x^2 + gyro.y^2 + gyro.z^2)",
+    "delta_pitch_formula": "abs(current.orientation.pitch - previous.orientation.pitch)",
+    "delta_roll_formula": "abs(current.orientation.roll - previous.orientation.roll)",
+    "delta_yaw_formula": "abs(current.orientation.yaw - previous.orientation.yaw)",
+    "posture_change_angle_formula": "max(delta_pitch, delta_roll)",
+    "low_motion_definition": {
+      "accel_mag_std_max_g": 0.15,
+      "gyro_mag_std_max_dps": 20.0
+    }
+  },
+  "streaming_policy": {
+    "run_pretrigger_continuously": true,
+    "window_seconds": 1.0,
+    "step_seconds": 0.2,
+    "pre_buffer_seconds": 1.5,
+    "post_buffer_seconds": 3.0,
+    "minimum_event_gap_seconds": 5.0
+  },
+  "stage_1_pretrigger": {
+    "purpose": "Detect candidate fall events cheaply on-device before invoking the fall model.",
+    "event_timestamp_definition": "timestamp_of_main_accel_peak_within_trigger_window",
+    "hard_trigger_if_any": [
+      {
+        "condition": "accel_mag_peak_g >= 3.0",
+        "reason_code": "IMPACT_PEAK_3G"
+      }
+    ],
+    "soft_trigger_if_any": [
+      {
+        "condition": "accel_mag_peak_g >= 2.5 AND posture_change_angle_deg >= 45",
+        "reason_code": "IMPACT_PLUS_POSTURE_CHANGE"
+      },
+      {
+        "condition": "accel_mag_peak_g >= 2.5 AND post_impact_low_motion_duration_s >= 1.0",
+        "reason_code": "IMPACT_PLUS_LOW_MOTION"
+      },
+      {
+        "condition": "gyro_mag_peak_dps >= 250 AND posture_change_angle_deg >= 45",
+        "reason_code": "GYRO_PLUS_POSTURE_CHANGE"
+      },
+      {
+        "condition": "accel_mag_peak_g >= 2.0 AND floor_vibration_spike == true AND pressure_mat_change == true",
+        "reason_code": "MULTIMODAL_ENVIRONMENTAL_TRIGGER"
+      }
+    ],
+    "supporting_flags": {
+      "floor_vibration_spike": {
+        "definition": "floor_vibration >= rolling_baseline_floor_vibration + 3 * rolling_floor_vibration_std"
+      },
+      "pressure_mat_change": {
+        "definition": "abs(pressure_mat - rolling_baseline_pressure_mat) >= 3 * rolling_pressure_mat_std"
+      },
+      "orientation_changed_to_lying_like_state": {
+        "definition": "posture_change_angle_deg >= 60"
+      }
+    },
+    "action_on_trigger": {
+      "store_event_timestamp": true,
+      "extract_event_window": true,
+      "event_window_definition": {
+        "start": "event_timestamp - pre_buffer_seconds",
+        "end": "event_timestamp + post_buffer_seconds"
+      },
+      "send_event_window_to_fall_model": true
+    }
+  },
+  "stage_2_fall_model": {
+    "purpose": "Run the fall classifier only on triggered event windows.",
+    "run_only_if_stage_1_triggered": true,
+    "model_input": {
+      "format": {
+        "device_id": "string",
+        "sampling_rate": "number",
+        "event_timestamp": "number",
+        "event_window": {
+          "start_timestamp": "number",
+          "end_timestamp": "number"
+        },
+        "data": [
+          {
+            "timestamp": "number",
+            "accel": { "x": "number", "y": "number", "z": "number" },
+            "gyro": { "x": "number", "y": "number", "z": "number" },
+            "orientation": { "pitch": "number", "roll": "number", "yaw": "number" },
+            "environment": { "floor_vibration": "number", "pressure_mat": "number" }
+          }
+        ],
+        "derived_event_features": {
+          "accel_mag_peak_g": "number",
+          "gyro_mag_peak_dps": "number",
+          "posture_change_angle_deg": "number",
+          "post_impact_low_motion_duration_s": "number",
+          "floor_vibration_spike": "boolean",
+          "pressure_mat_change": "boolean"
+        },
+        "trigger_reason_codes": ["string"]
+      }
+    },
+    "model_output": {
+      "fall_probability": "number",
+      "predicted_label": "FALL | NON_FALL",
+      "model_threshold_default": 0.7
+    }
+  },
+  "stage_3_post_fall_validation": {
+    "purpose": "Validate likely falls using post-fall immobility and short-horizon vital-sign deterioration.",
+    "enabled": true,
+    "short_horizon_minutes": 10,
+    "extended_horizon_minutes": 60,
+    "requires_health_stream": false,
+    "health_input_schema_optional": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "timestamp": { "type": "number" },
+        "heart_rate": { "type": "number" },
+        "resp_rate": { "type": "number" },
+        "body_temp": { "type": "number" },
+        "spo2": { "type": "number" },
+        "sys_bp": { "type": "number" },
+        "dia_bp": { "type": "number" },
+        "map_val": { "type": "number" },
+        "baseline_heart_rate": { "type": "number" },
+        "baseline_resp_rate": { "type": "number" },
+        "baseline_body_temp": { "type": "number" },
+        "baseline_spo2": { "type": "number" },
+        "baseline_sys_bp": { "type": "number" },
+        "baseline_dia_bp": { "type": "number" },
+        "baseline_map_val": { "type": "number" }
+      }
+    },
+    "post_fall_inactivity_rules": [
+      {
+        "condition": "post_impact_low_motion_duration_s >= 2.0",
+        "reason_code": "POST_FALL_LOW_MOTION_2S"
+      },
+      {
+        "condition": "orientation_changed_to_lying_like_state == true",
+        "reason_code": "POST_FALL_LYING_ORIENTATION"
+      }
+    ],
+    "vital_sign_instant_rules": [
+      {
+        "condition": "spo2 < 90",
+        "severity": "URGENT",
+        "reason_code": "POST_FALL_SPO2_CRITICAL_LOW"
+      },
+      {
+        "condition": "spo2 <= 94",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_SPO2_LOW"
+      },
+      {
+        "condition": "resp_rate <= 8 OR resp_rate >= 25",
+        "severity": "URGENT",
+        "reason_code": "POST_FALL_RR_CRITICAL"
+      },
+      {
+        "condition": "21 <= resp_rate AND resp_rate <= 24",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_RR_HIGH"
+      },
+      {
+        "condition": "sys_bp <= 90",
+        "severity": "URGENT",
+        "reason_code": "POST_FALL_SBP_CRITICAL_LOW"
+      },
+      {
+        "condition": "91 <= sys_bp AND sys_bp <= 100",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_SBP_LOW"
+      },
+      {
+        "condition": "heart_rate <= 40 OR heart_rate >= 131",
+        "severity": "URGENT",
+        "reason_code": "POST_FALL_HR_CRITICAL"
+      },
+      {
+        "condition": "111 <= heart_rate AND heart_rate <= 130",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_HR_HIGH"
+      },
+      {
+        "condition": "41 <= heart_rate AND heart_rate <= 50",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_HR_LOW"
+      },
+      {
+        "condition": "body_temp <= 35.0 OR body_temp >= 39.1",
+        "severity": "URGENT",
+        "reason_code": "POST_FALL_TEMP_CRITICAL"
+      },
+      {
+        "condition": "38.0 <= body_temp AND body_temp <= 39.0",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_TEMP_FEVER"
+      },
+      {
+        "condition": "map_val < 65",
+        "severity": "URGENT",
+        "reason_code": "POST_FALL_MAP_CRITICAL_LOW"
+      }
+    ],
+    "vital_sign_trend_rules": [
+      {
+        "condition": "baseline_heart_rate exists AND heart_rate >= baseline_heart_rate + 15 within 10 minutes",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_HR_BASELINE_DELTA"
+      },
+      {
+        "condition": "baseline_resp_rate exists AND resp_rate >= baseline_resp_rate + 4 within 10 minutes",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_RR_BASELINE_DELTA"
+      },
+      {
+        "condition": "baseline_spo2 exists AND spo2 <= baseline_spo2 - 3 in 2 consecutive readings",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_SPO2_BASELINE_DROP"
+      },
+      {
+        "condition": "baseline_sys_bp exists AND sys_bp <= baseline_sys_bp - 20 within 15 minutes",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_SBP_BASELINE_DROP"
+      },
+      {
+        "condition": "baseline_dia_bp exists AND dia_bp <= baseline_dia_bp - 10 within 15 minutes",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_DBP_BASELINE_DROP"
+      },
+      {
+        "condition": "baseline_map_val exists AND map_val <= baseline_map_val - 15 in 2 consecutive readings",
+        "severity": "SEND_TO_RISK_MODEL",
+        "reason_code": "POST_FALL_MAP_BASELINE_DROP"
+      }
+    ]
+  },
+  "fusion_logic": {
+    "notes": [
+      "Do not classify a fall from Stage 1 alone.",
+      "Use Stage 1 to trigger Stage 2 only.",
+      "Use post-fall vital deterioration to increase confidence and urgency, not to replace the fall model."
+    ],
+    "rules": [
+      {
+        "if": "stage_1_triggered == false",
+        "then": {
+          "final_status": "NO_EVENT",
+          "final_label": "NON_FALL",
+          "run_fall_model": false
+        }
+      },
+      {
+        "if": "stage_1_triggered == true AND fall_probability < 0.7",
+        "then": {
+          "final_status": "NON_FALL_CANDIDATE",
+          "final_label": "NON_FALL",
+          "run_fall_model": true
+        }
+      },
+      {
+        "if": "stage_1_triggered == true AND fall_probability >= 0.7",
+        "then": {
+          "final_status": "FALL_CANDIDATE",
+          "final_label": "FALL_CANDIDATE",
+          "run_fall_model": true
+        }
+      },
+      {
+        "if": "stage_1_triggered == true AND fall_probability >= 0.85 AND (post_fall_inactivity_rules_triggered OR orientation_changed_to_lying_like_state == true)",
+        "then": {
+          "final_status": "CONFIRMED_FALL",
+          "final_label": "FALL",
+          "run_fall_model": true
+        }
+      },
+      {
+        "if": "stage_1_triggered == true AND fall_probability >= 0.7 AND any_post_fall_vital_rule_triggered",
+        "then": {
+          "final_status": "HIGH_RISK_FALL",
+          "final_label": "FALL",
+          "run_fall_model": true
+        }
+      },
+      {
+        "if": "any_post_fall_vital_rule_with_severity_URGENT",
+        "then": {
+          "urgent_status": "URGENT",
+          "urgent_action": "TRIGGER_URGENT_WORKFLOW"
+        }
+      }
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "device_id",
+      "event_timestamp",
+      "stage_1_triggered",
+      "run_fall_model",
+      "final_status",
+      "final_label",
+      "reason_codes"
+    ],
+    "properties": {
+      "device_id": { "type": "string" },
+      "event_timestamp": { "type": "number" },
+      "event_window": {
+        "type": "object",
+        "properties": {
+          "start_timestamp": { "type": "number" },
+          "end_timestamp": { "type": "number" }
+        }
+      },
+      "stage_1_triggered": { "type": "boolean" },
+      "run_fall_model": { "type": "boolean" },
+      "fall_probability": { "type": "number" },
+      "final_status": {
+        "type": "string",
+        "enum": [
+          "NO_EVENT",
+          "NON_FALL_CANDIDATE",
+          "FALL_CANDIDATE",
+          "CONFIRMED_FALL",
+          "HIGH_RISK_FALL"
+        ]
+      },
+      "final_label": {
+        "type": "string",
+        "enum": [
+          "NON_FALL",
+          "FALL_CANDIDATE",
+          "FALL"
+        ]
+      },
+      "urgent_status": {
+        "type": "string",
+        "enum": [
+          "NONE",
+          "URGENT"
+        ]
+      },
+      "reason_codes": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "triggered_rule_groups": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "derived_event_features": {
+        "type": "object",
+        "properties": {
+          "accel_mag_peak_g": { "type": "number" },
+          "gyro_mag_peak_dps": { "type": "number" },
+          "posture_change_angle_deg": { "type": "number" },
+          "post_impact_low_motion_duration_s": { "type": "number" }
+        }
+      },
+      "post_fall_vitals_summary": {
+        "type": "object",
+        "properties": {
+          "heart_rate": { "type": "number" },
+          "resp_rate": { "type": "number" },
+          "body_temp": { "type": "number" },
+          "spo2": { "type": "number" },
+          "sys_bp": { "type": "number" },
+          "dia_bp": { "type": "number" },
+          "map_val": { "type": "number" }
+        }
+      }
+    }
+  },
+  "example_output": {
+    "device_id": "wearable_fall_0001",
+    "event_timestamp": 1710000000,
+    "event_window": {
+      "start_timestamp": 1709999998.5,
+      "end_timestamp": 1710000003.0
+    },
+    "stage_1_triggered": true,
+    "run_fall_model": true,
+    "fall_probability": 0.91,
+    "final_status": "HIGH_RISK_FALL",
+    "final_label": "FALL",
+    "urgent_status": "NONE",
+    "reason_codes": [
+      "IMPACT_PEAK_3G",
+      "POST_FALL_LOW_MOTION_2S",
+      "POST_FALL_HR_BASELINE_DELTA"
+    ],
+    "triggered_rule_groups": [
+      "stage_1_pretrigger.hard_trigger_if_any",
+      "stage_3_post_fall_validation.post_fall_inactivity_rules",
+      "stage_3_post_fall_validation.vital_sign_trend_rules"
+    ],
+    "derived_event_features": {
+      "accel_mag_peak_g": 3.2,
+      "gyro_mag_peak_dps": 280,
+      "posture_change_angle_deg": 68,
+      "post_impact_low_motion_duration_s": 2.4
+    },
+    "post_fall_vitals_summary": {
+      "heart_rate": 108,
+      "resp_rate": 22,
+      "body_temp": 36.8,
+      "spo2": 95,
+      "sys_bp": 104,
+      "dia_bp": 68,
+      "map_val": 80
+    }
+  }
+}

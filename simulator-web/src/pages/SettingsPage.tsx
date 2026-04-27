@@ -1,75 +1,190 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Save } from "lucide-react";
+import { ExternalLink, RotateCcw, Save } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
 import { Skeleton } from "../components/ui/Skeleton";
 import { ErrorCard } from "../components/ui/ErrorCard";
-import { fetchSettings, updateRuntimeConfig } from "../services/settingsApi";
-import type { RuntimeConfigUpdate, SimulatorSettingsResponse } from "../types/settings";
+import {
+  fetchSettings,
+  restoreRuntimeDefaults,
+  updateRuntimeConfig,
+} from "../services/settingsApi";
+import type {
+  RuntimeConfigSaveResponse,
+  RuntimeConfigUpdate,
+  RuntimePersistenceBlock,
+  SimulatorSettingsResponse,
+  TriggerMode,
+} from "../types/settings";
 import { notify } from "../utils/toast";
+import { useConfirm } from "../hooks/useConfirm";
+import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
 
-/* ── Threshold label mapping ────────────────────────────────────────── */
-
-const THRESHOLD_LABELS: Record<string, string> = {
-  hr_critical_low: "Nhịp tim — Nguy hiểm thấp",
-  hr_critical_high: "Nhịp tim — Nguy hiểm cao",
-  hr_warning_low: "Nhịp tim — Cảnh báo thấp",
-  hr_warning_high: "Nhịp tim — Cảnh báo cao",
-  spo2_critical: "SpO2 — Nguy hiểm",
-  spo2_warning: "SpO2 — Cảnh báo",
-  rr_critical_low: "Nhịp thở — Nguy hiểm thấp",
-  rr_critical_high: "Nhịp thở — Nguy hiểm cao",
-  bp_sys_critical: "Huyết áp tâm thu — Nguy hiểm",
-  bp_dia_critical: "Huyết áp tâm trương — Nguy hiểm",
-  bp_sys_warning: "Huyết áp tâm thu — Cảnh báo",
-  bp_dia_warning: "Huyết áp tâm trương — Cảnh báo",
-  osa_alert_spo2_threshold: "OSA SpO2 ngưỡng",
-  nocturnal_tachy_hr: "Nhịp tim nhanh ban đêm",
-  apnea_rr_threshold: "Ngưng thở — nhịp thở",
-};
-
-function labelFor(key: string): string {
-  return THRESHOLD_LABELS[key] ?? key;
-}
-
-/* ── Section: Runtime Config (editable) ─────────────────────────────── */
+/* ── Section: Runtime Config (editable + persisted to runtime.json) ── */
 
 function RuntimeSection({
   data,
-  onSaved,
+  onMutated,
 }: {
   data: SimulatorSettingsResponse;
-  onSaved: () => void;
+  onMutated: () => void;
 }) {
+  // Local form state seeded from server. Re-sync if the underlying query
+  // refreshes (e.g. after Restore defaults) — required so the inputs reflect
+  // the new values without forcing a full unmount.
   const [tickInterval, setTickInterval] = useState(String(data.runtime.tick_interval_seconds));
   const [pushInterval, setPushInterval] = useState(String(data.runtime.push_interval_seconds));
   const [sleepSpeed, setSleepSpeed] = useState(String(data.runtime.sleep_speed_factor));
+  const [persistence, setPersistence] = useState<RuntimePersistenceBlock>(data.persistence);
+  const queryClient = useQueryClient();
+  // Module G.11 — replaces the previous `window.confirm` shim.
+  const [confirm, confirmDialog] = useConfirm();
 
-  const mutation = useMutation({
-    mutationFn: (body: RuntimeConfigUpdate) => updateRuntimeConfig(body),
-    onSuccess: () => {
-      notify.success("Cập nhật cấu hình runtime thành công.");
-      onSaved();
+  useEffect(() => {
+    setTickInterval(String(data.runtime.tick_interval_seconds));
+    setPushInterval(String(data.runtime.push_interval_seconds));
+    setSleepSpeed(String(data.runtime.sleep_speed_factor));
+    setPersistence(data.persistence);
+  }, [
+    data.runtime.tick_interval_seconds,
+    data.runtime.push_interval_seconds,
+    data.runtime.sleep_speed_factor,
+    data.persistence,
+  ]);
+
+  // Module G.11 — optimistic save.
+  //
+  // The "Lưu thay đổi" button used to wait the BE round-trip *and* the
+  // settings query refetch before the runtime values reflected on the
+  // page (and on every other consumer of `["settings"]`).  We patch the
+  // cached `SimulatorSettingsResponse` with the proposed body in
+  // `onMutate`, snapshot the previous state for rollback, then let
+  // `onSuccess` overwrite with the BE-truth (which now also contains
+  // an authoritative `last_saved_at`).  On failure the snapshot
+  // restores the cache and the form's `useEffect` resync brings the
+  // inputs back.
+  const saveMutation = useMutation<
+    RuntimeConfigSaveResponse,
+    Error,
+    RuntimeConfigUpdate,
+    { previous?: SimulatorSettingsResponse }
+  >({
+    mutationFn: (body) => updateRuntimeConfig(body),
+    onMutate: async (body) => {
+      await queryClient.cancelQueries({ queryKey: ["settings"] });
+      const previous = queryClient.getQueryData<SimulatorSettingsResponse>(["settings"]);
+      if (previous) {
+        const optimistic: SimulatorSettingsResponse = {
+          ...previous,
+          runtime: {
+            ...previous.runtime,
+            ...(body.tick_interval_seconds !== undefined && {
+              tick_interval_seconds: body.tick_interval_seconds,
+            }),
+            ...(body.push_interval_seconds !== undefined && {
+              push_interval_seconds: body.push_interval_seconds,
+            }),
+            ...(body.sleep_speed_factor !== undefined && {
+              sleep_speed_factor: body.sleep_speed_factor,
+            }),
+          },
+          // Mark the persistence indicator as "đang lưu" — the
+          // `<PersistenceIndicator/>` reads `pending` from the mutation
+          // state, but if a different page reads `["settings"]` we
+          // still want a non-stale `last_saved_at` semantically.
+          persistence: { ...previous.persistence, last_error: null },
+        };
+        queryClient.setQueryData(["settings"], optimistic);
+      }
+      return { previous };
     },
-    onError: () => {
-      notify.error("Lỗi khi cập nhật cấu hình runtime.");
+    onSuccess: (response) => {
+      setPersistence(response.persistence);
+      notify.success(
+        `Đã lưu vào runtime.json — vẫn áp dụng sau khi khởi động lại (${formatSavedAt(response.persistence.last_saved_at)}).`,
+      );
+      onMutated();
+    },
+    onError: (err, _body, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(["settings"], ctx.previous);
+      notify.error(`Không lưu được runtime config: ${err.message}`);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  const resetMutation = useMutation<
+    RuntimeConfigSaveResponse,
+    Error,
+    void,
+    { previous?: SimulatorSettingsResponse }
+  >({
+    mutationFn: () => restoreRuntimeDefaults(),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["settings"] });
+      const previous = queryClient.getQueryData<SimulatorSettingsResponse>(["settings"]);
+      // We don't know the defaults locally, so we don't optimistically
+      // rewrite values — but we *do* take a snapshot so a failure
+      // doesn't leave the cache in a half-invalidated state.
+      return { previous };
+    },
+    onSuccess: (response) => {
+      setPersistence(response.persistence);
+      notify.success("Đã khôi phục về cấu hình mặc định (runtime_defaults.json).");
+      onMutated();
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(["settings"], ctx.previous);
+      notify.error(`Không khôi phục được mặc định: ${err.message}`);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
     },
   });
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    mutation.mutate({
+    saveMutation.mutate({
       tick_interval_seconds: Number(tickInterval),
       push_interval_seconds: Number(pushInterval),
       sleep_speed_factor: Number(sleepSpeed),
     });
   }
 
+  async function handleRestoreDefaults() {
+    const ok = await confirm({
+      severity: "warning",
+      title: "Khôi phục cấu hình mặc định?",
+      description:
+        "Thao tác này sẽ xoá runtime.json và đưa tick/push/sleep speed về giá trị trong runtime_defaults.json. Mọi điều chỉnh runtime hiện tại sẽ mất.",
+      confirmLabel: "Khôi phục mặc định",
+    });
+    if (!ok) return;
+    resetMutation.mutate();
+  }
+
+  const isPending = saveMutation.isPending || resetMutation.isPending;
+
+  // Module G.14 — `beforeunload` guard while the form has un-saved
+  // edits.  Compare the live input strings against the server-truth
+  // numbers (coerced to string for stable equality).  We suppress the
+  // guard while a save is in flight so the operator can reload during
+  // the brief mutation window without an extra prompt.
+  const isDirty =
+    !isPending &&
+    (tickInterval !== String(data.runtime.tick_interval_seconds) ||
+      pushInterval !== String(data.runtime.push_interval_seconds) ||
+      sleepSpeed !== String(data.runtime.sleep_speed_factor));
+  useUnsavedGuard(isDirty);
+
   return (
     <Card header={<strong>Simulator Runtime</strong>}>
       <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <PersistenceIndicator persistence={persistence} pending={saveMutation.isPending} />
         <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
           <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Tick Interval (giây)</span>
           <Input type="number" step="0.1" min="0.1" max="60" value={tickInterval} onChange={(e) => setTickInterval(e.target.value)} />
@@ -86,234 +201,296 @@ function RuntimeSection({
           <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Health Backend URL (read-only)</span>
           <Input value={data.runtime.health_backend_url} readOnly style={{ opacity: 0.6 }} />
         </div>
-        <div style={{ alignSelf: "flex-start", marginTop: "4px" }}>
-          <Button type="submit" disabled={mutation.isPending}>
+        <div style={{ display: "flex", gap: "8px", marginTop: "4px", flexWrap: "wrap" }}>
+          <Button type="submit" disabled={isPending}>
             <Save size={14} style={{ marginRight: "6px" }} />
-            {mutation.isPending ? "Đang lưu…" : "Lưu thay đổi"}
+            {saveMutation.isPending ? "Đang lưu…" : "Lưu thay đổi"}
+          </Button>
+          <Button type="button" variant="ghost" disabled={isPending} onClick={handleRestoreDefaults}>
+            <RotateCcw size={14} style={{ marginRight: "6px" }} />
+            {resetMutation.isPending ? "Đang khôi phục…" : "Khôi phục mặc định"}
           </Button>
         </div>
       </form>
+      {confirmDialog}
     </Card>
   );
 }
 
-/* ── Section: Thresholds (read-only, daytime vs sleep side-by-side) ── */
+/* ── Persistence indicator (Module F.5) ──────────────────────────────── */
 
-function ThresholdsSection({ data }: { data: SimulatorSettingsResponse }) {
-  const hasDb = data.db_daytime_thresholds !== null || data.db_sleep_thresholds !== null;
-  const allKeys = Array.from(
-    new Set([
-      ...Object.keys(data.daytime_thresholds),
-      ...Object.keys(data.sleep_thresholds),
-      ...Object.keys(data.db_daytime_thresholds ?? {}),
-      ...Object.keys(data.db_sleep_thresholds ?? {}),
-    ])
+function PersistenceIndicator({
+  persistence,
+  pending,
+}: {
+  persistence: RuntimePersistenceBlock;
+  pending: boolean;
+}) {
+  const isFile = persistence.source === "file";
+  const tone = pending
+    ? { fg: "var(--accent-cyan)", bg: "rgba(6,182,212,0.12)", border: "rgba(6,182,212,0.35)" }
+    : isFile
+      ? { fg: "var(--severity-normal)", bg: "rgba(34,197,94,0.10)", border: "rgba(34,197,94,0.30)" }
+      : { fg: "var(--severity-warning)", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.30)" };
+
+  let title: string;
+  let body: string;
+  if (pending) {
+    title = "Đang lưu vào runtime.json…";
+    body = "Đang ghi cấu hình mới ra đĩa, sẽ áp dụng ngay sau khi xong.";
+  } else if (isFile) {
+    title = `Đã lưu lúc ${formatSavedAt(persistence.last_saved_at)}`;
+    body = "Cấu hình hiện tại đến từ runtime.json — vẫn giữ nguyên sau khi khởi động lại.";
+  } else {
+    title = "Đang dùng cấu hình mặc định";
+    body = "Cấu hình đến từ runtime_defaults.json. Bấm Lưu để tạo runtime.json riêng cho máy này.";
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: "10px",
+        padding: "10px 12px",
+        borderRadius: "var(--radius-md)",
+        border: `1px solid ${tone.border}`,
+        background: tone.bg,
+        color: "var(--text-primary)",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: "8px",
+          height: "8px",
+          marginTop: "6px",
+          borderRadius: "50%",
+          background: tone.fg,
+          flexShrink: 0,
+        }}
+      />
+      <div style={{ display: "grid", gap: "2px" }}>
+        <strong style={{ fontSize: "13px", color: tone.fg }}>{title}</strong>
+        <small style={{ color: "var(--text-secondary)", fontSize: "12px" }}>{body}</small>
+        {persistence.last_error ? (
+          <small style={{ color: "var(--severity-warning)", fontSize: "12px" }}>
+            Cảnh báo: {persistence.last_error}
+          </small>
+        ) : null}
+      </div>
+    </div>
   );
+}
+
+function formatSavedAt(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+/* ── Pointer to Diagnostics for read-only inspectors (Module D) ─────── */
+
+function DiagnosticsPointer() {
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: "240px" }}>
+          <strong style={{ fontSize: "13px" }}>Tìm ngưỡng vitals + cấu hình rule?</strong>
+          <p style={{ margin: "2px 0 0 0", fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+            Bảng so sánh DB vs fallback và viewer JSON cho rules/fall đã chuyển sang trang Diagnostics
+            để Settings tập trung vào cấu hình mutable.
+          </p>
+        </div>
+        <Link
+          to="/diagnostics#thresholds"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "6px 12px",
+            fontSize: "13px",
+            color: "var(--accent-cyan)",
+            border: "1px solid var(--accent-cyan)",
+            borderRadius: "var(--radius-md)",
+            textDecoration: "none",
+          }}
+        >
+          <ExternalLink size={14} />
+          Mở Diagnostics
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+/* ── Section: Feature Flags (truthful copy, read-only badges) ────────── */
+
+interface TriggerModeMeta {
+  label: string;
+  description: string;
+  tone: { fg: string; bg: string; border: string };
+}
+
+const TRIGGER_MODE_META: Record<TriggerMode, TriggerModeMeta> = {
+  off: {
+    label: "Tắt",
+    description:
+      "Pre-trigger không chạy. Mô phỏng phát vitals bình thường nhưng không đánh giá rule local hay gọi model.",
+    tone: { fg: "var(--text-secondary)", bg: "rgba(107,114,128,0.12)", border: "rgba(107,114,128,0.30)" },
+  },
+  shadow: {
+    label: "Shadow",
+    description:
+      "Pre-trigger chạy nhưng KHÔNG gọi model AI. Rule + fall detection chỉ chạy local — phù hợp để quan sát trigger hoạt động trước khi bật model.",
+    tone: { fg: "var(--severity-info)", bg: "rgba(59,130,246,0.12)", border: "rgba(59,130,246,0.30)" },
+  },
+  active: {
+    label: "Active",
+    description:
+      "Pre-trigger chạy + escalate sang model AI khi rule bắn. Đây là chế độ đầy đủ — yêu cầu healthguard-model-api online.",
+    tone: { fg: "var(--severity-normal)", bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.30)" },
+  },
+};
+
+function FeatureFlagsSection({ data }: { data: SimulatorSettingsResponse }) {
+  const flags = data.feature_flags;
+  const meta = TRIGGER_MODE_META[flags.trigger_mode];
+  const thresholdSource = data.threshold_source;
+  const thresholdLabel = thresholdSourceLabel(thresholdSource);
 
   return (
     <Card
       header={
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <strong>Ngưỡng Vitals (Read-Only)</strong>
-          <span
-            style={{
-              fontSize: "12px",
-              padding: "2px 8px",
-              borderRadius: "var(--radius-sm)",
-              background: data.threshold_source === "db" ? "var(--accent-green-dim, #1a3a2a)" : "var(--accent-yellow-dim, #3a3520)",
-              color: data.threshold_source === "db" ? "var(--accent-green, #4ade80)" : "var(--accent-yellow, #facc15)",
-            }}
-          >
-            {data.threshold_source === "db" ? "🟢 DB Thresholds" : "🟡 Fallback"}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <strong>Feature Flags</strong>
+          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+            (chỉ đọc — đổi bằng env var hoặc Module D Diagnostics)
           </span>
         </div>
       }
     >
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid var(--border-default)" }}>
-              <th style={thStyle}>Chỉ số</th>
-              <th style={thStyle}>{hasDb ? "Fallback (Ngày)" : "Ban ngày"}</th>
-              {hasDb && <th style={thStyle}>DB (Ngày)</th>}
-              <th style={thStyle}>{hasDb ? "Fallback (Đêm)" : "Ban đêm"}</th>
-              {hasDb && <th style={thStyle}>DB (Đêm)</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {allKeys.map((key) => {
-              const fbDay = data.daytime_thresholds[key];
-              const fbNight = data.sleep_thresholds[key];
-              const dbDay = data.db_daytime_thresholds?.[key];
-              const dbNight = data.db_sleep_thresholds?.[key];
-              const dayDiff = hasDb && dbDay !== undefined && fbDay !== undefined && dbDay !== fbDay;
-              const nightDiff = hasDb && dbNight !== undefined && fbNight !== undefined && dbNight !== fbNight;
-
-              return (
-                <tr key={key} style={{ borderBottom: "1px solid var(--border-default)" }}>
-                  <td style={tdStyle}>{labelFor(key)}</td>
-                  <td style={tdValueStyle}>{fbDay ?? "—"}</td>
-                  {hasDb && (
-                    <td style={{ ...tdValueStyle, color: dayDiff ? "var(--accent-cyan)" : undefined }}>
-                      {dbDay ?? "—"}
-                    </td>
-                  )}
-                  <td style={tdValueStyle}>{fbNight ?? "—"}</td>
-                  {hasDb && (
-                    <td style={{ ...tdValueStyle, color: nightDiff ? "var(--accent-cyan)" : undefined }}>
-                      {dbNight ?? "—"}
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  );
-}
-
-const thStyle = { textAlign: "left" as const, padding: "6px 8px", color: "var(--text-secondary)", fontWeight: 600 };
-const tdStyle = { padding: "6px 8px", color: "var(--text-primary)" };
-const tdValueStyle = { padding: "6px 8px", color: "var(--text-primary)", fontFamily: "var(--font-mono)", textAlign: "right" as const };
-
-/* ── Section: Pre-Model Trigger Config (collapsible JSON viewer) ───── */
-
-function TriggerConfigSection({ data }: { data: SimulatorSettingsResponse }) {
-  const [rulesOpen, setRulesOpen] = useState(false);
-  const [fallOpen, setFallOpen] = useState(false);
-
-  return (
-    <Card header={<strong>Pre-Model Trigger Config (Read-Only)</strong>}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        <CollapsibleJson label="Rules Config" json={data.rules_config} isOpen={rulesOpen} onToggle={() => setRulesOpen(!rulesOpen)} />
-        <CollapsibleJson label="Fall Pipeline Config" json={data.fall_config} isOpen={fallOpen} onToggle={() => setFallOpen(!fallOpen)} />
-      </div>
-    </Card>
-  );
-}
-
-function CollapsibleJson({
-  label,
-  json,
-  isOpen,
-  onToggle,
-}: {
-  label: string;
-  json: Record<string, unknown> | null;
-  isOpen: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <div>
-      <button
-        onClick={onToggle}
-        style={{
-          background: "none",
-          border: "none",
-          color: "var(--text-primary)",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          gap: "6px",
-          padding: "4px 0",
-          fontSize: "13px",
-          fontWeight: 500,
-        }}
-      >
-        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {label}
-        {json === null && <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>(không tìm thấy file)</span>}
-      </button>
-      {isOpen && json !== null && (
-        <pre
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <div
           style={{
-            background: "var(--bg-elevated)",
-            border: "1px solid var(--border-default)",
-            borderRadius: "var(--radius-md)",
+            display: "grid",
+            gap: "8px",
             padding: "12px",
-            fontSize: "12px",
-            fontFamily: "var(--font-mono)",
-            overflow: "auto",
-            maxHeight: "400px",
-            marginTop: "4px",
+            borderRadius: "var(--radius-md)",
+            border: `1px solid ${meta.tone.border}`,
+            background: meta.tone.bg,
           }}
         >
-          {JSON.stringify(json, null, 2)}
-        </pre>
-      )}
-    </div>
-  );
-}
-
-/* ── Section: Feature Flags ─────────────────────────────────────────── */
-
-function FeatureFlagsSection({ data }: { data: SimulatorSettingsResponse }) {
-  const { use_db_thresholds, pre_model_trigger_enabled } = data.feature_flags;
-
-  let triggerStatusText: string;
-  let triggerStatusColor: string;
-  if (pre_model_trigger_enabled && use_db_thresholds) {
-    triggerStatusText = "Active mode — trigger đang chạy với DB thresholds";
-    triggerStatusColor = "var(--accent-green, #4ade80)";
-  } else if (pre_model_trigger_enabled) {
-    triggerStatusText = "Shadow mode — trigger chạy nhưng chưa dùng DB thresholds";
-    triggerStatusColor = "var(--accent-yellow, #facc15)";
-  } else {
-    triggerStatusText = "Off — trigger chưa bật";
-    triggerStatusColor = "var(--text-muted)";
-  }
-
-  return (
-    <Card header={<strong>Feature Flags</strong>}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 0" }}>
-          <ToggleSwitch checked={use_db_thresholds} />
-          <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>USE_DB_THRESHOLDS</span>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ fontSize: "12px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Trigger mode
+            </span>
+            <span
+              style={{
+                fontSize: "12px",
+                fontWeight: 700,
+                padding: "2px 10px",
+                borderRadius: "var(--radius-full)",
+                color: meta.tone.fg,
+                border: `1px solid ${meta.tone.border}`,
+                background: "rgba(0,0,0,0.15)",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+              }}
+            >
+              {meta.label}
+            </span>
+            <small style={{ color: "var(--text-muted)", fontSize: "12px" }}>
+              enable_model_calls = <code>{String(flags.enable_model_calls)}</code>
+            </small>
+          </div>
+          <small style={{ color: "var(--text-secondary)", fontSize: "13px", lineHeight: 1.5 }}>
+            {meta.description}
+          </small>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 0" }}>
-          <ToggleSwitch checked={pre_model_trigger_enabled} />
-          <span style={{ fontSize: "13px", color: "var(--text-primary)" }}>PRE_MODEL_TRIGGER_ENABLED</span>
-        </div>
-        <p style={{ fontSize: "12px", color: triggerStatusColor, margin: "4px 0 0 0" }}>
-          {triggerStatusText}
-        </p>
+
+        <ReadOnlyFlagRow
+          envVar="PRE_MODEL_TRIGGER_ENABLED"
+          checked={flags.pre_model_trigger_enabled}
+          hint={
+            flags.pre_model_trigger_enabled
+              ? "Bật. Quyết định mode shadow vs active dựa vào enable_model_calls."
+              : "Tắt. Pre-trigger không chạy bất kể giá trị enable_model_calls."
+          }
+        />
+        <ReadOnlyFlagRow
+          envVar="USE_DB_THRESHOLDS"
+          checked={flags.use_db_thresholds}
+          hint={
+            thresholdSource === "db"
+              ? `Đang dùng ngưỡng từ DB (${thresholdLabel}).`
+              : `Đang dùng ngưỡng dự phòng (${thresholdLabel}). Bật cờ này + đảm bảo DB sẵn sàng để chuyển sang DB thresholds.`
+          }
+        />
       </div>
     </Card>
   );
 }
 
-function ToggleSwitch({ checked, disabled }: { checked: boolean; disabled?: boolean }) {
+function ReadOnlyFlagRow({
+  envVar,
+  checked,
+  hint,
+}: {
+  envVar: string;
+  checked: boolean;
+  hint: string;
+}) {
   return (
     <div
       style={{
-        width: "36px",
-        height: "20px",
-        borderRadius: "10px",
-        background: checked ? "var(--accent-cyan)" : "var(--bg-elevated)",
+        display: "grid",
+        gap: "4px",
+        padding: "8px 12px",
+        borderRadius: "var(--radius-md)",
         border: "1px solid var(--border-default)",
-        position: "relative",
-        opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? "not-allowed" : "pointer",
-        transition: "background var(--duration-fast) var(--ease-default)",
-        flexShrink: 0,
+        background: "var(--bg-elevated)",
       }}
     >
-      <div
-        style={{
-          width: "14px",
-          height: "14px",
-          borderRadius: "50%",
-          background: "var(--text-primary)",
-          position: "absolute",
-          top: "2px",
-          left: checked ? "18px" : "2px",
-          transition: "left var(--duration-fast) var(--ease-default)",
-        }}
-      />
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span
+          style={{
+            fontSize: "11px",
+            fontWeight: 700,
+            padding: "2px 8px",
+            borderRadius: "var(--radius-full)",
+            color: checked ? "var(--severity-normal)" : "var(--text-secondary)",
+            border: `1px solid ${checked ? "rgba(34,197,94,0.35)" : "var(--border-default)"}`,
+            background: checked ? "rgba(34,197,94,0.10)" : "transparent",
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+          }}
+        >
+          {checked ? "ON" : "OFF"}
+        </span>
+        <code style={{ fontSize: "12px", fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>{envVar}</code>
+      </div>
+      <small style={{ color: "var(--text-secondary)", fontSize: "12px", lineHeight: 1.5 }}>
+        {hint}
+      </small>
     </div>
   );
+}
+
+function thresholdSourceLabel(source: string): string {
+  switch (source) {
+    case "db":
+      return "đọc từ database";
+    case "fallback":
+      return "ngưỡng dự phòng từ vitals_service";
+    case "unavailable":
+      return "không truy vấn được provider";
+    default:
+      return source;
+  }
 }
 
 /* ── Main Page ──────────────────────────────────────────────────────── */
@@ -326,14 +503,14 @@ export function SettingsPage() {
     staleTime: 30_000,
   });
 
-  function handleRuntimeSaved() {
+  function handleRuntimeMutated() {
     queryClient.invalidateQueries({ queryKey: ["settings"] });
   }
 
   if (isLoading) {
     return (
       <div style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "16px" }}>
-        <h1 className="page-title">Cài đặt</h1>
+        <h1 className="page-title">Cấu hình runtime</h1>
         <Skeleton style={{ height: "200px" }} />
         <Skeleton style={{ height: "300px" }} />
       </div>
@@ -343,21 +520,22 @@ export function SettingsPage() {
   if (isError || !data) {
     return (
       <div style={{ padding: "1.5rem" }}>
-        <h1 className="page-title">Cài đặt</h1>
-        <ErrorCard message={error instanceof Error ? error.message : "Không thể tải cài đặt."} />
+        <h1 className="page-title">Cấu hình runtime</h1>
+        <ErrorCard message={error instanceof Error ? error.message : "Không thể tải cấu hình runtime."} />
       </div>
     );
   }
 
   return (
     <div style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "16px", maxWidth: "900px" }}>
-      <h1 className="page-title">Cài đặt</h1>
-      <p className="page-subtitle">Xem và điều chỉnh cấu hình của IoT Simulator.</p>
+      <h1 className="page-title">Cấu hình runtime</h1>
+      <p className="page-subtitle">
+        Các giá trị mutable của IoT Simulator. Tham khảo Diagnostics cho ngưỡng vitals (chỉ đọc) và rule/fall config.
+      </p>
 
-      <RuntimeSection data={data} onSaved={handleRuntimeSaved} />
-      <ThresholdsSection data={data} />
-      <TriggerConfigSection data={data} />
+      <RuntimeSection data={data} onMutated={handleRuntimeMutated} />
       <FeatureFlagsSection data={data} />
+      <DiagnosticsPointer />
     </div>
   );
 }

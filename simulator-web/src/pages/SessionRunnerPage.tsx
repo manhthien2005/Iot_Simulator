@@ -10,10 +10,9 @@ import { useDevices } from "../hooks/useDevices";
 import { useSessions } from "../hooks/useSessions";
 import { applyScenarioPreset, fetchScenarios } from "../services/scenarioApi";
 
-import { useSessionVitalsStore } from "../stores/sessionVitalsStore";
 import { useSessionStore } from "../stores/sessionStore";
-import type { VitalsSample } from "../types/vitals";
-import { notify } from "../utils/toast";
+import { runWithToast } from "../utils/toast";
+import { useConfirm } from "../hooks/useConfirm";
 
 export function SessionRunnerPage() {
   const [searchParams] = useSearchParams();
@@ -88,29 +87,55 @@ export function SessionRunnerPage() {
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions.find((session) => session.status === "running") ?? null,
     [activeSessionId, sessions]
   );
-  const currentVitals = useSessionVitalsStore((state) => {
-    if (state.activeDeviceId !== monitorDeviceId) {
-      return null;
-    }
-    return state.streamData[state.streamData.length - 1] ?? null;
-  }) as VitalsSample | null;
 
-  // Removing obsolete start/stop logic since sessions are managed per device from the DevicesPage
+  // Module C: motion data comes from `useLatestMotion(sessionId, deviceId)`
+  // inside `<MotionPreviewPanel/>`; the page no longer plumbs a synthetic
+  // VitalsSample through props.
 
   const [isApplying, setIsApplying] = useState(false);
-  const changeScenario = useCallback(async (deviceId: string, scenarioId: string) => {
-    setScenarioByDevice((prev) => ({ ...prev, [deviceId]: scenarioId }));
-    if (activeSession?.status !== "running") return;
-    setIsApplying(true);
-    try {
-      await applyScenarioPreset(deviceId, scenarioId);
-      notify.success("Đã áp dụng kịch bản cho thiết bị đang chạy.");
-    } catch {
-      notify.error("Không áp dụng được kịch bản cho thiết bị này.");
-    } finally {
-      setIsApplying(false);
-    }
-  }, [activeSession?.status]);
+  // Module G.5 — confirm before applying critical scenarios so an
+  // accidental dropdown change doesn't push a real device into HIGH /
+  // CRITICAL risk or fall_countdown.
+  const [confirm, confirmDialog] = useConfirm();
+
+  const changeScenario = useCallback(
+    async (deviceId: string, scenarioId: string) => {
+      const scenario = scenarios.find((item) => item.id === scenarioId) ?? null;
+      const previousScenarioId = scenarioByDevice[deviceId];
+
+      if (activeSession?.status === "running" && scenario?.severity === "critical") {
+        const ok = await confirm({
+          severity: "critical",
+          title: `Áp dụng kịch bản "${scenario.name}"?`,
+          description: `Kịch bản này được đánh dấu nguy cấp và sẽ kích hoạt side-effect: ${
+            scenario.followUp.map((f) => f.detail).join(", ") || "không có side-effect bổ sung"
+          }. Có chắc chắn không?`,
+          confirmLabel: "Áp dụng",
+        });
+        if (!ok) return;
+      }
+
+      setScenarioByDevice((prev) => ({ ...prev, [deviceId]: scenarioId }));
+      if (activeSession?.status !== "running") return;
+      setIsApplying(true);
+      try {
+        await runWithToast(applyScenarioPreset(deviceId, scenarioId), {
+          loading: `Đang áp dụng kịch bản "${scenario?.name ?? scenarioId}"…`,
+          success: `Đã áp dụng "${scenario?.name ?? scenarioId}" cho thiết bị đang chạy.`,
+          error: "Không áp dụng được kịch bản cho thiết bị này.",
+        });
+      } catch {
+        // runWithToast surfaced the error toast — roll back optimistic
+        // assignment so the dropdown returns to the previous scenario.
+        if (previousScenarioId) {
+          setScenarioByDevice((prev) => ({ ...prev, [deviceId]: previousScenarioId }));
+        }
+      } finally {
+        setIsApplying(false);
+      }
+    },
+    [activeSession?.status, confirm, scenarios, scenarioByDevice]
+  );
 
   const activeDevices = useMemo(() => devices.filter((d) => d.isOnline), [devices]);
 
@@ -153,8 +178,16 @@ export function SessionRunnerPage() {
         onDeviceChange={setMonitorDeviceId}
       />
 
-      <FallLab devices={activeDevices} />
-      <MotionPreviewPanel selectedDevice={activeDevices.find((item) => item.id === monitorDeviceId) ?? null} currentVitals={currentVitals} />
+      <FallLab
+        devices={activeDevices}
+        sessionId={activeSession?.id ?? null}
+        focusDeviceId={monitorDeviceId || null}
+      />
+      <MotionPreviewPanel
+        selectedDevice={activeDevices.find((item) => item.id === monitorDeviceId) ?? null}
+        sessionId={activeSession?.id ?? null}
+      />
+      {confirmDialog}
     </section>
   );
 }

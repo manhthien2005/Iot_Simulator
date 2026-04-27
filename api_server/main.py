@@ -21,6 +21,7 @@ for _env_path in _ENV_CANDIDATES:
 
 try:
     from Iot_Simulator.api_server.middleware.rate_limit import RateLimitMiddleware
+    from Iot_Simulator.api_server.schemas import HealthPayloadV2
     from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime, set_runtime
     from Iot_Simulator.api_server.routers.analytics import router as analytics_router
     from Iot_Simulator.api_server.routers.dashboard import router as dashboard_router
@@ -35,6 +36,7 @@ try:
     from Iot_Simulator.api_server.ws.log_stream import handle_ws_logs
 except ModuleNotFoundError:
     from api_server.middleware.rate_limit import RateLimitMiddleware
+    from api_server.schemas import HealthPayloadV2
     from api_server.dependencies import SimulatorRuntime, get_runtime, set_runtime
     from api_server.routers.analytics import router as analytics_router
     from api_server.routers.dashboard import router as dashboard_router
@@ -99,10 +101,13 @@ app.include_router(analytics_router, prefix="/api/sim")
 app.include_router(settings_router, prefix="/api/sim")
 
 
-@app.get("/api/sim/health")
-def health() -> dict[str, str]:
+@app.get("/api/sim/health", response_model=HealthPayloadV2)
+def health() -> HealthPayloadV2:
     runtime = get_runtime()
-    return runtime.health_payload()
+    # Pydantic ignores extra keys not declared on HealthPayloadV2 (the
+    # legacy flat keys "status", "api", "backendStatus", "mqtt", "db",
+    # "version" are simply dropped during serialisation).
+    return HealthPayloadV2(**runtime.health_payload())
 
 
 @app.websocket("/ws/logs/{session_id}")

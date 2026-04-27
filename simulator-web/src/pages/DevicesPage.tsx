@@ -1,6 +1,6 @@
 import { Plus, Watch } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CreateDbDeviceModal } from "../components/domain/CreateDbDeviceModal";
 import { DbDeviceTable } from "../components/domain/DbDeviceTable";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -17,7 +17,8 @@ import {
   deactivateDbDevice,
   deleteDbDevice,
 } from "../services/deviceApi";
-import { notify } from "../utils/toast";
+import { notify, runWithToast } from "../utils/toast";
+import { useConfirm } from "../hooks/useConfirm";
 import type { DbDevice, DeviceType } from "../types/device";
 
 const EMPTY_DB_DEVICES: DbDevice[] = [];
@@ -30,6 +31,9 @@ export function DevicesPage() {
   const [openCreate, setOpenCreate] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [batchActivating, setBatchActivating] = useState(false);
+  // Module G.18 — confirm before destructive deletes + unified toasts
+  // for the rest of the page's mutations.
+  const [confirm, confirmDialog] = useConfirm();
 
   const filtered = useMemo(
     () => {
@@ -58,55 +62,140 @@ export function DevicesPage() {
     [queryClient]
   );
 
-  const handleCreate = useCallback(async (payload: {
-    device_name: string;
-    device_type: DeviceType;
-    user_email?: string;
-  }) => {
-    await createDbDevice(payload);
-    notify.success("Đã tạo thiết bị trong DB");
-    await invalidate();
-  }, [invalidate]);
-
-  const handleAssign = useCallback(async (deviceId: number, email: string) => {
-    try {
-      await assignDbDevice(deviceId, email);
-      notify.success(`Đã gán thiết bị cho ${email}`);
+  const handleCreate = useCallback(
+    async (payload: {
+      device_name: string;
+      device_type: DeviceType;
+      user_email?: string;
+    }) => {
+      await runWithToast(createDbDevice(payload), {
+        loading: `Đang tạo thiết bị "${payload.device_name}"…`,
+        success: `Đã tạo thiết bị "${payload.device_name}" trong DB.`,
+        error: "Không tạo được thiết bị. Kiểm tra kết nối.",
+      });
       await invalidate();
-    } catch {
-      notify.error("Không gán được thiết bị. Kiểm tra kết nối.");
-    }
-  }, [invalidate]);
+    },
+    [invalidate]
+  );
 
-  const handleActivateSim = useCallback(async (device: DbDevice) => {
-    try {
-      await activateDbDevice(device.id);
-      notify.success(`Đã bật sim cho ${device.device_name} — hệ thống đang truyền dữ liệu`);
-      await invalidate();
-    } catch {
-      notify.error(`Không bật được sim cho ${device.device_name}. Kiểm tra kết nối.`);
-    }
-  }, [invalidate]);
+  const handleAssign = useCallback(
+    async (deviceId: number, email: string): Promise<void> => {
+      try {
+        await runWithToast(assignDbDevice(deviceId, email), {
+          loading: `Đang gán thiết bị cho ${email}…`,
+          success: `Đã gán thiết bị cho ${email}.`,
+          error: "Không gán được thiết bị. Kiểm tra kết nối.",
+        });
+        await invalidate();
+      } catch {
+        // runWithToast surfaced the error toast.
+      }
+    },
+    [invalidate]
+  );
 
-  const handleDeactivateSim = useCallback(async (device: DbDevice) => {
-    try {
-      await deactivateDbDevice(device.id);
-      notify.warning(`Đã tắt sim cho ${device.device_name} — mobile app sẽ mất dữ liệu`);
-      await invalidate();
-    } catch {
-      notify.error(`Không tắt được sim cho ${device.device_name}. Kiểm tra kết nối.`);
-    }
-  }, [invalidate]);
+  // Module G.9 — optimistic SIM toggle.
+  //
+  // The row's "Bật/Tắt sim" buttons are the highest-frequency mutation
+  // on the page.  Without optimism, the operator clicks → ~250 ms BE
+  // round-trip → invalidate → refetch → row finally flips.  With
+  // optimism we patch `is_sim_running` in the React Query cache
+  // synchronously, runWithToast handles the loading/success/error
+  // toast, and `onError` rolls the row back to the snapshot if the BE
+  // rejects.  `onSettled` invalidates so the BE-truth eventually wins.
+  //
+  // Helper builds an optimistic mutation for a given target value of
+  // `is_sim_running` so activate/deactivate share the patch logic.
+  const buildSimToggleMutation = useCallback(
+    (nextValue: boolean) => ({
+      onMutate: async (device: DbDevice) => {
+        await queryClient.cancelQueries({ queryKey: ["db-devices"] });
+        const previous = queryClient.getQueryData<DbDevice[]>(["db-devices"]);
+        queryClient.setQueryData<DbDevice[]>(["db-devices"], (old) =>
+          old?.map((d) => (d.id === device.id ? { ...d, is_sim_running: nextValue } : d)) ?? old
+        );
+        return { previous };
+      },
+      onError: (_error: unknown, _device: DbDevice, ctx?: { previous?: DbDevice[] }) => {
+        if (ctx?.previous) {
+          queryClient.setQueryData(["db-devices"], ctx.previous);
+        }
+      },
+      onSettled: () => {
+        void queryClient.invalidateQueries({ queryKey: ["db-devices"] });
+      },
+    }),
+    [queryClient]
+  );
 
-  const handleDelete = useCallback(async (deviceId: number) => {
-    try {
-      await deleteDbDevice(deviceId);
-      notify.success("Đã xóa thiết bị");
-      await invalidate();
-    } catch {
-      notify.error("Không xóa được thiết bị. Kiểm tra kết nối.");
-    }
-  }, [invalidate]);
+  const activateSimMutation = useMutation({
+    mutationFn: (device: DbDevice) => activateDbDevice(device.id),
+    ...buildSimToggleMutation(true),
+  });
+
+  const deactivateSimMutation = useMutation({
+    mutationFn: (device: DbDevice) => deactivateDbDevice(device.id),
+    ...buildSimToggleMutation(false),
+  });
+
+  const handleActivateSim = useCallback(
+    async (device: DbDevice): Promise<void> => {
+      try {
+        await runWithToast(activateSimMutation.mutateAsync(device), {
+          loading: `Đang bật sim cho ${device.device_name}…`,
+          success: `Đã bật sim cho ${device.device_name} — hệ thống đang truyền dữ liệu.`,
+          error: `Không bật được sim cho ${device.device_name}. Kiểm tra kết nối.`,
+        });
+      } catch {
+        // runWithToast already surfaced the error toast and onError
+        // rolled back the optimistic patch.  Swallow so the click
+        // handler doesn't leak an unhandled rejection.
+      }
+    },
+    [activateSimMutation]
+  );
+
+  const handleDeactivateSim = useCallback(
+    async (device: DbDevice): Promise<void> => {
+      try {
+        await runWithToast(deactivateSimMutation.mutateAsync(device), {
+          loading: `Đang tắt sim cho ${device.device_name}…`,
+          success: `Đã tắt sim cho ${device.device_name} — mobile app sẽ mất dữ liệu.`,
+          error: `Không tắt được sim cho ${device.device_name}. Kiểm tra kết nối.`,
+        });
+      } catch {
+        // see above
+      }
+    },
+    [deactivateSimMutation]
+  );
+
+  const handleDelete = useCallback(
+    async (deviceId: number): Promise<void> => {
+      const target = dbDevices.find((d) => d.id === deviceId);
+      const ok = await confirm({
+        severity: "critical",
+        title: "Xoá thiết bị?",
+        description: target
+          ? `Thao tác này xoá thiết bị "${target.device_name}" (id=${target.id}) khỏi production DB và không thể hoàn tác. Mọi sample/event đã ghi sẽ vẫn còn nhưng thiết bị sẽ biến mất khỏi danh sách.`
+          : "Thao tác này xoá thiết bị khỏi production DB và không thể hoàn tác.",
+        confirmLabel: "Xoá thiết bị",
+      });
+      if (!ok) return;
+
+      try {
+        await runWithToast(deleteDbDevice(deviceId), {
+          loading: `Đang xoá ${target?.device_name ?? "thiết bị"}…`,
+          success: `Đã xoá ${target?.device_name ?? "thiết bị"}.`,
+          error: "Không xoá được thiết bị. Kiểm tra kết nối.",
+        });
+        await invalidate();
+      } catch {
+        // runWithToast surfaced the error toast.
+      }
+    },
+    [confirm, dbDevices, invalidate]
+  );
 
   const handleBatchActivate = useCallback(async (deviceIds: number[]) => {
     const eligibleDevices = filtered.filter((device) => deviceIds.includes(device.id) && device.user_id !== null);
@@ -207,6 +296,7 @@ export function DevicesPage() {
       )}
 
       <CreateDbDeviceModal open={openCreate} onClose={() => setOpenCreate(false)} onCreate={handleCreate} />
+      {confirmDialog}
     </section>
   );
 }

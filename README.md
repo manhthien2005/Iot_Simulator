@@ -93,6 +93,17 @@ Mọi tín hiệu sinh tồn khi bật ra khỏi API đều bị chặn theo khu
 
 ## 5. Changelog (Lịch sử Cập Nhật)
 
+- **2026-04-27 (Module H — UX Overhaul + Backend Schema Fixes):**
+  - **Dashboard Hero** (`SystemHealthHero`) — hiển thị trạng thái runtime/database/backend/modelApi theo `HealthPayloadV2`; retry CTA khi BE chưa sẵn sàng.
+  - **Trung tâm Bằng chứng** (`VerificationPage`) — theo dõi tất cả phiên đang chạy song song (fan-out WebSocket per session), pipeline 3×2 grid, tên thiết bị thay vì raw ID.
+  - **FallLab** — nút tiêm sự kiện té ngã/SOS đầy đủ variant, kết nối BE thật.
+  - **Motion Preview** — giao diện operator-friendly với tiếng Việt, chi tiết kỹ thuật có thể thu gọn.
+  - **Scenarios Page** — card compact expand-on-click, layout grid đồng đều.
+  - **Backend fix** (`/api/sim/health`) — sửa `ResponseValidationError` do legacy `"backend"` key đè lên `HealthBackendBlock`; đổi key sang `"backendStatus"`.
+  - **IPv6 latency fix** — thêm `.env.example`; đặt `HEALTH_BACKEND_URL=http://127.0.0.1:8000` tránh Windows DNS fallback ~2s.
+  - **React Query persistence** — health payload được persist qua cold reload; `staleTime` 15s tránh spinner flash khi điều hướng.
+  - **Pre-model trigger** — bổ sung `pre_model_trigger/` module với fall/sleep dispatch primitives (branch `feat/sleep-risk-dispatch`).
+
 - **2026-04-02 (Sleep AI Integration):**
   - Tích hợp `SleepAIClient` → gọi HealthGuard AI ONNX API (`http://localhost:8001`) để chấm điểm giấc ngủ AI-driven.
   - Xây dựng `SleepVitalsEnricher` → sinh đủ 19 features/session cho 4 kịch bản ngủ (good/fragmented/apnea-mild/apnea-severe).
@@ -113,22 +124,43 @@ Mọi tín hiệu sinh tồn khi bật ra khỏi API đều bị chặn theo khu
 > **Lưu ý:** Dataset thô không được push kèm trong Repository này do giới hạn kích thước.  
 > Xem hướng dẫn tải: [`datasets/DOWNLOAD_GUIDE.md`](datasets/DOWNLOAD_GUIDE.md)
 
-1. **Chạy toàn bộ (Backend + Frontend):**
-   ```powershell
-   .\start_all.bat
-   ```
-2. **Setup Frontend độc lập:**
-   ```powershell
-   cd simulator-web
-   npm install
-   npm run dev
-   ```
-3. **Tạo dữ liệu ngủ lịch sử (backfill):**
-   ```powershell
-   # Sau khi simulator đang chạy
-   curl -X POST http://localhost:8090/scenarios/sleep/backfill `
-     -H "Content-Type: application/json" `
-     -d '{"device_id": "<id>", "days_behind": 30, "scenario_id": "good_sleep_night"}'
-   ```
+### Bước 0 — Cấu hình môi trường
 
-*(Backend Engine: `http://localhost:8090` | Web UI: `http://localhost:5173` | AI Inference: `http://localhost:8001`)*
+```powershell
+# Tạo .env từ template
+Copy-Item .env.example .env
+# Chỉnh sửa .env: điền DATABASE_URL và các giá trị cần thiết
+notepad .env
+```
+
+> **Windows tip:** Đặt `HEALTH_BACKEND_URL=http://127.0.0.1:8000` (không dùng `localhost`) để tránh IPv6 resolution delay ~2s.
+
+### Bước 1 — Chạy toàn bộ
+
+```powershell
+.\start_all.bat
+```
+
+### Bước 2 — Setup Frontend độc lập
+
+```powershell
+cd simulator-web
+npm install
+npm run dev
+```
+
+### Bước 3 — Tạo dữ liệu ngủ lịch sử (backfill)
+
+```powershell
+# Sau khi simulator đang chạy
+curl -X POST http://localhost:8090/api/sim/scenarios/sleep/backfill `
+  -H "Content-Type: application/json" `
+  -d '{"device_id": "<id>", "days_behind": 30, "scenario_id": "good_sleep_night"}'
+```
+
+| Service | URL |
+|---|---|
+| Backend Engine (FastAPI) | `http://localhost:8090` |
+| Web Dashboard (React) | `http://localhost:5173` |
+| AI Inference (ONNX) | `http://localhost:8001` |
+| HealthGuard Backend | `http://localhost:8000` |

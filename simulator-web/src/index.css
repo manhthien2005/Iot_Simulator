@@ -172,6 +172,72 @@ button:disabled {
   }
 }
 
+/* ── Module G.17 — enter animations ──────────────────────────────── */
+/*
+ * Pure CSS keyframes for cross-cutting "this just appeared" cues.
+ * Chosen over framer-motion (~30 KB gzip) because the simulator console
+ * only needs simple opacity + translate fades — physics/layout
+ * animation isn't required.  All animations honor
+ * `prefers-reduced-motion: reduce` via the global override below.
+ */
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in var(--duration-normal) var(--ease-default) both;
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up var(--duration-normal) var(--ease-default) both;
+}
+
+.animate-scale-in {
+  animation: scale-in var(--duration-fast) var(--ease-default) both;
+}
+
+/* Apply page-level fade to every route content swap.  The Suspense
+ * skeleton already covers the loading state — this layers a subtle
+ * fade *after* the new chunk renders so the transition feels
+ * intentional rather than abrupt. */
+.app-main > * {
+  animation: fade-in-up var(--duration-normal) var(--ease-default) both;
+}
+
+/* Modal panels open with a quick scale-in so confirm/create dialogs
+ * feel responsive to the click that opened them. */
+.modal-panel {
+  animation: scale-in var(--duration-fast) var(--ease-default) both;
+}
+
 /* ── Hover utility classes ───────────────────────────────────────── */
 .hover-dim:hover {
   opacity: 0.85;

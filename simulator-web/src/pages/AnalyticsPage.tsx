@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Moon, ShieldAlert, Watch } from "lucide-react";
+import { Moon, ShieldAlert, Watch, X, Wrench } from "lucide-react";
+import { Link } from "react-router-dom";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Select } from "../components/ui/Select";
 import { Skeleton } from "../components/ui/Skeleton";
@@ -10,6 +11,16 @@ import { RiskAnalyticsTab } from "../components/domain/RiskAnalyticsTab";
 import { useDevices } from "../hooks/useDevices";
 import { getDbSleepHistory, getRiskScore, getSleepSession } from "../services/analyticsApi";
 import { POLL_INTERVALS } from "../config/defaults";
+
+// ---------------------------------------------------------------------------
+// Module D.7 — dismissible "moved to Diagnostics" notice.
+//
+// Survives reload via sessionStorage so a user who has acknowledged the
+// move does not see the banner on every navigation back.  Stored under a
+// versioned key so we can re-arm later if the notice content changes.
+// ---------------------------------------------------------------------------
+
+const DIAGNOSTICS_NOTICE_KEY = "ux-refactor:analytics-notice-v1";
 
 type AnalyticsTab = "sleep" | "risk";
 
@@ -110,7 +121,9 @@ export function AnalyticsPage() {
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
         <div>
           <h1 className="page-title">Phân tích</h1>
-          <p className="page-subtitle">Phát lại giấc ngủ và phân tích rủi ro với chế độ fallback cho Sleep-EDF.</p>
+          <p className="page-subtitle">
+            Chế độ chỉ đọc cho người xem lâm sàng — phát lại giấc ngủ và phân tích rủi ro với fallback cho Sleep-EDF.
+          </p>
         </div>
         <Select
           value={deviceId}
@@ -124,6 +137,8 @@ export function AnalyticsPage() {
           ))}
         </Select>
       </div>
+
+      <DiagnosticsMovedNotice />
 
       <Tabs
         items={[
@@ -152,4 +167,69 @@ export function AnalyticsPage() {
       )}
     </section>
   );
+}
+
+// ── Diagnostics moved notice ────────────────────────────────────────────
+
+function DiagnosticsMovedNotice() {
+  const [dismissed, setDismissed] = useState<boolean>(() => readDismissed());
+
+  if (dismissed) return null;
+
+  function handleDismiss() {
+    setDismissed(true);
+    try {
+      sessionStorage.setItem(DIAGNOSTICS_NOTICE_KEY, "1");
+    } catch {
+      // sessionStorage unavailable (private mode etc.) — non-fatal.
+    }
+  }
+
+  return (
+    <aside
+      role="status"
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "12px",
+        padding: "12px 14px",
+        borderRadius: "var(--radius-md)",
+        border: "1px solid rgba(6, 182, 212, 0.30)",
+        background: "rgba(6, 182, 212, 0.08)",
+      }}
+    >
+      <Wrench size={16} style={{ marginTop: "2px", color: "var(--accent-cyan)", flexShrink: 0 }} />
+      <div style={{ flex: 1, fontSize: "13px", lineHeight: 1.5, color: "var(--text-secondary)" }}>
+        <strong style={{ color: "var(--text-primary)" }}>Operator tools đã chuyển sang Diagnostics.</strong>{" "}
+        Chạy tính toán theo yêu cầu, tiêm rủi ro nhân tạo và trình kiểm tra ngưỡng đều nằm trong{" "}
+        <Link to="/diagnostics#risk-tools" style={{ color: "var(--accent-cyan)", textDecoration: "underline" }}>
+          Diagnostics
+        </Link>
+        . Trang Phân tích giữ nguyên dữ liệu chỉ đọc cho clinical viewers.
+      </div>
+      <button
+        onClick={handleDismiss}
+        aria-label="Đóng thông báo"
+        style={{
+          background: "transparent",
+          border: "none",
+          color: "var(--text-secondary)",
+          cursor: "pointer",
+          padding: "2px",
+          flexShrink: 0,
+        }}
+      >
+        <X size={14} />
+      </button>
+    </aside>
+  );
+}
+
+function readDismissed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(DIAGNOSTICS_NOTICE_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
