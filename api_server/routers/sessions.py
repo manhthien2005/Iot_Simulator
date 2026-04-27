@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from api_server.dependencies import SimulatorRuntime, get_runtime
-from api_server.schemas import CreateSessionRequest, SessionInfo
+from api_server.schemas import (
+    CreateSessionRequest,
+    FallState,
+    MotionLatest,
+    SessionInfo,
+)
 
 router = APIRouter(tags=["sessions"])
 
@@ -41,4 +46,43 @@ def stop_session(session_id: str, runtime: SimulatorRuntime = Depends(get_runtim
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Module C — Sessions / Fall Lab evidence surface.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sessions/{session_id}/motion/latest", response_model=MotionLatest)
+def latest_motion(
+    session_id: str,
+    device_id: str = Query(..., alias="deviceId"),
+    runtime: SimulatorRuntime = Depends(get_runtime),
+) -> MotionLatest:
+    """Return the most recent motion window emitted for `deviceId`.
+
+    Used by the Sessions page motion preview — replaces the previous
+    `pseudoMetric()` synthetic preview with real dataset arrays.
+    """
+    try:
+        return runtime.motion_latest(session_id, device_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/sessions/{session_id}/fall-state", response_model=FallState)
+def fall_state(
+    session_id: str,
+    device_id: str = Query(..., alias="deviceId"),
+    runtime: SimulatorRuntime = Depends(get_runtime),
+) -> FallState:
+    """Return the operator-visible fall pipeline state for `deviceId`.
+
+    Drives the Sessions page Fall Lab countdown bar — replaces the
+    FE-only `setInterval` with a BE-derived `countdownRemainingSec`.
+    """
+    try:
+        return runtime.fall_state(session_id, device_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

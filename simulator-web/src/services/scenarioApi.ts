@@ -6,50 +6,23 @@ export async function fetchScenarios(): Promise<ScenarioOption[]> {
   return response.data;
 }
 
+/**
+ * Apply a scenario to a device.  Module B.4 — the entire side-effect
+ * chain (fall event, sleep phase, risk inject) now lives behind this
+ * single POST.  The previous `if (scenarioId === ...)` ladder fired
+ * additional `events/fall` and `events/risk-inject` calls from the
+ * browser, which:
+ *   - silently doubled `fall_detected` events because the BE was
+ *     already auto-injecting one for fall scenarios; and
+ *   - hid the apply pipeline from any non-FE caller.
+ *
+ * The new manifest declares each side-effect via `ScenarioOption.followUp`
+ * so consumers can introspect what a scenario will do without reading
+ * code.  Render the chips from `keySignals` + `followUp` in the UI.
+ */
 export async function applyScenarioPreset(deviceId: string, scenarioId: string): Promise<void> {
   await apiClient.post("/api/sim/scenarios/apply", {
     device_id: deviceId,
     scenario_id: scenarioId,
   });
-
-  if (scenarioId === "fall_high_confidence") {
-    await apiClient.post("/api/sim/events/fall", { device_id: deviceId, event_type: "fall_detected", variant: "confirmed" });
-    return;
-  }
-  if (scenarioId === "fall_false_alarm") {
-    await apiClient.post("/api/sim/events/fall", { device_id: deviceId, event_type: "fall_detected", variant: "false_fall" });
-    return;
-  }
-  if (scenarioId === "fall_no_response") {
-    await apiClient.post("/api/sim/events/fall", { device_id: deviceId, event_type: "fall_detected", variant: "confirmed" });
-    await apiClient.post("/api/sim/events", { device_id: deviceId, event_type: "sos_triggered", variant: "no_response" });
-    return;
-  }
-  if (scenarioId === "hypoxia_critical") {
-    await apiClient.post("/api/sim/events/risk-inject", {
-      device_id: deviceId,
-      risk_type: "general",
-      risk_level: "HIGH",
-      score: 0.78,
-    });
-    return;
-  }
-  if (scenarioId === "high_risk_cardiac") {
-    await apiClient.post("/api/sim/events/risk-inject", {
-      device_id: deviceId,
-      risk_type: "cardiac",
-      risk_level: "CRITICAL",
-      score: 0.9,
-    });
-    return;
-  }
-  if (scenarioId === "medium_risk_general") {
-    await apiClient.post("/api/sim/events/risk-inject", {
-      device_id: deviceId,
-      risk_type: "general",
-      risk_level: "MEDIUM",
-      score: 0.58,
-    });
-    return;
-  }
 }

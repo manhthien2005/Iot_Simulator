@@ -1,0 +1,634 @@
+{
+  "version": "2.0.0",
+  "name": "iot_health_risk_routing_rules_unified",
+  "description": "Unified routing rules for adult IoT health monitoring. This layer routes data windows to downstream risk models and urgent workflows. It is not a diagnostic engine.",
+  "scope": {
+    "population": "adults_only",
+    "default_context": "resting",
+    "supported_contexts": [
+      "resting",
+      "sleep",
+      "post_fall",
+      "active"
+    ],
+    "exclusions_without_override": [
+      "pediatrics",
+      "pregnancy",
+      "known_target_spo2_88_92",
+      "clinically_defined_special_population"
+    ]
+  },
+  "severity": {
+    "order": {
+      "NORMAL": 0,
+      "WATCH": 1,
+      "SEND_TO_RISK_MODEL": 2,
+      "URGENT": 3
+    },
+    "principles": {
+      "instant_urgent_overrides_all": true,
+      "profile_can_only_increase_sensitivity": true,
+      "profile_cannot_change_urgent_thresholds": true,
+      "time_series_can_only_escalate": true,
+      "combination_rules_can_only_escalate": true,
+      "final_decision_is_max_severity": true,
+      "allow_multiple_reason_codes": true
+    }
+  },
+  "inputs": {
+    "profile_fields": [
+      "user_id",
+      "age",
+      "gender",
+      "weight",
+      "height",
+      "bmi"
+    ],
+    "vital_fields": [
+      "heart_rate",
+      "resp_rate",
+      "body_temp",
+      "spo2",
+      "sys_bp",
+      "dia_bp",
+      "hrv",
+      "pulse_pressure",
+      "map_val"
+    ],
+    "optional_context_fields": [
+      "activity_level",
+      "is_sleeping",
+      "fall_event_detected",
+      "signal_quality_score"
+    ]
+  },
+  "derived_metrics": {
+    "bmi_formula": "weight / (height * height)",
+    "pulse_pressure_formula": "sys_bp - dia_bp",
+    "map_formula": "(sys_bp + 2 * dia_bp) / 3"
+  },
+  "data_quality": {
+    "minimum_signal_quality_score": 0.7,
+    "drop_or_hold_if_invalid": true,
+    "invalid_if_any": [
+      "missing_required_field",
+      "non_numeric_value",
+      "sensor_error_flag",
+      "signal_quality_score < minimum_signal_quality_score"
+    ]
+  },
+  "sampling": {
+    "minimum_interval_seconds": 60,
+    "recommended_interval_seconds": 60,
+    "confirmation_consecutive_readings": 2,
+    "recurrence_readings_24h": 3,
+    "short_window_minutes": 5,
+    "medium_window_minutes": 15,
+    "long_window_minutes": 60,
+    "baseline_window_days": 7,
+    "baseline_long_window_days": 14
+  },
+  "context_policy": {
+    "resting": {
+      "use_standard_instant_thresholds": true,
+      "use_time_series": true,
+      "use_profile_adjustment": true
+    },
+    "sleep": {
+      "use_standard_instant_thresholds": true,
+      "use_time_series": true,
+      "use_profile_adjustment": true,
+      "trend_weighting": {
+        "spo2": "high",
+        "resp_rate": "high",
+        "hrv": "high",
+        "heart_rate": "medium",
+        "blood_pressure": "medium"
+      }
+    },
+    "post_fall": {
+      "monitor_window_minutes": 60,
+      "upgrade_watch_to_send_if_any_watch_abnormality": true
+    },
+    "active": {
+      "suppress_activity_explainable_hr_rr_rapid_change": true,
+      "do_not_use_active_windows_for_baseline_update": true
+    }
+  },
+  "baseline": {
+    "enabled": true,
+    "rest_state_required": true,
+    "update_only_if_context_in": [
+      "resting",
+      "sleep"
+    ],
+    "exclude_update_if_any": [
+      "fall_event_detected",
+      "urgent_event",
+      "fever_event",
+      "high_activity",
+      "poor_signal_quality"
+    ],
+    "method": {
+      "center": "median",
+      "spread": "MAD"
+    },
+    "metrics": {
+      "heart_rate": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      },
+      "resp_rate": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      },
+      "body_temp": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      },
+      "spo2": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      },
+      "sys_bp": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      },
+      "dia_bp": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      },
+      "map_val": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      },
+      "hrv": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      },
+      "pulse_pressure": {
+        "short_term_days": 7,
+        "long_term_days": 14
+      }
+    }
+  },
+  "profile": {
+    "high_sensitivity_if_any": [
+      "age >= 65",
+      "bmi < 18.5",
+      "bmi >= 25",
+      "asian_mode and bmi >= 23"
+    ],
+    "bmi_categories_global": {
+      "underweight": "bmi < 18.5",
+      "normal": "18.5 <= bmi and bmi < 25",
+      "overweight": "25 <= bmi and bmi < 30",
+      "obesity": "bmi >= 30"
+    },
+    "bmi_categories_asian_optional": {
+      "increased_metabolic_risk": "bmi >= 23",
+      "high_metabolic_risk": "bmi >= 27.5"
+    },
+    "sensitivity_effects": {
+      "watch_duration_minutes_to_upgrade": 10,
+      "upgrade_one_mild_abnormality_to_send": true,
+      "lower_resting_hr_watch_threshold_to": 90,
+      "lower_resting_rr_watch_threshold_to": 20,
+      "repeated_dbp_watch_threshold_to": 80
+    }
+  },
+  "instant_rules": {
+    "heart_rate": {
+      "urgent": [
+        {
+          "condition": "heart_rate <= 40",
+          "reason_code": "HR_VERY_LOW"
+        },
+        {
+          "condition": "heart_rate >= 131",
+          "reason_code": "HR_VERY_HIGH"
+        }
+      ],
+      "send_to_risk_model": [
+        {
+          "condition": "41 <= heart_rate and heart_rate <= 50",
+          "reason_code": "HR_LOW"
+        },
+        {
+          "condition": "111 <= heart_rate and heart_rate <= 130",
+          "reason_code": "HR_HIGH"
+        }
+      ],
+      "watch": [
+        {
+          "condition": "91 <= heart_rate and heart_rate <= 110",
+          "reason_code": "HR_BORDERLINE_HIGH"
+        }
+      ]
+    },
+    "resp_rate": {
+      "urgent": [
+        {
+          "condition": "resp_rate <= 8",
+          "reason_code": "RR_VERY_LOW"
+        },
+        {
+          "condition": "resp_rate >= 25",
+          "reason_code": "RR_VERY_HIGH"
+        }
+      ],
+      "send_to_risk_model": [
+        {
+          "condition": "21 <= resp_rate and resp_rate <= 24",
+          "reason_code": "RR_HIGH"
+        }
+      ],
+      "watch": [
+        {
+          "condition": "19 <= resp_rate and resp_rate <= 20",
+          "reason_code": "RR_BORDERLINE_HIGH"
+        }
+      ]
+    },
+    "body_temp": {
+      "urgent": [
+        {
+          "condition": "body_temp <= 35.0",
+          "reason_code": "TEMP_HYPOTHERMIA"
+        },
+        {
+          "condition": "body_temp >= 39.1",
+          "reason_code": "TEMP_VERY_HIGH"
+        }
+      ],
+      "send_to_risk_model": [
+        {
+          "condition": "35.1 <= body_temp and body_temp <= 36.0",
+          "reason_code": "TEMP_LOW"
+        },
+        {
+          "condition": "38.0 <= body_temp and body_temp <= 39.0",
+          "reason_code": "TEMP_FEVER"
+        }
+      ],
+      "watch": [
+        {
+          "condition": "37.5 <= body_temp and body_temp < 38.0",
+          "reason_code": "TEMP_BORDERLINE_HIGH"
+        }
+      ]
+    },
+    "spo2": {
+      "urgent": [
+        {
+          "condition": "spo2 < 90",
+          "reason_code": "SPO2_CRITICAL_LOW"
+        }
+      ],
+      "send_to_risk_model": [
+        {
+          "condition": "spo2 <= 94",
+          "reason_code": "SPO2_LOW"
+        }
+      ],
+      "watch": [
+        {
+          "condition": "spo2 == 95",
+          "reason_code": "SPO2_BORDERLINE_LOW"
+        }
+      ]
+    },
+    "sys_bp": {
+      "urgent": [
+        {
+          "condition": "sys_bp <= 90",
+          "reason_code": "SBP_CRITICAL_LOW"
+        },
+        {
+          "condition": "sys_bp >= 180",
+          "reason_code": "SBP_CRITICAL_HIGH"
+        }
+      ],
+      "send_to_risk_model": [
+        {
+          "condition": "91 <= sys_bp and sys_bp <= 100",
+          "reason_code": "SBP_LOW"
+        },
+        {
+          "condition": "sys_bp >= 140",
+          "reason_code": "SBP_HIGH"
+        }
+      ],
+      "watch": [
+        {
+          "condition": "121 <= sys_bp and sys_bp <= 139",
+          "reason_code": "SBP_BORDERLINE_HIGH"
+        }
+      ]
+    },
+    "dia_bp": {
+      "urgent": [
+        {
+          "condition": "dia_bp >= 120",
+          "reason_code": "DBP_CRITICAL_HIGH"
+        }
+      ],
+      "send_to_risk_model": [
+        {
+          "condition": "dia_bp >= 90",
+          "reason_code": "DBP_HIGH"
+        }
+      ],
+      "watch": [
+        {
+          "condition": "80 <= dia_bp and dia_bp <= 89",
+          "reason_code": "DBP_BORDERLINE_HIGH"
+        }
+      ]
+    },
+    "map_val": {
+      "urgent": [
+        {
+          "condition": "map_val < 65",
+          "reason_code": "MAP_CRITICAL_LOW"
+        }
+      ],
+      "send_to_risk_model": [
+        {
+          "condition": "65 <= map_val and map_val < 75",
+          "reason_code": "MAP_LOW"
+        }
+      ],
+      "watch": [
+        {
+          "condition": "75 <= map_val and map_val < 85",
+          "reason_code": "MAP_BORDERLINE_LOW"
+        }
+      ]
+    },
+    "pulse_pressure": {
+      "urgent": [],
+      "send_to_risk_model": [],
+      "watch": [
+        {
+          "condition": "pulse_pressure < 30",
+          "reason_code": "PP_LOW"
+        },
+        {
+          "condition": "pulse_pressure > 60",
+          "reason_code": "PP_HIGH"
+        }
+      ]
+    },
+    "hrv": {
+      "urgent": [],
+      "send_to_risk_model": [],
+      "watch": []
+    }
+  },
+  "profile_adjusted_rules": {
+    "enabled": true,
+    "notes": "Profile rules may escalate WATCH to SEND_TO_RISK_MODEL, but never downgrade or alter urgent thresholds.",
+    "watch_to_send_if_profile_high_sensitivity": [
+      {
+        "condition": "heart_rate > 90 for >= 10 minutes at rest",
+        "reason_code": "PROFILE_ESCALATED_HR_BORDERLINE"
+      },
+      {
+        "condition": "resp_rate >= 20 for >= 10 minutes at rest",
+        "reason_code": "PROFILE_ESCALATED_RR_BORDERLINE"
+      },
+      {
+        "condition": "80 <= dia_bp and dia_bp <= 89 in >= 2 readings",
+        "reason_code": "PROFILE_ESCALATED_DBP_BORDERLINE"
+      },
+      {
+        "condition": "130 <= sys_bp and sys_bp <= 139 in >= 2 readings",
+        "reason_code": "PROFILE_ESCALATED_SBP_BORDERLINE"
+      },
+      {
+        "condition": "spo2 <= baseline_spo2 - 2 in >= 2 readings",
+        "reason_code": "PROFILE_ESCALATED_SPO2_DROP"
+      },
+      {
+        "condition": "hrv <= baseline_hrv * 0.9 in >= 2 windows",
+        "reason_code": "PROFILE_ESCALATED_HRV_DROP"
+      }
+    ]
+  },
+  "time_series_rules": {
+    "enabled": true,
+    "notes": "Time-series rules only escalate severity. They never downgrade an abnormal instant reading.",
+    "persistent_drift": {
+      "watch": [
+        {
+          "condition": "heart_rate >= baseline_heart_rate + 10 for >= 5 minutes",
+          "reason_code": "HR_BASELINE_DELTA_WATCH"
+        },
+        {
+          "condition": "resp_rate >= baseline_resp_rate + 2 for >= 5 minutes",
+          "reason_code": "RR_BASELINE_DELTA_WATCH"
+        },
+        {
+          "condition": "body_temp >= baseline_body_temp + 0.5 in >= 2 readings",
+          "reason_code": "TEMP_BASELINE_DELTA_WATCH"
+        },
+        {
+          "condition": "spo2 <= baseline_spo2 - 2 in >= 2 readings",
+          "reason_code": "SPO2_BASELINE_DROP_WATCH"
+        },
+        {
+          "condition": "hrv <= baseline_hrv * 0.9 in >= 2 windows",
+          "reason_code": "HRV_BASELINE_DROP_WATCH"
+        },
+        {
+          "condition": "abs(pulse_pressure - baseline_pulse_pressure) >= 10 in >= 2 readings",
+          "reason_code": "PP_BASELINE_DELTA_WATCH"
+        }
+      ],
+      "send_to_risk_model": [
+        {
+          "condition": "heart_rate >= baseline_heart_rate + 15 for >= 10 minutes",
+          "reason_code": "HR_BASELINE_DELTA_SEND"
+        },
+        {
+          "condition": "heart_rate > 100 for >= 10 minutes at rest",
+          "reason_code": "HR_PERSISTENT_HIGH_AT_REST"
+        },
+        {
+          "condition": "resp_rate >= baseline_resp_rate + 4 for >= 10 minutes",
+          "reason_code": "RR_BASELINE_DELTA_SEND"
+        },
+        {
+          "condition": "resp_rate >= 20 for >= 10 minutes at rest",
+          "reason_code": "RR_PERSISTENT_HIGH_AT_REST"
+        },
+        {
+          "condition": "body_temp >= baseline_body_temp + 1.0 within 24 hours",
+          "reason_code": "TEMP_BASELINE_DELTA_SEND"
+        },
+        {
+          "condition": "spo2 <= baseline_spo2 - 3 in >= 2 consecutive readings",
+          "reason_code": "SPO2_BASELINE_DROP_SEND"
+        },
+        {
+          "condition": "map_val <= baseline_map_val - 15 in >= 2 consecutive readings",
+          "reason_code": "MAP_BASELINE_DROP_SEND"
+        },
+        {
+          "condition": "hrv <= baseline_hrv * 0.8 in >= 2 windows",
+          "reason_code": "HRV_BASELINE_DROP_SEND"
+        },
+        {
+          "condition": "hrv <= baseline_hrv_14d * 0.7 in >= 2 windows",
+          "reason_code": "HRV_LONG_BASELINE_DROP_SEND"
+        }
+      ]
+    },
+    "rapid_change": {
+      "send_to_risk_model": [
+        {
+          "condition": "spo2_drop_points >= 3 within 10 minutes",
+          "reason_code": "SPO2_RAPID_DROP"
+        },
+        {
+          "condition": "heart_rate_rise >= 20 within 5 minutes and not explained_by_activity",
+          "reason_code": "HR_RAPID_RISE"
+        },
+        {
+          "condition": "sys_bp_drop >= 20 within 15 minutes",
+          "reason_code": "SBP_RAPID_DROP"
+        },
+        {
+          "condition": "dia_bp_drop >= 10 within 15 minutes",
+          "reason_code": "DBP_RAPID_DROP"
+        }
+      ]
+    },
+    "recurrence": {
+      "send_to_risk_model": [
+        {
+          "condition": "same_abnormality_count_24h >= 3",
+          "reason_code": "ABNORMALITY_RECURRENT_24H"
+        },
+        {
+          "condition": "same_abnormality_days_7d >= 2",
+          "reason_code": "ABNORMALITY_RECURRENT_7D"
+        }
+      ]
+    }
+  },
+  "combination_rules": {
+    "enabled": true,
+    "watch": [
+      {
+        "condition": "91 <= heart_rate and heart_rate <= 110 and 19 <= resp_rate and resp_rate <= 20",
+        "reason_code": "HR_RR_BORDERLINE_COMBINATION"
+      },
+      {
+        "condition": "95 <= spo2 and spo2 <= 96 and 80 <= dia_bp and dia_bp <= 89",
+        "reason_code": "SPO2_DBP_BORDERLINE_COMBINATION"
+      }
+    ],
+    "send_to_risk_model": [
+      {
+        "condition": "heart_rate > 100 and resp_rate >= 20",
+        "reason_code": "HR_RR_HIGH_COMBINATION"
+      },
+      {
+        "condition": "spo2 <= 94 and resp_rate >= 20",
+        "reason_code": "SPO2_RR_COMBINATION"
+      },
+      {
+        "condition": "body_temp >= 38.0 and heart_rate > 100",
+        "reason_code": "TEMP_HR_COMBINATION"
+      },
+      {
+        "condition": "sys_bp <= 100 and heart_rate > 100",
+        "reason_code": "SBP_HR_COMBINATION"
+      },
+      {
+        "condition": "sys_bp <= 100 and map_val < 75",
+        "reason_code": "SBP_MAP_COMBINATION"
+      },
+      {
+        "condition": "hrv_drop_pct >= 20 and heart_rate >= baseline_heart_rate + 10",
+        "reason_code": "HRV_HR_COMBINATION"
+      },
+      {
+        "condition": "spo2_drop_points >= 3 and heart_rate >= baseline_heart_rate + 10",
+        "reason_code": "SPO2_HR_COMBINATION"
+      }
+    ]
+  },
+  "special_policies": {
+    "post_fall_monitoring": {
+      "enabled": true,
+      "monitor_window_minutes": 60,
+      "upgrade_watch_to_send_if_any_watch_abnormality": true
+    },
+    "sleep_policy": {
+      "enabled": true,
+      "increase_attention_to": [
+        "spo2",
+        "resp_rate",
+        "hrv"
+      ]
+    },
+    "copd_target_spo2_88_92_override": {
+      "enabled": false,
+      "notes": "Enable only with explicit clinical instruction. If enabled, standard SpO2 instant thresholds must be replaced by clinician-approved targets."
+    }
+  },
+  "decision_engine": {
+    "evaluation_order": [
+      "validate_data_quality",
+      "detect_context",
+      "compute_derived_metrics",
+      "load_or_update_baseline",
+      "evaluate_instant_rules",
+      "evaluate_profile_adjusted_rules",
+      "evaluate_time_series_rules",
+      "evaluate_combination_rules",
+      "apply_special_policies",
+      "select_final_max_severity"
+    ],
+    "final_decision_logic": {
+      "urgent_if_any_instant_urgent": true,
+      "otherwise_take_max_severity_from_all_triggered_rules": true,
+      "preserve_all_triggered_reason_codes": true
+    },
+    "outputs": {
+      "status_values": [
+        "NORMAL",
+        "WATCH",
+        "SEND_TO_RISK_MODEL",
+        "URGENT"
+      ],
+      "required_fields": [
+        "status",
+        "reason_codes",
+        "triggered_rule_groups",
+        "context",
+        "profile_high_sensitivity",
+        "derived_metrics",
+        "baseline_snapshot"
+      ]
+    }
+  },
+  "implementation_notes": {
+    "route_purpose": "triage to downstream risk model, not diagnosis",
+    "recommended_actions": {
+      "NORMAL": "continue standard sampling",
+      "WATCH": "increase sampling and monitor trend",
+      "SEND_TO_RISK_MODEL": "invoke downstream risk model and log event",
+      "URGENT": "invoke downstream risk model immediately and trigger urgent workflow"
+    },
+    "important_constraints": [
+      "Never let profile rules relax urgent thresholds.",
+      "Never let time-series rules downgrade an instant abnormality.",
+      "If multiple rules trigger, return the highest severity and preserve all reasons.",
+      "Do not update baseline from active, post-fall, poor-quality, or urgent windows."
+    ]
+  }
+}

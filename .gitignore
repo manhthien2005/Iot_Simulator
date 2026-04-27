@@ -33,6 +33,10 @@ build/
 *.pid
 *dump*.txt
 
+# Mutable runtime config — edited via /api/sim/settings/runtime, never
+# committed.  Defaults live in api_server/config/runtime_defaults.json.
+api_server/config/runtime.json
+
 # Editor and OS files
 .DS_Store
 Thumbs.db
@@ -45,6 +49,15 @@ findings.md
 progress.md
 git_status_out.txt
 REFACTOR_PLAN*
+plans/
+
+# IDE / AI tool config
+.windsurf/
+.roo/
+
+# Internal AI session tracking artifacts
+docs/ux/
+roo-code-settings-optimized.json
 
 # Local test artifact folders
 normalized_artifacts_runtime_test/
@@ -54,7 +67,7 @@ normalized_artifacts_test/
 tests/
 
 # Docs — internal design/plan docs stay local
-# Only FEATURE_SPEC.md is pushed (developer-facing field reference)
+# Only FEATURE_SPEC.md is pushed; docs/ux/ contains AI session artifacts
 docs/**
 !docs/FEATURE_SPEC.md
 
@@ -64,9 +77,3 @@ datasets/
 
 # Normalized ETL artifacts — rebuilt locally by running etl_pipeline/normalize.py
 normalized_artifacts/
-
-
-.roo
-.rooignore
-.roomodes
-roo-code-settings-optimized.json

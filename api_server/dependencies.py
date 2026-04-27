@@ -17,6 +17,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+import httpx
 from sqlalchemy import text
 
 # Dual import path: supports both package-level execution
@@ -27,6 +28,15 @@ try:
     from Iot_Simulator.api_server.config import load_sleep_scenarios
     from Iot_Simulator.api_server.backend_admin_client import BackendAdminClient
     from Iot_Simulator.api_server.db import session_scope
+    from Iot_Simulator.api_server.runtime_state import HealthRuntimeState
+    from Iot_Simulator.api_server.runtime_persistence import (
+        RUNTIME_PATH,
+        PersistenceState,
+        RuntimeConfigValues,
+        load_runtime_config,
+        save_runtime_config,
+        reset_runtime_config,
+    )
     from Iot_Simulator.api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state
     from Iot_Simulator.api_server.schemas import (
         AlertEvent,
@@ -34,6 +44,12 @@ try:
         DataBindingConfig,
         DashboardSummary,
         DbSleepHistoryRow,
+        FallEventEntry,
+        FallState,
+        FallStateValue,
+        MotionLatest,
+        PipelineStage,
+        PipelineStageStatusValue,
         RiskContribution,
         RiskHistoryPoint,
         RiskInjectRequest,
@@ -52,6 +68,15 @@ try:
     from Iot_Simulator.api_server.services.alert_service import AlertService
     from Iot_Simulator.api_server.services.session_service import SessionService
     from Iot_Simulator.api_server.services.sleep_service import SleepService
+    from Iot_Simulator.pre_model_trigger import (
+        FallPreTrigger,
+        HealthGuardAPIClient,
+        ResponseHandler,
+        RuleEngine,
+        SystemSettingsProvider,
+        TriggerOrchestrator,
+        VitalsHistoryBuffer,
+    )
     from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
     from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
@@ -61,6 +86,15 @@ except ModuleNotFoundError:
     from api_server.config import load_sleep_scenarios
     from api_server.backend_admin_client import BackendAdminClient
     from api_server.db import session_scope
+    from api_server.runtime_state import HealthRuntimeState  # noqa: F811
+    from api_server.runtime_persistence import (  # noqa: F811
+        RUNTIME_PATH,
+        PersistenceState,
+        RuntimeConfigValues,
+        load_runtime_config,
+        save_runtime_config,
+        reset_runtime_config,
+    )
     from api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state  # noqa: F811
     from api_server.schemas import (
         AlertEvent,
@@ -68,6 +102,12 @@ except ModuleNotFoundError:
         DataBindingConfig,
         DashboardSummary,
         DbSleepHistoryRow,
+        FallEventEntry,
+        FallState,
+        FallStateValue,
+        MotionLatest,
+        PipelineStage,
+        PipelineStageStatusValue,
         RiskContribution,
         RiskHistoryPoint,
         RiskInjectRequest,
@@ -86,6 +126,15 @@ except ModuleNotFoundError:
     from api_server.services.alert_service import AlertService
     from api_server.services.session_service import SessionService
     from api_server.services.sleep_service import SleepService
+    from pre_model_trigger import (  # noqa: F811
+        FallPreTrigger,
+        HealthGuardAPIClient,
+        ResponseHandler,
+        RuleEngine,
+        SystemSettingsProvider,
+        TriggerOrchestrator,
+        VitalsHistoryBuffer,
+    )
     from simulator_core.dataset_registry import DatasetRegistry
     from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from simulator_core.sleep_ai_client import SleepAIClient
@@ -95,6 +144,9 @@ except ModuleNotFoundError:
 
 logger = logging.getLogger(__name__)
 
+_PRE_MODEL_TRIGGER_ENABLED: bool = os.environ.get(
+    "PRE_MODEL_TRIGGER_ENABLED", ""
+).lower() in ("1", "true", "yes")
 
 # _utc_now_iso, _coerce_date, _safe_float, _normalize_gender, _is_sleeping_state
 # imported from api_server.utils (MEDIUM #7 dedup)
@@ -129,6 +181,29 @@ def _safe_float_db(value: Any) -> float | None:
 def _safe_int(value: Any) -> int | None:
     cast = _safe_float(value, None)
     return int(round(cast)) if cast is not None else None
+
+
+def _coerce_float_list(value: Any) -> list[float]:
+    """Best-effort conversion of *value* to a ``list[float]``.
+
+    Designed for the motion arrays emitted by ``MotionGenerator``: numpy
+    arrays, plain lists, tuples — anything iterable.  Non-numeric entries
+    are skipped silently so a partial dataset row does not crash the
+    response (we'd rather return what we can than 500 the operator).
+    """
+    if value is None:
+        return []
+    try:
+        iterator = iter(value)  # type: ignore[arg-type]
+    except TypeError:
+        cast = _safe_float(value, None)
+        return [cast] if cast is not None else []
+    out: list[float] = []
+    for item in iterator:
+        cast = _safe_float(item, None)
+        if cast is not None:
+            out.append(cast)
+    return out
 
 
 # Sleep scenario data loaded from external YAML config (see api_server/config/sleep_scenarios.yaml)
@@ -194,6 +269,12 @@ class SessionRecord:
     last_publish_ack_count: int = 0
     last_publish_count: int = 0
     last_publish_latency_ms: int | None = None
+    # Module E — Verification → Evidence Center evidence fields ──────────
+    last_publish_attempt_at: str | None = None
+    last_publish_ok_at: str | None = None
+    last_publish_error: str | None = None
+    publish_attempt_count: int = 0
+    publish_ack_count_total: int = 0
     alert_received: bool = False
     last_tick_monotonic: float = field(default_factory=monotonic)
     source_modes: dict[str, str] = field(default_factory=dict)
@@ -359,13 +440,31 @@ class SimulatorRuntime:
 
     def __init__(self) -> None:
         self.registry = DatasetRegistry(self._resolve_artifacts_dir())
+        # ── Health observability state (Phase 0.2) ───────────────────────
+        self._health_state = HealthRuntimeState()
+        # ── Mutable runtime config persistence (Module F.1) ──────────────
+        # Resolve the persisted runtime knobs *before* any subsystem reads
+        # them.  ``load_runtime_config()`` never raises — it falls back to
+        # ``runtime_defaults.json`` and finally to hard-coded values, so
+        # the simulator always boots.  We also mirror the result into the
+        # process env so legacy readers (``sleep_service`` reads
+        # ``SIM_SLEEP_SPEED_FACTOR`` on every call) keep seeing the same
+        # truth as ``/api/sim/settings``.
+        self._runtime_persistence: PersistenceState = load_runtime_config()
+        self._sync_runtime_env_from_persistence()
         self._sleep_ai_client = SleepAIClient()
         self._last_sleep_score_source = "heuristic"
         try:
             if self._sleep_ai_client.check_availability():
                 logger.info("Sleep AI model available at http://localhost:8001")
+                with self._health_state.lock:
+                    self._health_state.model_api_probe.state = "ready"
+                    self._health_state.model_api_probe.checked_at = _utc_now_iso()
             else:
                 logger.warning("Sleep AI model not available — heuristic fallback active")
+                with self._health_state.lock:
+                    self._health_state.model_api_probe.state = "unavailable"
+                    self._health_state.model_api_probe.checked_at = _utc_now_iso()
         except Exception:
             logger.warning("Sleep AI availability check failed", exc_info=True)
         self.devices: dict[str, DeviceRecord] = {}
@@ -382,10 +481,9 @@ class SimulatorRuntime:
         self.risk_history: dict[str, list[RiskHistoryPoint]] = {}
         self.logs = LogHub()
         self._lock = RLock()
-        try:
-            self._push_interval = max(1, int(os.environ.get("SIM_PUSH_INTERVAL_SECONDS", "5")))
-        except ValueError:
-            self._push_interval = 5
+        # ``push_interval`` now sourced from the persistence layer; the env
+        # var is kept in sync for downstream readers (Module F.1).
+        self._push_interval = max(1, int(self._runtime_persistence.values.push_interval_seconds))
         self._tick_buffer: list[dict[str, Any]] = []
         self._last_push_time = 0.0
         self._publish_in_flight = False
@@ -398,15 +496,57 @@ class SimulatorRuntime:
             sender=self._http_sender,
         )
         self.transport_router = TransportRouter(mqtt, http)
+        # ── Pre-model TriggerOrchestrator wiring (Phase 0.3) ─────────────
+        # See plans/iot-sim-ux-refactor-backlog-75c8a6.md §4.5 task 0.3.
+        # The orchestrator is what `routers/settings.py` reaches into for DB
+        # thresholds; previously it was None which forced the settings
+        # endpoint into its except branch and reported `threshold_source =
+        # "fallback"` permanently.  We construct the full pipeline here so
+        # downstream consumers (settings, health, future tick evaluations)
+        # can rely on a single instance.
+        self._trigger_orchestrator: TriggerOrchestrator | None = None
+        try:
+            _settings_provider = SystemSettingsProvider()
+            _rule_engine = RuleEngine(settings_provider=_settings_provider)
+            _fall_pre_trigger = FallPreTrigger(settings_provider=_settings_provider)
+            _api_client = HealthGuardAPIClient(
+                base_url=self._health_backend_url,
+                http_sender=self._http_sender,
+            )
+            _vitals_buffer = VitalsHistoryBuffer(max_size=60)
+            _enable_model_calls = os.environ.get(
+                "PRE_MODEL_TRIGGER_ENABLE_MODEL_CALLS", ""
+            ).lower() in ("1", "true", "yes")
+            self._trigger_orchestrator = TriggerOrchestrator(
+                settings_provider=_settings_provider,
+                rule_engine=_rule_engine,
+                fall_pre_trigger=_fall_pre_trigger,
+                api_client=_api_client,
+                response_handler=ResponseHandler,
+                vitals_buffer=_vitals_buffer,
+                enable_model_calls=_enable_model_calls,
+            )
+            logger.info(
+                "TriggerOrchestrator wired (pre_trigger_enabled=%s, enable_model_calls=%s)",
+                _PRE_MODEL_TRIGGER_ENABLED,
+                _enable_model_calls,
+            )
+        except Exception:
+            logger.warning(
+                "TriggerOrchestrator initialisation failed — settings will report threshold_source=fallback",
+                exc_info=True,
+            )
+            self._trigger_orchestrator = None
         self._bp_last_observed: dict[str, float] = {}
         self._last_alert_pushes: dict[tuple[str, str, str], float] = {}
         self._alert_pushes_in_flight: set[tuple[str, str, str]] = set()
         self._sleep_phase_tracker: dict[str, tuple[int, float]] = {}
         self._db_device_active_cache: dict[int, bool] = {}
-        try:
-            self._background_tick_interval = max(0.1, float(os.environ.get("SIM_TICK_INTERVAL_SECONDS", "1")))
-        except ValueError:
-            self._background_tick_interval = 1.0
+        # ``background_tick_interval`` sourced from the persistence layer
+        # (Module F.1); env var stays in sync via ``_sync_runtime_env_*``.
+        self._background_tick_interval = max(
+            0.1, float(self._runtime_persistence.values.tick_interval_seconds)
+        )
         self._background_tick_stop = Event()
         self._background_tick_thread: Thread | None = None
 
@@ -483,6 +623,94 @@ class SimulatorRuntime:
             sleep_scenario_phases=SLEEP_SCENARIO_PHASES,
             sleep_scenario_profiles=SLEEP_SCENARIO_PROFILES,
         )
+
+    # ── Runtime persistence helpers (Module F.1 / F.2) ───────────────────
+
+    def _sync_runtime_env_from_persistence(self) -> None:
+        """Mirror the persisted values into ``os.environ``.
+
+        Some legacy code paths (e.g. ``sleep_service`` reading
+        ``SIM_SLEEP_SPEED_FACTOR`` on every tick) still source values from
+        the env. Keeping env in sync with the persistence layer means a
+        single source of truth — the JSON file — drives every consumer.
+        """
+        values = self._runtime_persistence.values
+        os.environ["SIM_TICK_INTERVAL_SECONDS"] = str(values.tick_interval_seconds)
+        os.environ["SIM_PUSH_INTERVAL_SECONDS"] = str(values.push_interval_seconds)
+        os.environ["SIM_SLEEP_SPEED_FACTOR"] = str(values.sleep_speed_factor)
+
+    def apply_and_persist_runtime_config(
+        self,
+        *,
+        tick_interval_seconds: float | None = None,
+        push_interval_seconds: int | None = None,
+        sleep_speed_factor: float | None = None,
+    ) -> PersistenceState:
+        """Apply *partial* updates to the runtime config and flush to disk.
+
+        Used by ``PUT /api/sim/settings/runtime``.  Returns the new
+        :class:`PersistenceState` so the router can echo it back to the FE
+        (the persistence indicator copy reads from ``last_saved_at``).
+
+        Atomicity: live runtime fields and the env mirror are only updated
+        *after* :func:`save_runtime_config` returns successfully, so a disk
+        failure leaves the running simulator's state intact.
+        """
+        with self._runtime_persistence.lock:
+            current = self._runtime_persistence.values
+            new_values = RuntimeConfigValues(
+                tick_interval_seconds=(
+                    float(tick_interval_seconds)
+                    if tick_interval_seconds is not None
+                    else current.tick_interval_seconds
+                ),
+                push_interval_seconds=(
+                    int(push_interval_seconds)
+                    if push_interval_seconds is not None
+                    else current.push_interval_seconds
+                ),
+                sleep_speed_factor=(
+                    float(sleep_speed_factor)
+                    if sleep_speed_factor is not None
+                    else current.sleep_speed_factor
+                ),
+            )
+
+            saved_at = save_runtime_config(new_values)
+
+            # Apply to live runtime + env *after* the disk write succeeds.
+            self._background_tick_interval = max(0.1, new_values.tick_interval_seconds)
+            self._push_interval = max(1, new_values.push_interval_seconds)
+            self._runtime_persistence.values = new_values
+            self._runtime_persistence.source = "file"
+            self._runtime_persistence.path = RUNTIME_PATH
+            self._runtime_persistence.last_saved_at = saved_at
+            self._runtime_persistence.last_error = None
+            self._sync_runtime_env_from_persistence()
+
+        return self._runtime_persistence
+
+    def restore_runtime_defaults(self) -> PersistenceState:
+        """Delete ``runtime.json`` and reload the defaults.
+
+        Backs the "Khôi phục mặc định" button in Settings (Module F.5).
+        Idempotent — safe to call when the file is already absent.
+        """
+        with self._runtime_persistence.lock:
+            new_state = reset_runtime_config()
+            self._background_tick_interval = max(0.1, new_state.values.tick_interval_seconds)
+            self._push_interval = max(1, new_state.values.push_interval_seconds)
+            self._runtime_persistence.values = new_state.values
+            self._runtime_persistence.source = new_state.source
+            self._runtime_persistence.path = new_state.path
+            self._runtime_persistence.last_saved_at = new_state.last_saved_at
+            self._runtime_persistence.last_error = new_state.last_error
+            self._sync_runtime_env_from_persistence()
+        return self._runtime_persistence
+
+    def runtime_persistence_snapshot(self) -> PersistenceState:
+        """Return the current persistence state for the settings endpoint."""
+        return self._runtime_persistence
 
     @staticmethod
     def _resolve_artifacts_dir() -> Path:
@@ -645,6 +873,14 @@ class SimulatorRuntime:
         publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
 
         publish_ok = ack_count == message_count if message_count > 0 else False
+        attempt_at = _utc_now_iso()
+        publish_error: str | None = None
+        if message_count == 0:
+            publish_error = "Không có message nào để publish"
+        elif not publish_ok:
+            publish_error = (
+                f"Backend ack {ack_count}/{message_count} message — kiểm tra MQTT/HTTP downstream"
+            )
 
         with self._lock:
             self._publish_in_flight = False
@@ -654,6 +890,14 @@ class SimulatorRuntime:
                     session.last_publish_ack_count = ack_count
                     session.last_publish_count = message_count
                     session.last_publish_latency_ms = publish_latency_ms
+                    session.last_publish_attempt_at = attempt_at
+                    session.publish_attempt_count += 1
+                    session.publish_ack_count_total += ack_count
+                    if publish_ok:
+                        session.last_publish_ok_at = attempt_at
+                        session.last_publish_error = None
+                    else:
+                        session.last_publish_error = publish_error
             if publish_ok:
                 del self._tick_buffer[: pending_publish.clear_count]
                 self._last_push_time = monotonic()
@@ -668,6 +912,13 @@ class SimulatorRuntime:
         except Exception:
             return False
 
+    def _measure_database_health(self) -> tuple[bool, int | None]:
+        """Probe the local DB once and return (healthy, latency_ms)."""
+        start = monotonic()
+        ok = self._local_database_healthy()
+        latency_ms = int((monotonic() - start) * 1000)
+        return ok, latency_ms
+
     def _backend_healthy(self) -> bool:
         endpoint = f"{self._health_backend_url.rstrip('/')}/mobile/health"
         try:
@@ -675,6 +926,74 @@ class SimulatorRuntime:
                 return int(response.getcode() or 0) == 200
         except Exception:
             return False
+
+    # ── Health probes with TTL caching (Phase 0.4) ───────────────────────
+    # Both probes share the same TTL window so the dashboard hero can poll
+    # ``/api/sim/health`` aggressively without hammering upstream services.
+    _HEALTH_PROBE_TTL_SECONDS = 5.0
+    _HEALTH_BACKEND_SLOW_LATENCY_MS = 1500
+
+    # ── Module C: SOS countdown ─────────────────────────────────────────
+    # Window between a `fall_detected` event and the auto-`fall_no_response`
+    # escalation. The frontend reads ``countdownTotalSec`` from the
+    # ``/sessions/{id}/fall-state`` response so the UI never invents its
+    # own timer.
+    _SOS_COUNTDOWN_SECONDS = 30
+
+    def _probe_backend_cached(self) -> None:
+        """Refresh ``_health_state.backend_probe`` if its TTL has expired."""
+        probe = self._health_state.backend_probe
+        now_mono = self._health_state.now_monotonic()
+        if now_mono < probe.next_eligible_at:
+            return
+        endpoint = f"{self._health_backend_url.rstrip('/')}/mobile/health"
+        start = monotonic()
+        latency_ms: int | None = None
+        try:
+            with urlopen(Request(endpoint, method="GET"), timeout=3.0) as response:
+                latency_ms = int((monotonic() - start) * 1000)
+                ok = int(response.getcode() or 0) == 200
+            with self._health_state.lock:
+                if not ok:
+                    probe.state = "down"
+                    probe.last_error = f"HTTP {response.getcode()}"
+                elif latency_ms is not None and latency_ms > self._HEALTH_BACKEND_SLOW_LATENCY_MS:
+                    probe.state = "slow"
+                    probe.last_error = None
+                else:
+                    probe.state = "connected"
+                    probe.last_error = None
+                probe.latency_ms = latency_ms
+                probe.checked_at = _utc_now_iso()
+                probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
+        except Exception as exc:
+            with self._health_state.lock:
+                probe.state = "down"
+                probe.latency_ms = None
+                probe.last_error = f"{type(exc).__name__}: {exc}"
+                probe.checked_at = _utc_now_iso()
+                probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
+
+    def _probe_model_api_cached(self) -> None:
+        """Refresh ``_health_state.model_api_probe`` via ``SleepAIClient``."""
+        probe = self._health_state.model_api_probe
+        now_mono = self._health_state.now_monotonic()
+        if now_mono < probe.next_eligible_at:
+            return
+        try:
+            available = self._sleep_ai_client.check_availability()
+        except Exception as exc:
+            with self._health_state.lock:
+                probe.state = "unavailable"
+                probe.last_error = f"{type(exc).__name__}: {exc}"
+                probe.checked_at = _utc_now_iso()
+                probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
+            return
+        with self._health_state.lock:
+            probe.state = "ready" if available else "unavailable"
+            probe.last_error = None if available else "check_availability returned False"
+            probe.checked_at = _utc_now_iso()
+            probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
 
     def _run_session_side_effects(self, effects: SessionSideEffects) -> None:
         self._execute_pending_tick_publish(effects.pending_publish)
@@ -973,11 +1292,35 @@ class SimulatorRuntime:
         with self._lock:
             for record in self.sessions.values():
                 if device_id in record.device_ids:
-                    record.simulator.inject_event(device_id, event_type, variant)
+                    # Module C: `sos_cancel` is a runtime-only event — the
+                    # PersonaEngine has no concept of it, so we handle the
+                    # state transition here without forwarding to the engine.
+                    if event_type != "sos_cancel":
+                        record.simulator.inject_event(device_id, event_type, variant)
                     if event_type == "fall_detected":
                         record.alert_received = True
                         if device_id in self.devices:
                             self.devices[device_id].state = "fall_countdown"
+                    if event_type == "sos_cancel" and device_id in self.devices:
+                        # Operator confirmed they're OK — clear the
+                        # countdown FSM back to a streaming state.  This is
+                        # the BE-truthful equivalent of the old FE-only
+                        # "Hủy SOS" button which only cleared a setInterval.
+                        if self.devices[device_id].state in {
+                            "fall_countdown",
+                            "sos_active",
+                        }:
+                            self.devices[device_id].state = "streaming"
+                        # Also transition the persona engine out of "fall"
+                        # so the tick loop stops re-emitting `fall_detected`
+                        # alerts.  Without this the engine would self-clear
+                        # after FALL_DURATION_TICKS, but in the meantime
+                        # every tick records a duplicate critical event.
+                        for sim_device in record.simulator.devices:
+                            if sim_device.device_id == device_id:
+                                if sim_device.engine.state.activity_state == "fall":
+                                    sim_device.engine.transition_to("recovery")
+                                break
                     if event_type == "device_offline" and device_id in self.devices:
                         self.devices[device_id].state = "offline"
                         self.devices[device_id].is_online = False
@@ -987,6 +1330,8 @@ class SimulatorRuntime:
                     severity = "warning"
                     if event_type == "fall_detected":
                         severity = "critical"
+                    elif event_type == "sos_cancel":
+                        severity = "normal"
                     elif event_type == "device_offline":
                         severity = "offline"
                     elif event_type == "device_online":
@@ -995,7 +1340,11 @@ class SimulatorRuntime:
                         device_id=device_id,
                         event_type=event_type,
                         severity=severity,
-                        message=f"Injected event {event_type}",
+                        message=(
+                            "Operator cancelled SOS countdown"
+                            if event_type == "sos_cancel"
+                            else f"Injected event {event_type}"
+                        ),
                         metadata={"variant": variant or ""},
                     )
                     if event_type == "fall_detected":
@@ -1071,22 +1420,168 @@ class SimulatorRuntime:
             self._dashboard_cache_ts = now_mono
             return result
 
-    def health_payload(self) -> dict[str, str]:
-        with self._lock:
-            api_status = "running"
-            mqtt_status = "connected"
-            if not self.sessions:
-                mqtt_status = "idle"
-        backend_status = "connected" if self._backend_healthy() else "down"
-        db_status = "healthy" if self._local_database_healthy() else "down"
+    # ── Health payload v2 (Phase 0.6) ────────────────────────────────────
+    # Returns a structured payload for the new dashboard hero plus the
+    # legacy flat keys consumed by ``HealthStatusPanel`` until Module A
+    # retires them.  See plans/iot-sim-ux-refactor-backlog-75c8a6.md §4.
+
+    _SIMULATOR_VERSION = "simulator-api-0.4.0"
+
+    def _compute_pre_trigger_block(self) -> dict[str, Any]:
+        """Derive ``preTrigger`` block (mode + threshold source)."""
+        if not _PRE_MODEL_TRIGGER_ENABLED:
+            mode = "off"
+        elif self._trigger_orchestrator is None:
+            # Flag says ON but wiring failed: treat as off so the UI does not
+            # claim shadow/active capability we cannot actually exercise.
+            mode = "off"
+        else:
+            mode = "active" if self._trigger_orchestrator._enable_model_calls else "shadow"
+
+        threshold_source = "unavailable"
+        enable_model_calls = False
+        if self._trigger_orchestrator is not None:
+            enable_model_calls = bool(self._trigger_orchestrator._enable_model_calls)
+            try:
+                provider = self._trigger_orchestrator._settings
+                day = provider.get_vitals_thresholds(is_sleeping=False)
+                threshold_source = "db" if day else "fallback"
+            except Exception:
+                threshold_source = "unavailable"
+        else:
+            threshold_source = "fallback"
+
         return {
-            "status": api_status,
-            "api": api_status,
-            "backend": backend_status,
-            "mqtt": mqtt_status,
-            "db": db_status,
-            "version": "simulator-api-0.3.0",
+            "mode": mode,
+            "enableModelCalls": enable_model_calls,
+            "thresholdSource": threshold_source,
         }
+
+    def _compute_telemetry_block(self) -> dict[str, int]:
+        """Counts derived from runtime state for the v2 telemetry block."""
+        with self._lock:
+            devices_simulated = len(self.devices)
+            sessions_running = sum(
+                1 for session in self.sessions.values() if session.status == "running"
+            )
+            now_ts = time.time()
+            cutoff = now_ts - 3600
+            while self._alert_timestamps_1h and self._alert_timestamps_1h[0] < cutoff:
+                self._alert_timestamps_1h.popleft()
+            alerts_last_hour = len(self._alert_timestamps_1h)
+            latencies = [
+                session.last_publish_latency_ms
+                for session in self.sessions.values()
+                if session.last_publish_count > 0 and session.last_publish_latency_ms is not None
+            ]
+            avg_latency = int(round(sum(latencies) / len(latencies))) if latencies else 0
+        return {
+            "devicesSimulated": devices_simulated,
+            "sessionsRunning": sessions_running,
+            "alertsLastHour": alerts_last_hour,
+            "avgPublishLatencyMs": avg_latency,
+        }
+
+    def health_payload(self) -> dict[str, Any]:
+        """Return the v2 health payload merged with legacy flat keys.
+
+        v2 callers (Module A dashboard hero) read the nested blocks; legacy
+        callers (current ``HealthStatusPanel``) keep using the flat keys for
+        one release cycle before they are removed.
+        """
+        # Refresh probes (TTL-gated, so cheap when called often).
+        self._probe_backend_cached()
+        self._probe_model_api_cached()
+        db_ok, db_latency_ms = self._measure_database_health()
+
+        with self._lock:
+            session_count = len(self.sessions)
+            running_sessions = sum(
+                1 for session in self.sessions.values() if session.status == "running"
+            )
+        with self._health_state.lock:
+            backend_state = self._health_state.backend_probe.state
+            backend_latency = self._health_state.backend_probe.latency_ms
+            backend_error = self._health_state.backend_probe.last_error
+            model_state = self._health_state.model_api_probe.state
+            model_checked_at = self._health_state.model_api_probe.checked_at
+            model_error = self._health_state.model_api_probe.last_error
+            last_score_source = self._health_state.last_score_source
+            uptime_seconds = self._health_state.uptime_seconds()
+
+        # Runtime state derivation
+        if not db_ok:
+            runtime_state: str = "degraded"
+        elif backend_state == "down" or model_state == "unavailable":
+            runtime_state = "degraded"
+        elif running_sessions == 0:
+            runtime_state = "idle"
+        else:
+            runtime_state = "running"
+
+        # MQTT status — legacy view: idle when no sessions, otherwise connected
+        mqtt_status = "idle" if session_count == 0 else "connected"
+
+        pre_trigger_block = self._compute_pre_trigger_block()
+        telemetry_block = self._compute_telemetry_block()
+
+        degraded_reasons: list[str] = []
+        if not db_ok:
+            degraded_reasons.append("database_down")
+        if backend_state == "down":
+            degraded_reasons.append("backend_unreachable")
+        elif backend_state == "slow":
+            degraded_reasons.append("backend_slow")
+        if model_state == "unavailable":
+            degraded_reasons.append("model_api_unavailable")
+        if pre_trigger_block["mode"] == "off" and _PRE_MODEL_TRIGGER_ENABLED and self._trigger_orchestrator is None:
+            degraded_reasons.append("pre_trigger_misconfigured")
+
+        v2_payload: dict[str, Any] = {
+            "schemaVersion": "2.0",
+            "runtime": {
+                "state": runtime_state,
+                "version": self._SIMULATOR_VERSION,
+                "uptimeSeconds": uptime_seconds,
+            },
+            "database": {
+                "state": "connected" if db_ok else "down",
+                "lastCheckMs": db_latency_ms,
+            },
+            "backend": {
+                "state": backend_state,
+                "url": self._health_backend_url,
+                "lastLatencyMs": backend_latency,
+                "lastError": backend_error,
+            },
+            "modelApi": {
+                "state": model_state,
+                "url": getattr(self._sleep_ai_client, "base_url", "http://localhost:8001"),
+                "lastCheckedAt": model_checked_at,
+                "lastScoreSource": last_score_source,
+                "lastError": model_error,
+            },
+            "preTrigger": pre_trigger_block,
+            "telemetry": telemetry_block,
+            "degradedReasons": degraded_reasons,
+        }
+
+        # Legacy keys (kept for one release cycle while consumers migrate).
+        # NOTE: the legacy key was previously named "backend" (a flat string
+        # like "connected"/"down") which collided with the v2 "backend" field
+        # (HealthBackendBlock dict) when the dicts were merged — causing a
+        # ResponseValidationError on the /api/sim/health endpoint.  Renamed
+        # to "backendStatus" to avoid the collision.
+        legacy_keys: dict[str, Any] = {
+            "status": runtime_state if runtime_state != "idle" else "running",
+            "api": "running",
+            "backendStatus": "connected" if backend_state == "connected" else "down",
+            "mqtt": mqtt_status,
+            "db": "healthy" if db_ok else "down",
+            "version": self._SIMULATOR_VERSION,
+        }
+
+        return {**v2_payload, **legacy_keys}
 
 
     def sleep_session(self, device_id: str) -> SleepSessionResponse:
@@ -1187,12 +1682,178 @@ class SimulatorRuntime:
     def latest_vitals(self, device_id: str) -> VitalsSample:
         return self.vitals_service.latest_vitals(device_id)
 
+    # ── Module C — Sessions / Fall Lab evidence surface ──────────────────
+
+    def motion_latest(self, session_id: str, device_id: str) -> MotionLatest:
+        """Return the most recent motion window emitted for `device_id`.
+
+        We pull straight from `record.last_tick_outputs` so the FE can
+        render the same arrays the dataset registry produced — no
+        synthetic preview, no client-side fabrication.
+        """
+        with self._lock:
+            record = self._require_session(session_id)
+            if device_id not in record.device_ids:
+                raise KeyError(f"Device {device_id} not in session {session_id}")
+            payload = self._latest_motion_payload_locked(record, device_id)
+            state = (payload or {}).get("state") or {}
+            motion = (payload or {}).get("motion") or {}
+            return MotionLatest(
+                deviceId=device_id,
+                sessionId=session_id,
+                emittedAt=str((payload or {}).get("emitted_at") or _utc_now_iso()),
+                activityState=str(state.get("activity_state") or "unknown"),
+                fallVariant=(str(state.get("fall_variant")) if state.get("fall_variant") else None),
+                sampleRate=_safe_float(motion.get("sample_rate"), None),
+                accelX=_coerce_float_list(motion.get("accel_x")),
+                accelY=_coerce_float_list(motion.get("accel_y")),
+                accelZ=_coerce_float_list(motion.get("accel_z")),
+                accelMag=_coerce_float_list(motion.get("accel_mag")),
+                gyroX=_coerce_float_list(motion.get("gyro_x")),
+                gyroY=_coerce_float_list(motion.get("gyro_y")),
+                gyroZ=_coerce_float_list(motion.get("gyro_z")),
+            )
+
+    def fall_state(self, session_id: str, device_id: str) -> FallState:
+        """Operator-visible fall pipeline state derived from runtime truth.
+
+        Sources:
+          * `device.state` — canonical FSM (`fall_countdown` / `sos_active`).
+          * Most recent `fall_detected` event in `event_history`.
+          * `record.last_tick_outputs[i].state.{activity_state,fall_variant}`.
+        """
+        with self._lock:
+            record = self._require_session(session_id)
+            if device_id not in record.device_ids:
+                raise KeyError(f"Device {device_id} not in session {session_id}")
+            device = self.devices.get(device_id)
+            tick_state = (
+                (self._latest_motion_payload_locked(record, device_id) or {}).get("state") or {}
+            )
+            recent_fall_events = [
+                event
+                for event in reversed(self.event_history)
+                if event.device_id == device_id
+                and event.event_type in {"fall_detected", "sos_cancel", "fall_no_response"}
+            ][:5]
+            last_fall_event = next(
+                (event for event in recent_fall_events if event.event_type == "fall_detected"),
+                None,
+            )
+            last_cancel_event = next(
+                (event for event in recent_fall_events if event.event_type == "sos_cancel"),
+                None,
+            )
+
+            countdown_remaining = 0
+            countdown_started_at: str | None = None
+            sos_active = False
+            if device is not None and device.state in {"fall_countdown", "sos_active"} and last_fall_event:
+                countdown_started_at = last_fall_event.timestamp
+                # If the operator already cancelled after this fall event,
+                # the countdown is logically zero even if the FSM hasn't
+                # advanced yet (it will on the next tick).
+                cancelled_after_fall = (
+                    last_cancel_event is not None
+                    and last_cancel_event.timestamp >= last_fall_event.timestamp
+                )
+                if not cancelled_after_fall:
+                    elapsed = self._iso_age_seconds(last_fall_event.timestamp)
+                    countdown_remaining = max(
+                        0, int(round(self._SOS_COUNTDOWN_SECONDS - elapsed))
+                    )
+                    sos_active = device.state == "sos_active" or countdown_remaining > 0
+
+            fall_state_value = self._fall_state_locked(
+                device_state=(device.state if device else "streaming"),
+                last_fall_event=last_fall_event,
+                last_cancel_event=last_cancel_event,
+                countdown_remaining=countdown_remaining,
+            )
+
+            return FallState(
+                deviceId=device_id,
+                sessionId=session_id,
+                deviceState=(device.state if device else "streaming"),  # type: ignore[arg-type]
+                activityState=str(tick_state.get("activity_state") or "unknown"),
+                fallVariant=(str(tick_state.get("fall_variant")) if tick_state.get("fall_variant") else None),
+                fallState=fall_state_value,  # type: ignore[arg-type]
+                lastFallEventAt=last_fall_event.timestamp if last_fall_event else None,
+                countdownStartedAt=countdown_started_at,
+                countdownRemainingSec=countdown_remaining,
+                countdownTotalSec=int(self._SOS_COUNTDOWN_SECONDS),
+                sosActive=sos_active,
+                recentFallEvents=[
+                    FallEventEntry(
+                        id=event.id,
+                        timestamp=event.timestamp,
+                        eventType=event.event_type,
+                        severity=event.severity,  # type: ignore[arg-type]
+                        variant=event.metadata.get("variant") or None,
+                    )
+                    for event in recent_fall_events
+                ],
+            )
+
+    @staticmethod
+    def _latest_motion_payload_locked(
+        record: SessionRecord, device_id: str
+    ) -> dict[str, Any] | None:
+        """Return the most recent tick payload for `device_id`, if any."""
+        for payload in reversed(record.last_tick_outputs):
+            if payload.get("device_id") == device_id:
+                return payload
+        return None
+
+    @staticmethod
+    def _iso_age_seconds(iso_ts: str) -> float:
+        """Seconds between now (UTC) and `iso_ts` — robust to ``Z`` suffix."""
+        try:
+            ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        return (datetime.now(timezone.utc) - ts).total_seconds()
+
+    @staticmethod
+    def _fall_state_locked(
+        *,
+        device_state: str,
+        last_fall_event: EventRecord | None,
+        last_cancel_event: EventRecord | None,
+        countdown_remaining: int,
+    ) -> FallStateValue:
+        """Reduce runtime signals into the FE-friendly fall lifecycle.
+
+        ``idle``           — no recent fall events.
+        ``fall_detected``  — fall event recorded but FSM has cleared (e.g.
+                             a brief or false-alarm variant that didn't
+                             escalate).
+        ``fall_countdown`` — FSM is in `fall_countdown` and the SOS
+                             window has not elapsed.
+        ``sos_active``     — FSM is in `sos_active` (operator did not
+                             respond and the device escalated).
+        ``fall_resolved``  — operator pressed "Tôi ổn" after a fall event.
+        """
+        if last_cancel_event is not None and (
+            last_fall_event is None or last_cancel_event.timestamp >= last_fall_event.timestamp
+        ):
+            return "fall_resolved"
+        if device_state == "sos_active":
+            return "sos_active"
+        if device_state == "fall_countdown" and countdown_remaining > 0:
+            return "fall_countdown"
+        if last_fall_event is not None:
+            return "fall_detected"
+        return "idle"
+
     def verification(self, session_id: str) -> VerificationResult:
         with self._lock:
             record = self._require_session(session_id)
             device_id = record.device_ids[0] if record.device_ids else "unknown"
             status = self._verification_status_locked(record)
             risk_received = device_id in self.risk_snapshots
+            stages = self._verification_stages_locked(record, device_id, risk_received)
+            failure_reason = self._verification_failure_reason_locked(record, stages)
             return VerificationResult(
                 deviceId=device_id,
                 vitalsReceived=bool(record.last_tick_outputs),
@@ -1201,7 +1862,153 @@ class SimulatorRuntime:
                 latencyMs=record.last_publish_latency_ms or 0,
                 status=status,  # type: ignore[arg-type]
                 lastCheckedAt=_utc_now_iso(),
+                stages=stages,
+                failureReason=failure_reason,
+                lastGoodPublishAt=record.last_publish_ok_at,
+                lastPublishAttemptAt=record.last_publish_attempt_at,
+                publishAckCount=record.publish_ack_count_total,
+                publishAttemptCount=record.publish_attempt_count,
             )
+
+    def _verification_stages_locked(
+        self,
+        record: SessionRecord,
+        device_id: str,
+        risk_received: bool,
+    ) -> list[PipelineStage]:
+        """Build the ordered evidence trail for `record`.
+
+        Stages are emitted in pipeline order so the FE strip renders
+        device → session → telemetry → publish → risk → alert.  Each
+        stage is one of `ok` / `pending` / `failed` / `skipped` so the
+        operator can see exactly where the trail broke.
+        """
+        device_known = device_id in self.devices
+        stages: list[PipelineStage] = []
+
+        # 1. Device registered in simulator runtime.
+        stages.append(
+            PipelineStage(
+                key="device_registered",
+                label="Thiết bị đã đăng ký",
+                status="ok" if device_known else "failed",
+                detail=(
+                    None
+                    if device_known
+                    else "Thiết bị không có trong simulator runtime — kiểm tra Devices."
+                ),
+            )
+        )
+
+        # 2. Session running.
+        if record.status == "running":
+            session_status: PipelineStageStatusValue = "ok"
+            session_detail: str | None = None
+        elif record.status == "stopped":
+            session_status = "failed"
+            session_detail = "Phiên đã dừng — bắt đầu lại để tiếp tục thu thập bằng chứng."
+        else:
+            session_status = "pending"
+            session_detail = "Phiên chưa chạy."
+        stages.append(
+            PipelineStage(
+                key="session_started",
+                label="Phiên đang chạy",
+                status=session_status,
+                detail=session_detail,
+                at=record.last_tick_at if record.status == "running" else None,
+            )
+        )
+
+        # 3. Telemetry generated locally.
+        has_outputs = bool(record.last_tick_outputs)
+        is_stale = self._verification_is_stale_locked(record)
+        if has_outputs and not is_stale:
+            telemetry_status: PipelineStageStatusValue = "ok"
+            telemetry_detail: str | None = None
+        elif has_outputs and is_stale:
+            telemetry_status = "failed"
+            telemetry_detail = "Tick chưa cập nhật — simulator có thể bị treo."
+        else:
+            telemetry_status = "pending"
+            telemetry_detail = "Chưa có tick nào tạo dữ liệu vitals."
+        stages.append(
+            PipelineStage(
+                key="telemetry_generated",
+                label="Sinh hiệu đã tạo",
+                status=telemetry_status,
+                detail=telemetry_detail,
+                at=record.last_tick_at,
+            )
+        )
+
+        # 4. Telemetry successfully published downstream.
+        if record.publish_attempt_count == 0:
+            publish_status: PipelineStageStatusValue = "pending"
+            publish_detail: str | None = "Chưa publish lần nào."
+        elif record.last_publish_ok:
+            publish_status = "ok"
+            publish_detail = (
+                f"{record.last_publish_ack_count}/{record.last_publish_count} message ack thành công."
+            )
+        else:
+            publish_status = "failed"
+            publish_detail = record.last_publish_error or "Publish gần nhất thất bại."
+        stages.append(
+            PipelineStage(
+                key="telemetry_published",
+                label="Đã publish",
+                status=publish_status,
+                detail=publish_detail,
+                at=record.last_publish_ok_at,
+            )
+        )
+
+        # 5. Risk evaluated for the focal device.
+        stages.append(
+            PipelineStage(
+                key="risk_evaluated",
+                label="Đã tính rủi ro",
+                status="ok" if risk_received else "pending",
+                detail=(
+                    None
+                    if risk_received
+                    else "Chưa có snapshot rủi ro — chờ tick kế tiếp hoặc trigger từ Diagnostics."
+                ),
+            )
+        )
+
+        # 6. Alert dispatched (only meaningful when an alert is expected).
+        if record.alert_received:
+            alert_stage = PipelineStage(
+                key="alert_dispatched",
+                label="Cảnh báo đã gửi",
+                status="ok",
+                detail="Đã ghi nhận cảnh báo cho phiên này.",
+            )
+        else:
+            alert_stage = PipelineStage(
+                key="alert_dispatched",
+                label="Cảnh báo đã gửi",
+                status="skipped",
+                detail="Phiên hiện tại chưa có sự kiện cần cảnh báo.",
+            )
+        stages.append(alert_stage)
+
+        return stages
+
+    @staticmethod
+    def _verification_failure_reason_locked(
+        record: SessionRecord,
+        stages: list[PipelineStage],
+    ) -> str | None:
+        """Return the first user-readable failure reason, if any."""
+        for stage in stages:
+            if stage.status == "failed":
+                return stage.detail or f"Stage {stage.key} thất bại."
+        if record.last_publish_error and record.publish_attempt_count > 0 and not record.last_publish_ok:
+            return record.last_publish_error
+        return None
 
     def _require_session(self, session_id: str) -> SessionRecord:
         return self.session_service._require_session(session_id)

@@ -1,0 +1,221 @@
+"""Trigger orchestrator — central coordinator for pre-model evaluation.
+
+Aggregates results from :class:`RuleEngine`, :class:`FallPreTrigger`, and
+optionally the :class:`HealthGuardAPIClient`, then post-processes via
+:class:`ResponseHandler` before returning ``list[TriggerActionItem]`` to
+the caller (``SimulatorRuntime``).
+
+Architecture reference: plans/alert-threshold-architecture-plan.md §5.1
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Sequence
+
+from pre_model_trigger.fall_pre_trigger import FallPreTrigger
+from pre_model_trigger.healthguard_client import HealthGuardAPIClient
+from pre_model_trigger.response_handler import ResponseHandler
+from pre_model_trigger.rule_engine import RuleEngine
+from pre_model_trigger.settings_provider import SystemSettingsProvider
+from pre_model_trigger.types import PersonaProfile, TriggerActionItem
+from pre_model_trigger.vitals_buffer import VitalsHistoryBuffer
+
+logger = logging.getLogger(__name__)
+
+# Keys extracted from the raw vitals dict for model calls / snapshots.
+_VITALS_SNAPSHOT_KEYS: tuple[str, ...] = (
+    "heart_rate",
+    "spo2",
+    "resp_rate",
+    "body_temp",
+    "sys_bp",
+    "dia_bp",
+    "hrv",
+    "activity_state",
+)
+
+# Severity values that qualify an action for model escalation.
+_MODEL_ESCALATION_SEVERITIES: frozenset[str] = frozenset({
+    "SEND_TO_RISK_MODEL",
+    "URGENT",
+})
+
+
+class TriggerOrchestrator:
+    """Coordinate pre-model trigger evaluation across all sub-engines.
+
+    Parameters
+    ----------
+    settings_provider:
+        Provides vitals thresholds (DB-backed with fallbacks).
+    rule_engine:
+        Evaluates instant / profile / time-series rules from ``rules_config.json``.
+    fall_pre_trigger:
+        Stage-1 fall detection from ``fall_pipeline_wrist_config.json``.
+    api_client:
+        HTTP client for requesting ML predictions from Health Backend.
+    response_handler:
+        **Class** (not instance) with static post-processing methods.
+    vitals_buffer:
+        Per-device ring buffer for time-series evaluation.
+    enable_model_calls:
+        When *True*, actions with ``severity >= SEND_TO_RISK_MODEL`` trigger
+        an HTTP call to Health Backend for ML prediction.  When *False*
+        (shadow mode), only local rule evaluation runs.
+    """
+
+    def __init__(
+        self,
+        *,
+        settings_provider: SystemSettingsProvider,
+        rule_engine: RuleEngine,
+        fall_pre_trigger: FallPreTrigger,
+        api_client: HealthGuardAPIClient,
+        response_handler: type[ResponseHandler],
+        vitals_buffer: VitalsHistoryBuffer,
+        enable_model_calls: bool = False,
+    ) -> None:
+        self._settings = settings_provider
+        self._rule_engine = rule_engine
+        self._fall_pre_trigger = fall_pre_trigger
+        self._api_client = api_client
+        self._response_handler = response_handler
+        self._vitals_buffer = vitals_buffer
+        self._enable_model_calls = enable_model_calls
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def evaluate_tick(
+        self,
+        device_id: str,
+        vitals: dict[str, Any],
+        motion: dict[str, Any] | None,
+        state: dict[str, Any],
+        persona: PersonaProfile,
+    ) -> list[TriggerActionItem]:
+        """Run the full pre-model evaluation pipeline for one tick.
+
+        1. Push vitals into the per-device ring buffer.
+        2. Evaluate vitals rules (instant + profile + time-series).
+        3. Evaluate fall pre-trigger (if motion data present).
+        4. If any action reaches SEND_TO_RISK_MODEL / URGENT and
+           ``enable_model_calls`` is *True*, request ML prediction.
+        5. Post-process via ``ResponseHandler``.
+
+        Returns
+        -------
+        list[TriggerActionItem]
+            Actionable items sorted by severity (most urgent first).
+        """
+        # Step 1 — buffer vitals for time-series analysis
+        self._vitals_buffer.push(device_id, vitals)
+        history = self._vitals_buffer.get_history(device_id)
+
+        # Step 2 — vitals rule evaluation
+        actions: list[TriggerActionItem] = self._rule_engine.evaluate(
+            vitals=vitals,
+            persona=persona,
+            history=history,
+        )
+
+        # Step 3 — fall pre-trigger (only when motion data is present)
+        if motion is not None:
+            fall_actions = self._fall_pre_trigger.evaluate(motion=motion)
+            actions.extend(fall_actions)
+
+        # Step 4 — optional model escalation
+        if self._enable_model_calls and self._should_escalate_to_model(actions):
+            model_actions = self._request_model_prediction(
+                device_id=device_id,
+                vitals=vitals,
+                persona=persona,
+            )
+            actions.extend(model_actions)
+
+        # Step 5 — post-process (dedup, filter, enrich, sort)
+        return self._response_handler.process(actions, device_id=device_id)
+
+    def force_health_prediction(
+        self,
+        device_id: str,
+        vitals: dict[str, Any],
+        persona: PersonaProfile,
+    ) -> list[TriggerActionItem]:
+        """Bypass rule evaluation and directly request ML prediction.
+
+        Used by ``trigger_risk_calculation`` for on-demand risk inference.
+        Always calls the API regardless of ``enable_model_calls`` setting.
+        """
+        model_actions = self._request_model_prediction(
+            device_id=device_id,
+            vitals=vitals,
+            persona=persona,
+        )
+        return self._response_handler.process(model_actions, device_id=device_id)
+
+    # ------------------------------------------------------------------
+    # Vitals snapshot extraction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_vitals_snapshot(vitals_dict: dict[str, Any]) -> dict[str, Any]:
+        """Extract relevant vitals keys from a raw tick payload.
+
+        Returns a flat dict with only the keys needed for model calls,
+        converting values to float where possible.
+        """
+        snapshot: dict[str, Any] = {}
+        for key in _VITALS_SNAPSHOT_KEYS:
+            value = vitals_dict.get(key)
+            if value is None:
+                continue
+            if key == "activity_state":
+                snapshot[key] = str(value)
+            else:
+                try:
+                    snapshot[key] = float(value)
+                except (TypeError, ValueError):
+                    snapshot[key] = value
+        return snapshot
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _should_escalate_to_model(self, actions: Sequence[TriggerActionItem]) -> bool:
+        """Check if any action warrants sending data to the ML model."""
+        return any(
+            action.severity in _MODEL_ESCALATION_SEVERITIES
+            for action in actions
+        )
+
+    def _request_model_prediction(
+        self,
+        device_id: str,
+        vitals: dict[str, Any],
+        persona: PersonaProfile,
+    ) -> list[TriggerActionItem]:
+        """Call the HealthGuard API for ML prediction, handling errors."""
+        try:
+            return self._api_client.request_prediction(
+                device_id=device_id,
+                vitals=vitals,
+                persona=persona,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Model prediction request failed for %s: %s",
+                device_id,
+                exc,
+            )
+            return [
+                TriggerActionItem(
+                    action_type="log",
+                    severity="normal",
+                    message=f"Model prediction failed: {exc}",
+                    source="orchestrator",
+                    metadata={"error": str(exc)},
+                ),
+            ]

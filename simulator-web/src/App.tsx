@@ -8,6 +8,7 @@ const DevicesPage = lazy(() => import("./pages/DevicesPage").then((module) => ({
 const ScenariosPage = lazy(() => import("./pages/ScenariosPage").then((module) => ({ default: module.ScenariosPage })));
 const SessionRunnerPage = lazy(() => import("./pages/SessionRunnerPage").then((module) => ({ default: module.SessionRunnerPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
+const DiagnosticsPage = lazy(() => import("./pages/DiagnosticsPage").then((module) => ({ default: module.DiagnosticsPage })));
 const VerificationPage = lazy(() => import("./pages/VerificationPage").then((module) => ({ default: module.VerificationPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="scenarios" element={withBoundary(<ScenariosPage />)} />
         <Route path="session" element={withBoundary(<SessionRunnerPage />)} />
         <Route path="analytics" element={withBoundary(<AnalyticsPage />)} />
+        <Route path="diagnostics" element={withBoundary(<DiagnosticsPage />)} />
         <Route path="verification" element={withBoundary(<VerificationPage />)} />
         <Route path="settings" element={withBoundary(<SettingsPage />)} />
         <Route path="*" element={<NotFoundPage />} />

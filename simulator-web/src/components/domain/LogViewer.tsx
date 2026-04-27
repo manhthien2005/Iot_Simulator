@@ -8,6 +8,7 @@ import { Card } from "../ui/Card";
 
 interface LogViewerProps {
   logs: LogEntry[];
+  deviceNameMap?: Record<string, string>;
 }
 
 function sanitizeCsvCell(val: string): string {
@@ -15,7 +16,7 @@ function sanitizeCsvCell(val: string): string {
   return val;
 }
 
-function LogViewerInner({ logs }: LogViewerProps) {
+function LogViewerInner({ logs, deviceNameMap = {} }: LogViewerProps) {
   const [device, setDevice] = useState("all");
   const [level, setLevel] = useState("WARN+");
   const parentRef = useRef<HTMLDivElement | null>(null);
@@ -76,7 +77,7 @@ function LogViewerInner({ logs }: LogViewerProps) {
             <select value={device} onChange={(event) => setDevice(event.target.value)} style={selectStyle}>
               {devices.map((item) => (
                 <option key={item} value={item}>
-                  {item === "all" ? "Tất cả thiết bị" : item}
+                  {item === "all" ? "Tất cả thiết bị" : (deviceNameMap[item] ?? item)}
                 </option>
               ))}
             </select>
@@ -132,7 +133,7 @@ function LogViewerInner({ logs }: LogViewerProps) {
               >
                 <span>{new Date(row.ts ?? Date.now()).toLocaleTimeString()}</span>
                 <span>[{row.level}]</span>
-                <span>{row.device_id}</span>
+                <span title={row.device_id}>{deviceNameMap[row.device_id] ?? row.device_id}</span>
                 <span>{row.message}</span>
               </div>
             );

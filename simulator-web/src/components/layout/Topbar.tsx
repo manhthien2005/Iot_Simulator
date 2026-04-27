@@ -1,15 +1,18 @@
 import { Square, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useSessions } from "../../hooks/useSessions";
 import { stopSession } from "../../services/sessionApi";
 import { useSessionStore } from "../../stores/sessionStore";
 import { notify } from "../../utils/toast";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
+import type { SessionInfo } from "../../types/session";
 
 export function Topbar() {
   const { activeSessionId, setActiveSession } = useSessionStore();
   const { data: sessions } = useSessions();
+  const queryClient = useQueryClient();
   const [stopping, setStopping] = useState(false);
 
   const runningSessions = useMemo(() => {
@@ -25,8 +28,25 @@ export function Topbar() {
     return runningSessions.reduce((total, s) => total + s.deviceIds.length, 0);
   }, [runningSessions]);
 
+  // Module G.10 — optimistic stop.
+  //
+  // The "Dừng tất cả" button used to wait the BE round-trip + the next
+  // sessions poll (`POLL_INTERVALS.sessions`) before the badge
+  // collapsed.  Now we flip the targeted sessions to `status: "stopped"`
+  // in the cache before firing `stopSession()`, so the Topbar updates
+  // immediately.  The post-mutation `invalidateQueries` reconciles back
+  // to BE truth (and corrects partial failures), so a session that
+  // refused to stop will reappear within one poll cycle.
   const stopAll = async () => {
     if (runningSessions.length === 0) return;
+
+    await queryClient.cancelQueries({ queryKey: ["sessions"] });
+    const previous = queryClient.getQueryData<SessionInfo[]>(["sessions"]);
+    const targetIds = new Set(runningSessions.map((s) => s.id));
+    queryClient.setQueryData<SessionInfo[]>(["sessions"], (old) =>
+      old?.map((s) => (targetIds.has(s.id) ? { ...s, status: "stopped" as const } : s)) ?? old
+    );
+
     setStopping(true);
     try {
       const results = await Promise.allSettled(
@@ -39,12 +59,20 @@ export function Topbar() {
         notify.warning(`Dừng được ${results.length - failed}/${results.length} phiên. ${failed} phiên lỗi.`);
       } else {
         notify.error("Không dừng được phiên nào. Kiểm tra kết nối.");
+        // Whole batch failed — roll back the optimistic patch eagerly
+        // so the operator sees the correct "Đang chạy" state without
+        // waiting for the next poll.
+        if (previous) queryClient.setQueryData(["sessions"], previous);
       }
       setActiveSession(null);
     } catch {
       notify.error("Lỗi khi dừng phiên mô phỏng.");
+      if (previous) queryClient.setQueryData(["sessions"], previous);
     } finally {
       setStopping(false);
+      // Always reconcile with BE truth — covers partial failures where
+      // some sessions stopped and others didn't.
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
     }
   };
 

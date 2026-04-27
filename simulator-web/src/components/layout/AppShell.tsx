@@ -3,8 +3,11 @@ import { Outlet } from "react-router-dom";
 import { Skeleton } from "../ui/Skeleton";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
+import { useScrollToTop } from "../../hooks/useScrollToTop";
 
 export function AppShell() {
+  // Module G.13 — reset scroll on every route change inside the shell.
+  useScrollToTop();
   return (
     <div className="app-shell" style={{ minHeight: "100vh", display: "grid", gridTemplateColumns: "auto 1fr", background: "var(--bg-base)" }}>
       <Sidebar />

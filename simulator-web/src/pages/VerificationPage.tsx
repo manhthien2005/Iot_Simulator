@@ -1,39 +1,112 @@
 import { useMemo } from "react";
 import { VerificationTable } from "../components/domain/VerificationTable";
 import { LogViewer } from "../components/domain/LogViewer";
-import { HealthStatusPanel } from "../components/domain/HealthStatusPanel";
+import { LastGoodPublishCard } from "../components/domain/LastGoodPublishCard";
 import { useSessions } from "../hooks/useSessions";
-import { useVerification } from "../hooks/useVerification";
+import { useAllVerifications } from "../hooks/useVerification";
 import { useLogStream } from "../hooks/useLogStream";
+import { useDevices } from "../hooks/useDevices";
 import { useSessionStore } from "../stores/sessionStore";
+
+// ---------------------------------------------------------------------------
+// VerificationPage — Module E rebuild as the "Trung tâm Bằng chứng".
+//
+// Layout:
+//   1. Page header (truthful copy + running-session count line)
+//   2. <VerificationTable/>           — one card per running session/device
+//   3. <LastGoodPublishCard/>         — evidence for the active/first session
+//   4. <LogViewer/>                   — live log stream (active session WS)
+// ---------------------------------------------------------------------------
 
 export function VerificationPage() {
   const { activeSessionId } = useSessionStore();
   const { data: sessions = [], refetch: refetchSessions } = useSessions();
-  const active = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId) ?? sessions.find((session) => session.status === "running") ?? null,
-    [activeSessionId, sessions]
+
+  const runningSessions = useMemo(
+    () => sessions.filter((s) => s.status === "running"),
+    [sessions],
   );
-  const { data: verification, refetch } = useVerification(active?.id ?? null);
-  const { logs } = useLogStream(active?.id ?? null);
+  const runningIds = useMemo(
+    () => runningSessions.map((s) => s.id),
+    [runningSessions],
+  );
+
+  const activeSession = useMemo(
+    () =>
+      sessions.find((s) => s.id === activeSessionId && s.status === "running") ??
+      runningSessions[0] ??
+      null,
+    [activeSessionId, sessions, runningSessions],
+  );
+
+  const { data: allRows = [], refetch } = useAllVerifications(runningIds);
+  const { data: devices = [] } = useDevices();
+  const { logs } = useLogStream(runningIds);
+
+  const deviceNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const d of devices) map[d.id] = d.name;
+    return map;
+  }, [devices]);
+
+  const activeResult = useMemo(
+    () => allRows.find((r) => r.sessionId === activeSession?.id) ?? allRows[0] ?? null,
+    [allRows, activeSession],
+  );
+
+  function handleRefresh() {
+    refetch();
+    refetchSessions();
+  }
+
+  const headerLine = useMemo(() => {
+    if (runningSessions.length === 0) {
+      return "Chưa có phiên đang chạy — bắt đầu một phiên để xem bằng chứng.";
+    }
+    const names = runningSessions
+      .map((s) => {
+        const devList = s.deviceIds.slice(0, 2).join(", ");
+        const extra = s.deviceIds.length > 2 ? ` +${s.deviceIds.length - 2}` : "";
+        return `[${s.id.slice(0, 8)}…] ${devList}${extra}`;
+      })
+      .join(" · ");
+    return `${runningSessions.length} phiên đang chạy — ${names}`;
+  }, [runningSessions]);
 
   return (
     <section style={{ display: "grid", gap: "14px" }}>
       <div>
-        <h1 className="page-title">Xác minh</h1>
-        <p className="page-subtitle">Theo dõi xác minh theo thiết bị, kiểm tra log và xuất bằng chứng phiên chạy.</p>
+        <h1 className="page-title">Trung tâm Bằng chứng</h1>
+        <p className="page-subtitle">
+          Tiến trình pipeline theo từng phiên, lý do lỗi, lần publish thành công gần nhất và log thời gian thực — đủ
+          bằng chứng để báo cáo phiên mô phỏng. Trạng thái hệ thống tổng quan đã chuyển sang trang Bảng điều khiển.
+        </p>
+        <p style={activeSessionStyle}>{headerLine}</p>
       </div>
 
       <VerificationTable
-        rows={verification ? [verification] : []}
-        onRefresh={() => {
-          refetch();
-          refetchSessions();
-        }}
+        rows={allRows}
+        onRefresh={handleRefresh}
+        deviceNameMap={deviceNameMap}
       />
 
-      <LogViewer logs={logs} />
-      <HealthStatusPanel />
+      <div style={gridStyle}>
+        <LastGoodPublishCard result={activeResult} />
+        <LogViewer logs={logs} deviceNameMap={deviceNameMap} />
+      </div>
     </section>
   );
 }
+
+const activeSessionStyle = {
+  margin: "4px 0 0 0",
+  fontSize: "12px",
+  color: "var(--text-muted)",
+  fontFamily: "var(--font-mono)",
+} as const;
+
+const gridStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(280px, 1fr) minmax(0, 2fr)",
+  gap: "12px",
+} as const;
