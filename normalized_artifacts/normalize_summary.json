@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-03-27T19:44:06.976601",
+  "counts": {
+    "motion_rows": 384232,
+    "motion_windows": 15234,
+    "vitals_rows": 299359,
+    "stress_rows": 194784,
+    "event_rows": 18,
+    "sleep_session_count": 10,
+    "sleep_subjects_tried": 10,
+    "sleep_skipped": false
+  },
+  "outputs": {
+    "motion_windows": "D:\\DoAn2\\VSmartwatch\\Iot_Simulator\\normalized_artifacts\\motion_windows.parquet",
+    "vitals_stream": "D:\\DoAn2\\VSmartwatch\\Iot_Simulator\\normalized_artifacts\\vitals_stream.parquet",
+    "event_catalog": "D:\\DoAn2\\VSmartwatch\\Iot_Simulator\\normalized_artifacts\\event_catalog.parquet",
+    "stress_stream": "D:\\DoAn2\\VSmartwatch\\Iot_Simulator\\normalized_artifacts\\stress_stream.parquet",
+    "sleep_sessions": "D:\\DoAn2\\VSmartwatch\\Iot_Simulator\\normalized_artifacts\\sleep_sessions.parquet"
+  }
+}

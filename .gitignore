@@ -75,5 +75,6 @@ docs/**
 # See datasets/DATASET_MANIFEST.md and datasets/DOWNLOAD_GUIDE.md for download instructions
 datasets/
 
-# Normalized ETL artifacts — rebuilt locally by running etl_pipeline/normalize.py
-normalized_artifacts/
+# Normalized ETL artifacts — committed to repo for tester convenience
+# To rebuild locally: python etl_pipeline/normalize.py
+# normalized_artifacts/
