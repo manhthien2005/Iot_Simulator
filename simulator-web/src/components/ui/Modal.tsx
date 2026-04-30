@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 interface ModalProps {
   /** Whether the modal is currently visible */
@@ -80,7 +81,7 @@ export function Modal({ open, onClose, title, children, footer, maxWidth = 520 }
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
       style={{
         position: "fixed",
@@ -161,6 +162,7 @@ export function Modal({ open, onClose, title, children, footer, maxWidth = 520 }
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
