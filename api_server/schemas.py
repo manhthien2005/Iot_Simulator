@@ -239,12 +239,81 @@ class FallEventEntry(BaseModel):
     variant: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# AI verdict surface (Module FA — Fall Lab redesign)
+#
+# These types project the model-api `/api/v1/fall/predict` response into a
+# shape the FE consumes directly.  Centralising the projection in
+# `simulator_core.fall_ai_client.normalise_verdict()` keeps the runtime
+# free of model-specific field plumbing.
+# ---------------------------------------------------------------------------
+
+
+AIPredictionLabel = Literal["normal", "possible_fall", "likely_fall", "critical_fall"]
+AIPredictionBand = Literal["normal", "warning", "critical"]
+
+
+class AITopFeature(BaseModel):
+    """One SHAP top-feature contribution with a Vietnamese explanation."""
+
+    featureName: str
+    contribution: float
+    vietnameseExplanation: str
+    severity: Literal["normal", "warning", "critical"] = "normal"
+
+
+class AIPrediction(BaseModel):
+    """AI fall verdict for the most recent inject_event call."""
+
+    label: AIPredictionLabel
+    probability: float
+    confidence: float
+    riskBand: AIPredictionBand
+    requiresAttention: bool = False
+    highPriorityAlert: bool = False
+    explanationSummary: str | None = None
+    topFeatures: list[AITopFeature] = Field(default_factory=list)
+    predictedAt: str
+    modelStatus: Literal["ok", "offline", "no_window", "skipped"] = "ok"
+
+
+class MotionWindowRef(BaseModel):
+    """Reference to the motion window the AI verdict was computed on.
+
+    Lets the FE align the sparkline + AI verdict to the same data the
+    model classified, instead of the live-streaming tick payload (which
+    moves on by the time the verdict comes back).
+    """
+
+    emittedAt: str
+    sampleCount: int
+    sampleRate: float | None = None
+    fallVariant: str | None = None
+
+
+class CountdownPolicy(BaseModel):
+    """Variant-specific SOS countdown policy.
+
+    The same FallState shape is returned for every variant; only the
+    *policy* differs (false_fall has 0s + no countdown; fall_brief auto-
+    resolves at 10s; confirmed/no_response use the standard 30s).
+    """
+
+    totalSec: int
+    autoResolve: bool = False
+    allowsCancel: bool = True
+
+
 class FallState(BaseModel):
     """Operator-visible fall pipeline state for one focal device.
 
     All fields are derived from existing runtime state — no extra storage.
     The frontend uses `countdownRemainingSec` to render an evidence-driven
     countdown bar instead of a FE-only `setInterval`.
+
+    The Module-FA redesign added `aiPrediction`, `motionWindowRef`, and
+    `countdownPolicy`; all three are nullable so legacy clients that only
+    poll for the FSM-level fields continue to work without changes.
     """
 
     deviceId: str
@@ -259,6 +328,9 @@ class FallState(BaseModel):
     countdownTotalSec: int = 0
     sosActive: bool = False
     recentFallEvents: list[FallEventEntry] = Field(default_factory=list)
+    aiPrediction: AIPrediction | None = None
+    motionWindowRef: MotionWindowRef | None = None
+    countdownPolicy: CountdownPolicy | None = None
 
 
 class AlertEvent(BaseModel):

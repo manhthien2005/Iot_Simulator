@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DeviceAssignPanel } from "../components/domain/DeviceAssignPanel";
-import { FallLab } from "../components/domain/FallLab";
-import { MotionPreviewPanel } from "../components/domain/MotionPreviewPanel";
 import { SessionVitalsPanel } from "../components/domain/SessionVitalsPanel";
 
 import { useDevices } from "../hooks/useDevices";
@@ -155,8 +153,11 @@ export function SessionRunnerPage() {
   return (
     <section style={{ display: "grid", gap: "14px" }}>
       <div>
-        <h1 className="page-title">Phiên mô phỏng</h1>
-        <p className="page-subtitle">Điều khiển trạng thái phiên, gán kịch bản và chạy té ngã cho các thiết bị đang bật SIM.</p>
+        <h1 className="page-title">Mô phỏng tín hiệu sinh tồn</h1>
+        <p className="page-subtitle">
+          Theo dõi vitals + chuyển động trực tiếp và gán kịch bản cho các thiết bị đang bật SIM. Inject té ngã đã
+          chuyển sang trang <strong>Phòng thí nghiệm té ngã</strong>.
+        </p>
       </div>
 
       <DeviceAssignPanel
@@ -178,15 +179,6 @@ export function SessionRunnerPage() {
         onDeviceChange={setMonitorDeviceId}
       />
 
-      <FallLab
-        devices={activeDevices}
-        sessionId={activeSession?.id ?? null}
-        focusDeviceId={monitorDeviceId || null}
-      />
-      <MotionPreviewPanel
-        selectedDevice={activeDevices.find((item) => item.id === monitorDeviceId) ?? null}
-        sessionId={activeSession?.id ?? null}
-      />
       {confirmDialog}
     </section>
   );

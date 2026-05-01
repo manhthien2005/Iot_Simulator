@@ -174,7 +174,7 @@ function runtimePill(runtime: HealthRuntimeBlock): Pill {
     idle: {
       display: "rảnh",
       severity: "info",
-      detail: "Không có phiên nào đang chạy. Khởi động một phiên ở trang Phiên mô phỏng.",
+      detail: "Không có phiên nào đang chạy. Khởi động một phiên ở trang Mô phỏng tín hiệu sinh tồn.",
     },
     degraded: {
       display: "suy giảm",

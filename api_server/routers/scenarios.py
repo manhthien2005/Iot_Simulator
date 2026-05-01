@@ -119,6 +119,19 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
             KeySignal(label="BP_sys ↑ (140-160)", direction="up", target="blood_pressure_sys", severity="warning"),
         ],
     ),
+    ScenarioOption(
+        id="normal_walking",
+        name="Đi bộ bình thường",
+        category="vitals",
+        description="Người cao tuổi đang đi bộ nhẹ nhàng. HR 80-100 bpm (bình thường khi hoạt động), SpO2 ổn định.",
+        expectedOutcome="Sinh hiệu tăng nhẹ nhưng trong giới hạn bình thường — hệ thống không phát cảnh báo.",
+        severity="normal",
+        keySignals=[
+            KeySignal(label="HR 80-100 bpm (đi bộ)", direction="up", target="heart_rate"),
+            KeySignal(label="SpO2 97%", direction="flat", target="spo2"),
+            KeySignal(label="Activity: walking", target="activity_state"),
+        ],
+    ),
     # ── Fall ───────────────────────────────────────────────────────────
     ScenarioOption(
         id="fall_high_confidence",
@@ -222,6 +235,31 @@ BUILT_IN_SCENARIOS: list[ScenarioOption] = [
             KeySignal(label="Sleep phases: nhiều micro-arousal", target="sleep_phase", severity="warning"),
             KeySignal(label="Hiệu suất ~72%", target="sleep.efficiency", severity="warning"),
             KeySignal(label="wake_count ≥4", direction="up", target="sleep.wake_count", severity="warning"),
+        ],
+        followUp=[
+            ScenarioFollowUp(
+                kind="sleep_phase",
+                detail="sleep_start variant=light (BE auto-injects)",
+            ),
+        ],
+    ),
+    ScenarioOption(
+        id="elderly_normal",
+        name="Giấc ngủ người cao tuổi",
+        category="sleep",
+        description=(
+            "Pattern giấc ngủ người cao tuổi: nhiều light sleep hơn, deep sleep giảm (~11%), "
+            "REM ~19%. Bình thường theo tuổi tác."
+        ),
+        expectedOutcome=(
+            "Sleep score 70-80 (bình thường cho người già). HR 55-65 bpm. "
+            "Chu kỳ light → deep → REM → light lặp lại."
+        ),
+        severity="normal",
+        keySignals=[
+            KeySignal(label="Sleep phases: nhiều light, ít deep", target="sleep_phase"),
+            KeySignal(label="HR ↓ (55-65 bpm)", direction="down", target="heart_rate"),
+            KeySignal(label="Deep ~11% (age-normal)", target="sleep.efficiency"),
         ],
         followUp=[
             ScenarioFollowUp(

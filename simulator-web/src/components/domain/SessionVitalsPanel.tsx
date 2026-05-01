@@ -1,7 +1,6 @@
 import React, { memo, Suspense, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { EChartsOption } from "echarts";
-import { Activity } from "lucide-react";
 import type { SimulatedDevice } from "../../types/device";
 import type { VitalsSample } from "../../types/vitals";
 import { fetchLatestVitals } from "../../services/vitalsApi";
@@ -110,6 +109,11 @@ export function SessionVitalsPanel({ devices, deviceId, runtimeTickAt = null, on
                 {current.severity === "critical" ? "🚨 Nguy kịch" : current.severity === "warning" ? "⚠️ Cảnh báo" : "✅ Ổn định"}
               </Badge>
             ) : null}
+            {freshnessAt ? (
+              <small style={{ color: "var(--text-muted)", fontSize: "11px", whiteSpace: "nowrap" }}>
+                Cập nhật: {formatUtc7Time(freshnessAt)}
+              </small>
+            ) : null}
             <select
               value={deviceId}
               onChange={(event) => onDeviceChange(event.target.value)}
@@ -140,17 +144,6 @@ export function SessionVitalsPanel({ devices, deviceId, runtimeTickAt = null, on
         <p style={{ margin: 0, color: "var(--text-secondary)" }}>Không lấy được mẫu sinh hiệu. Kiểm tra runtime, backend hoặc phiên mô phỏng.</p>
       ) : (
         <div style={{ display: "grid", gap: "10px" }}>
-          <small style={{ color: "var(--text-muted)" }}>
-            Múi giờ hiển thị: UTC+7. Lần cập nhật gần nhất: {formatUtc7Time(freshnessAt)}.
-          </small>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <Activity size={13} style={{ color: "var(--text-secondary)" }} />
-            {current?.activityLabel ? (
-              <Badge severity={activitySeverity(current.activityLabel)}>{activityDisplayLabel(current.activityLabel)}</Badge>
-            ) : (
-              <Badge severity="info">Không rõ hoạt động</Badge>
-            )}
-          </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(120px, 1fr))", gap: "8px" }}>
             <MetricWidget title="HR" value={current ? `${Math.round(current.heartRate)} bpm` : "--"} severity={hrSeverity} />
             <MetricWidget title="SpO2" value={current ? `${Math.round(current.spo2)}%` : "--"} severity={spo2Severity} />
@@ -176,13 +169,17 @@ export function SessionVitalsPanel({ devices, deviceId, runtimeTickAt = null, on
   );
 }
 
+const METRIC_SEVERITY_COLOR: Record<MetricSeverity, string> = {
+  normal: "var(--severity-normal, #22c55e)",
+  warning: "var(--severity-warning, #f59e0b)",
+  critical: "var(--severity-critical, #ef4444)",
+};
+
 const MetricWidget = memo(function MetricWidget(props: { title: string; value: string; severity: MetricSeverity | null }) {
+  const borderColor = props.severity ? METRIC_SEVERITY_COLOR[props.severity] : "var(--border-default)";
   return (
-    <div style={{ border: "1px solid var(--border-default)", borderRadius: "var(--radius-md)", padding: "10px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
-        <small style={{ color: "var(--text-secondary)" }}>{props.title}</small>
-        {props.severity ? <Badge severity={props.severity}>{severityLabel(props.severity)}</Badge> : null}
-      </div>
+    <div style={{ border: "1px solid var(--border-default)", borderLeft: `3px solid ${borderColor}`, borderRadius: "var(--radius-md)", padding: "10px" }}>
+      <small style={{ color: "var(--text-secondary)" }}>{props.title}</small>
       <div style={{ marginTop: "6px", fontSize: "18px", fontWeight: 700, fontFamily: "var(--font-mono)" }}>{props.value}</div>
     </div>
   );
@@ -343,12 +340,6 @@ function buildMetricOption(metric: MetricKey, data: VitalsSample[]): EChartsOpti
   };
 }
 
-function severityLabel(value: MetricSeverity) {
-  if (value === "normal") return "Ổn định";
-  if (value === "warning") return "Rủi ro";
-  return "Nguy kịch";
-}
-
 function respiratoryRateSeverity(value: number): MetricSeverity {
   if (value < 8 || value > 30) return "critical";
   if (value < 12 || value > 24) return "warning";
@@ -369,25 +360,6 @@ function formatRespiratoryRate(value: number | null | undefined): string {
 
 function formatChartValue(value: number | null | undefined): string {
   return value != null ? Number(value).toFixed(1) : "—";
-}
-
-function activityDisplayLabel(label: string): string {
-  const map: Record<string, string> = {
-    falling: "🔴 Đang té ngã",
-    recovery: "🟡 Hồi phục",
-    walking: "🟢 Đang đi bộ",
-    running: "🟢 Đang chạy",
-    sleeping: "🔵 Đang ngủ",
-    resting: "🟢 Nghỉ ngơi",
-    unknown: "⚪ Không rõ",
-  };
-  return map[label] ?? label;
-}
-
-function activitySeverity(label: string): MetricSeverity {
-  if (label === "falling") return "critical";
-  if (label === "recovery") return "warning";
-  return "normal";
 }
 
 function severityToBadge(value: string): BadgeSeverity {

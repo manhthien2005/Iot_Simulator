@@ -59,7 +59,7 @@ export function ScenarioCard({ scenario, activeDeviceCount, onRun }: ScenarioCar
         description: `Kịch bản này được đánh dấu nguy cấp. Khi áp dụng, BE sẽ kích hoạt: ${
           scenario.followUp.map((f) => f.detail).join(", ") || "không có side-effect bổ sung"
         }.`,
-        confirmLabel: "Mở Phiên mô phỏng",
+        confirmLabel: "Mở Mô phỏng tín hiệu sinh tồn",
       });
       if (!ok) return;
     }

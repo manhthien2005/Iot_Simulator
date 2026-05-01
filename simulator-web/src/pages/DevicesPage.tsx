@@ -267,7 +267,7 @@ export function DevicesPage() {
       <Input
         value={search}
         onChange={(event) => setSearch(event.target.value)}
-        placeholder="Tìm theo tên, serial hoặc email..."
+        placeholder="Tìm theo tên hoặc email..."
       />
 
       {isLoading ? (

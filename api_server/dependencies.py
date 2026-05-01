@@ -39,7 +39,10 @@ try:
     )
     from Iot_Simulator.api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state
     from Iot_Simulator.api_server.schemas import (
+        AIPrediction,
+        AITopFeature,
         AlertEvent,
+        CountdownPolicy,
         CreateDeviceRequest,
         DataBindingConfig,
         DashboardSummary,
@@ -48,6 +51,7 @@ try:
         FallState,
         FallStateValue,
         MotionLatest,
+        MotionWindowRef,
         PipelineStage,
         PipelineStageStatusValue,
         RiskContribution,
@@ -78,6 +82,10 @@ try:
         VitalsHistoryBuffer,
     )
     from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
+    from Iot_Simulator.simulator_core.fall_ai_client import (
+        FallAIClient,
+        normalise_verdict as _normalise_fall_verdict,
+    )
     from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
     from Iot_Simulator.simulator_core.sleep_vitals_enricher import enrich_sleep_record
@@ -97,7 +105,10 @@ except ModuleNotFoundError:
     )
     from api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state  # noqa: F811
     from api_server.schemas import (
+        AIPrediction,
+        AITopFeature,
         AlertEvent,
+        CountdownPolicy,
         CreateDeviceRequest,
         DataBindingConfig,
         DashboardSummary,
@@ -106,6 +117,7 @@ except ModuleNotFoundError:
         FallState,
         FallStateValue,
         MotionLatest,
+        MotionWindowRef,
         PipelineStage,
         PipelineStageStatusValue,
         RiskContribution,
@@ -136,6 +148,11 @@ except ModuleNotFoundError:
         VitalsHistoryBuffer,
     )
     from simulator_core.dataset_registry import DatasetRegistry
+    from simulator_core.fall_ai_client import (  # noqa: F811
+        FALL_VARIANT_CONTEXT,
+        FallAIClient,
+        normalise_verdict as _normalise_fall_verdict,
+    )
     from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from simulator_core.sleep_ai_client import SleepAIClient
     from simulator_core.sleep_vitals_enricher import enrich_sleep_record
@@ -147,6 +164,142 @@ logger = logging.getLogger(__name__)
 _PRE_MODEL_TRIGGER_ENABLED: bool = os.environ.get(
     "PRE_MODEL_TRIGGER_ENABLED", ""
 ).lower() in ("1", "true", "yes")
+
+
+# ---------------------------------------------------------------------------
+# Fall variant policy table (Module FA — Fall Lab redesign)
+#
+# Maps each operator-injectable fall variant to a SOS countdown policy +
+# downstream alert behaviour.  The same table drives:
+#   - device.state on inject       (`device_state_on_inject`)
+#   - SOS countdown total seconds  (`countdown_sec`)
+#   - whether the countdown auto-clears without operator action (`auto_resolve`)
+#   - whether "Tôi ổn" cancels (`allows_cancel`)
+#   - whether to push an alert webhook to the HealthGuard backend on inject
+#     (`push_alert`); some variants are deliberately silent because the AI
+#     verdict is "no fall" — the operator wants to inspect the AI behaviour
+#     without raising a real alert.
+#   - default severity for the alert when ``push_alert=True`` and the AI
+#     verdict can't override (e.g. AI offline) (`default_severity`)
+#
+# The runtime can override `device_state_on_inject` and `push_alert` based
+# on the AI verdict (e.g. confirmed variant + AI says "normal" → still
+# enter countdown so operators can validate the False-Positive path; AI
+# says "critical" + variant=false_fall → escalate).  See
+# ``SimulatorRuntime._resolve_fall_policy``.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _FallVariantPolicy:
+    countdown_sec: int
+    auto_resolve: bool
+    allows_cancel: bool
+    device_state_on_inject: str   # one of DeviceStateValue
+    push_alert: bool
+    default_severity: str         # "normal" | "warning" | "critical"
+    #: Floor for the ``confidence`` field in the alert webhook metadata.
+    #: The HealthGuard backend gates SOS escalation on
+    #: ``confidence ≥ FALL_CONFIDENCE_THRESHOLD`` (default 0.7).  We send
+    #: ``max(ai_probability, simulated_confidence)`` so each variant tests
+    #: a deterministic BE branch:
+    #:   - false_fall / slip_recovery (0.10 / 0.20) → below threshold,
+    #:     stays as soft Alert ("chờ xác minh"), no SOS, no FCM takeover.
+    #:   - fall_brief (0.65)                         → still below 0.7,
+    #:     soft Alert path, but the simulator still runs its own 10 s
+    #:     auto-resolve countdown for FE demo purposes.
+    #:   - fall_from_bed / confirmed / fall_no_response (0.85 / 0.95 /
+    #:     0.99)                                     → above threshold,
+    #:     BE creates SOS event + calls ``send_fall_critical_alert`` so
+    #:     the mobile app receives the FCM takeover push.
+    simulated_confidence: float
+
+
+_FALL_VARIANT_POLICIES: dict[str, _FallVariantPolicy] = {
+    # Operator wants AI to label this as not-a-fall.  No countdown, no
+    # alert.  device.state stays at "streaming" so the FE doesn't render
+    # the SOS card.  AI verdict is the whole story.
+    "false_fall": _FallVariantPolicy(
+        countdown_sec=0,
+        auto_resolve=False,
+        allows_cancel=False,
+        device_state_on_inject="streaming",
+        push_alert=False,
+        default_severity="normal",
+        simulated_confidence=0.10,
+    ),
+    # Slip + immediate self-recovery.  True-negative case for the AI.
+    "slip_recovery": _FallVariantPolicy(
+        countdown_sec=0,
+        auto_resolve=False,
+        allows_cancel=False,
+        device_state_on_inject="streaming",
+        push_alert=False,
+        default_severity="normal",
+        simulated_confidence=0.20,
+    ),
+    # Brief fall — short countdown that auto-resolves so operators can see
+    # the "warning" path complete on its own.
+    "fall_brief": _FallVariantPolicy(
+        countdown_sec=10,
+        auto_resolve=True,
+        allows_cancel=True,
+        device_state_on_inject="fall_countdown",
+        push_alert=True,
+        default_severity="warning",
+        simulated_confidence=0.65,
+    ),
+    # Edge case: low-impact fall while sleeping.  Still requires escalation
+    # but the AI must catch it from subtle signals.
+    "fall_from_bed": _FallVariantPolicy(
+        countdown_sec=30,
+        auto_resolve=False,
+        allows_cancel=True,
+        device_state_on_inject="fall_countdown",
+        push_alert=True,
+        default_severity="critical",
+        simulated_confidence=0.85,
+    ),
+    # Standard confirmed fall — full countdown with cancel.
+    "confirmed": _FallVariantPolicy(
+        countdown_sec=30,
+        auto_resolve=False,
+        allows_cancel=True,
+        device_state_on_inject="fall_countdown",
+        push_alert=True,
+        default_severity="critical",
+        simulated_confidence=0.95,
+    ),
+    # Worst case: subject does not respond.  No cancel allowed.  Always
+    # alert regardless of AI verdict.
+    "fall_no_response": _FallVariantPolicy(
+        countdown_sec=30,
+        auto_resolve=False,
+        allows_cancel=False,
+        device_state_on_inject="fall_countdown",
+        push_alert=True,
+        default_severity="critical",
+        simulated_confidence=0.99,
+    ),
+}
+
+#: Default policy for unknown / legacy variants — keeps backwards
+#: compatibility with any caller that passes ``"fall_1"``, ``"fall_generic"``,
+#: etc.  Identical to ``confirmed``.
+_FALL_VARIANT_DEFAULT_POLICY: _FallVariantPolicy = _FALL_VARIANT_POLICIES["confirmed"]
+
+
+# Mapping from FE-injected variants → backend persona-engine variant
+# strings.  The FE's "fall_high_confidence" scenario emits ``confirmed``;
+# the persona engine + signal generator key off ``fall_1`` for the actual
+# vitals/motion deltas.  This indirection keeps the FE labels operator-
+# friendly while preserving dataset compatibility.
+_FALL_VARIANT_TO_PERSONA: dict[str, str] = {
+    "false_fall": "fall_brief",          # use brief-fall vitals (mild) but no countdown
+    "slip_recovery": "fall_brief",       # similar non-impact profile
+    "fall_brief": "fall_brief",
+    "fall_from_bed": "fall_no_response", # sleeping persona + bradycardia profile
+    "confirmed": "fall_1",
+    "fall_no_response": "fall_no_response",
+}
 
 # _utc_now_iso, _coerce_date, _safe_float, _normalize_gender, _is_sleeping_state
 # imported from api_server.utils (MEDIUM #7 dedup)
@@ -467,6 +620,27 @@ class SimulatorRuntime:
                     self._health_state.model_api_probe.checked_at = _utc_now_iso()
         except Exception:
             logger.warning("Sleep AI availability check failed", exc_info=True)
+
+        # ── Fall AI client (Module FA — Fall Lab redesign) ──────────────
+        # Targets the same model-api host as SleepAIClient but a different
+        # endpoint (``/api/v1/fall/predict``).  Uses 127.0.0.1 instead of
+        # ``localhost`` to avoid the ~2s IPv6 resolution penalty on Windows
+        # (same fix as ``HEALTH_BACKEND_URL``).
+        self._fall_ai_client = FallAIClient(base_url="http://127.0.0.1:8001")
+        # Per-device caches surfaced via ``/sessions/{id}/fall-state``.
+        self._fall_predictions: dict[str, AIPrediction] = {}
+        self._fall_motion_refs: dict[str, MotionWindowRef] = {}
+        self._fall_countdown_policies: dict[str, CountdownPolicy] = {}
+        try:
+            if self._fall_ai_client.check_availability():
+                logger.info("Fall AI model available at %s", self._fall_ai_client.base_url)
+            else:
+                logger.warning(
+                    "Fall AI model not available at %s — operator UI will surface 'AI offline' chips",
+                    self._fall_ai_client.base_url,
+                )
+        except Exception:
+            logger.warning("Fall AI availability check failed", exc_info=True)
         self.devices: dict[str, DeviceRecord] = {}
         self.device_scenarios: dict[str, str] = {}
         self.sessions: dict[str, SessionRecord] = {}
@@ -1179,9 +1353,11 @@ class SimulatorRuntime:
             "sleep_apnea_severe",
             "insomnia_pattern",
             "elderly_normal",
+            "normal_walking",
         }
         _WAKING_SCENARIOS = {
             "normal_rest",
+            "normal_walking",
             "tachycardia_warning",
             "hypoxia_critical",
             "hypertension_moderate",
@@ -1229,6 +1405,14 @@ class SimulatorRuntime:
                             _sr.simulator.inject_event(device_id, "sleep_end", None)
                             self._sleep_phase_tracker.pop(device_id, None)
                         break
+            if scenario_id == "normal_walking":
+                for _sr in self.sessions.values():
+                    if _sr.status != "running" or device_id not in _sr.device_ids:
+                        continue
+                    for _device in _sr.simulator.devices:
+                        if _device.device_id == device_id:
+                            _device.engine.transition_to("walking")
+                            break
             if self.devices[device_id].state not in {"offline"}:
                 self.devices[device_id].state = self._scenario_state_hint(scenario_id)
             for record in self.sessions.values():
@@ -1287,50 +1471,312 @@ class SimulatorRuntime:
                     },
                 )
 
+    # ------------------------------------------------------------------
+    # Fall variant policy resolution + AI verdict (Module FA)
+    # ------------------------------------------------------------------
+
+    def _has_recent_fall_event_locked(
+        self, device_id: str, *, seconds: float = 5.0
+    ) -> bool:
+        """Return True if a ``fall_detected`` event fired for this device recently.
+
+        Used by the tick loop to dedupe its "fall via dataset annotation"
+        recording against the canonical ``inject_event`` recording. The
+        check walks ``event_history`` from newest to oldest and stops as
+        soon as it finds an event older than ``seconds`` for the target
+        device — bounded latency under the operating maxlen=2000 deque.
+        """
+        for event in reversed(self.event_history):
+            if event.device_id != device_id:
+                continue
+            if event.event_type != "fall_detected":
+                continue
+            if self._iso_age_seconds(event.timestamp) <= seconds:
+                return True
+            return False
+        return False
+
+    @staticmethod
+    def _resolve_fall_variant_policy(
+        fe_variant: str | None,
+    ) -> tuple[_FallVariantPolicy, str]:
+        """Return ``(policy, persona_variant)`` for an operator-supplied variant.
+
+        Falls back to ``confirmed`` policy + ``fall_1`` persona for any
+        unknown variant string so legacy callers keep working.  The
+        persona variant is what the PersonaEngine + signal generator key
+        off for vitals/motion deltas; the FE-facing variant is what
+        appears in events + recent_fall_events.
+        """
+        key = (fe_variant or "confirmed").strip().lower()
+        policy = _FALL_VARIANT_POLICIES.get(key, _FALL_VARIANT_DEFAULT_POLICY)
+        persona = _FALL_VARIANT_TO_PERSONA.get(key, "fall_1")
+        return policy, persona
+
+    def _call_fall_ai_locked(
+        self,
+        motion: dict[str, Any] | None,
+        device_id: str,
+        fe_variant: str,
+    ) -> AIPrediction:
+        """Run the fall AI model on the most recent motion window.
+
+        Returns an ``AIPrediction`` even on failure so the FE always has
+        a deterministic shape to render: ``modelStatus`` distinguishes
+        ``ok`` from ``offline`` from ``no_window``.  No exception escapes.
+        """
+        predicted_at = _utc_now_iso()
+        sample_count = 0
+        if isinstance(motion, dict):
+            # NOTE: motion arrays may be numpy ndarrays so `arr or []`
+            # raises "truth value ambiguous".  Coerce via explicit None
+            # checks + len() — same pattern as fall_ai_client._coerce.
+            ax = motion.get("accel_x")
+            ay = motion.get("accel_y")
+            az = motion.get("accel_z")
+            sample_count = min(
+                len(ax) if ax is not None else 0,
+                len(ay) if ay is not None else 0,
+                len(az) if az is not None else 0,
+            )
+        if sample_count < 50:
+            return AIPrediction(
+                label="normal",
+                probability=0.0,
+                confidence=0.0,
+                riskBand="normal",
+                requiresAttention=False,
+                highPriorityAlert=False,
+                explanationSummary=(
+                    f"Không đủ mẫu chuyển động để đánh giá (có {sample_count}, cần 50). "
+                    "Hệ thống đang dùng pre-trigger fallback."
+                ),
+                topFeatures=[],
+                predictedAt=predicted_at,
+                modelStatus="no_window",
+            )
+        try:
+            fall_context = FALL_VARIANT_CONTEXT.get(fe_variant, {"inject_environment": True})
+            raw = self._fall_ai_client.predict(motion, device_id, fall_context=fall_context)
+        except Exception:  # pragma: no cover — defensive
+            logger.warning("Fall AI predict raised unexpectedly", exc_info=True)
+            raw = None
+        if raw is None:
+            return AIPrediction(
+                label="normal",
+                probability=0.0,
+                confidence=0.0,
+                riskBand="normal",
+                requiresAttention=False,
+                highPriorityAlert=False,
+                explanationSummary=(
+                    "AI model offline — đang dùng ngưỡng pre-trigger để quyết định cảnh báo."
+                ),
+                topFeatures=[],
+                predictedAt=predicted_at,
+                modelStatus="offline",
+            )
+        try:
+            normalised = _normalise_fall_verdict(raw)
+            return AIPrediction(
+                label=normalised["label"],  # type: ignore[arg-type]
+                probability=normalised["probability"],
+                confidence=normalised["confidence"],
+                riskBand=normalised["riskBand"],  # type: ignore[arg-type]
+                requiresAttention=normalised["requiresAttention"],
+                highPriorityAlert=normalised["highPriorityAlert"],
+                explanationSummary=normalised["explanationSummary"],
+                topFeatures=[
+                    AITopFeature(
+                        featureName=feat["featureName"],
+                        contribution=feat["contribution"],
+                        vietnameseExplanation=feat["vietnameseExplanation"],
+                        severity=feat["severity"],  # type: ignore[arg-type]
+                    )
+                    for feat in normalised["topFeatures"]
+                ],
+                predictedAt=predicted_at,
+                modelStatus="ok",
+            )
+        except Exception:  # pragma: no cover — schema mismatch fallback
+            logger.warning(
+                "Fall AI verdict normalisation failed for variant=%s", fe_variant, exc_info=True
+            )
+            return AIPrediction(
+                label="normal",
+                probability=0.0,
+                confidence=0.0,
+                riskBand="normal",
+                requiresAttention=False,
+                highPriorityAlert=False,
+                explanationSummary="AI trả về dữ liệu không đọc được — đang dùng fallback.",
+                topFeatures=[],
+                predictedAt=predicted_at,
+                modelStatus="offline",
+            )
+
+    def _build_motion_window_ref(
+        self,
+        payload: dict[str, Any] | None,
+        fe_variant: str,
+    ) -> MotionWindowRef | None:
+        """Capture a ref to the motion window the AI was called on."""
+        if not payload:
+            return None
+        motion = payload.get("motion") or {}
+        # NOTE: numpy arrays — see _call_fall_ai_locked for context.
+        ax = motion.get("accel_x")
+        ay = motion.get("accel_y")
+        az = motion.get("accel_z")
+        sample_count = min(
+            len(ax) if ax is not None else 0,
+            len(ay) if ay is not None else 0,
+            len(az) if az is not None else 0,
+        )
+        if sample_count == 0:
+            return None
+        return MotionWindowRef(
+            emittedAt=str(payload.get("emitted_at") or _utc_now_iso()),
+            sampleCount=sample_count,
+            sampleRate=_safe_float(motion.get("sample_rate"), None),
+            fallVariant=fe_variant or None,
+        )
+
+    def _override_severity_from_verdict(
+        self,
+        policy: _FallVariantPolicy,
+        verdict: AIPrediction,
+    ) -> str:
+        """Decide alert severity from policy default + AI verdict band.
+
+        AI "critical" always escalates; AI "normal" downgrades a
+        ``warning`` policy default to "warning" still (don't suppress
+        alerts entirely without operator decision); ``critical`` policy
+        defaults stay critical regardless of AI band so the worst-case
+        path (``fall_no_response``) is preserved.
+        """
+        if policy.default_severity == "critical":
+            return "critical"
+        if verdict.riskBand == "critical":
+            return "critical"
+        if verdict.riskBand == "warning":
+            return "warning"
+        return policy.default_severity
+
     def inject_event(self, device_id: str, event_type: str, variant: str | None) -> None:
         effects = SessionSideEffects()
         with self._lock:
             for record in self.sessions.values():
-                if device_id in record.device_ids:
-                    # Module C: `sos_cancel` is a runtime-only event — the
-                    # PersonaEngine has no concept of it, so we handle the
-                    # state transition here without forwarding to the engine.
-                    if event_type != "sos_cancel":
-                        record.simulator.inject_event(device_id, event_type, variant)
-                    if event_type == "fall_detected":
-                        record.alert_received = True
-                        if device_id in self.devices:
-                            self.devices[device_id].state = "fall_countdown"
-                    if event_type == "sos_cancel" and device_id in self.devices:
-                        # Operator confirmed they're OK — clear the
-                        # countdown FSM back to a streaming state.  This is
-                        # the BE-truthful equivalent of the old FE-only
-                        # "Hủy SOS" button which only cleared a setInterval.
-                        if self.devices[device_id].state in {
-                            "fall_countdown",
-                            "sos_active",
-                        }:
-                            self.devices[device_id].state = "streaming"
-                        # Also transition the persona engine out of "fall"
-                        # so the tick loop stops re-emitting `fall_detected`
-                        # alerts.  Without this the engine would self-clear
-                        # after FALL_DURATION_TICKS, but in the meantime
-                        # every tick records a duplicate critical event.
-                        for sim_device in record.simulator.devices:
-                            if sim_device.device_id == device_id:
-                                if sim_device.engine.state.activity_state == "fall":
-                                    sim_device.engine.transition_to("recovery")
-                                break
-                    if event_type == "device_offline" and device_id in self.devices:
-                        self.devices[device_id].state = "offline"
-                        self.devices[device_id].is_online = False
-                    if event_type == "device_online" and device_id in self.devices:
+                if device_id not in record.device_ids:
+                    continue
+
+                # ---- Module FA — fall_detected ordering ------------------------
+                # The tick loop has its own "if activity_state==fall: record"
+                # branch (it's the canonical recorder for replay-mode falls
+                # where activity arrives from the dataset).  To avoid
+                # duplicating the event for operator-injected falls we have
+                # to record the canonical event *before* ticking, so the
+                # tick loop's `_has_recent_fall_event_locked` dedupe sees
+                # it and skips.  AI verdict metadata is then merged into
+                # that same event via in-place mutation after the tick +
+                # AI call complete.
+                #
+                # For non-fall events the original pre-tick inject + post-
+                # tick record order is preserved.
+                policy: _FallVariantPolicy | None = None
+                persona_variant: str | None = None
+                canonical_fall_event: EventRecord | None = None
+
+                if event_type == "fall_detected":
+                    policy, persona_variant = self._resolve_fall_variant_policy(variant)
+                    record.simulator.inject_event(device_id, event_type, persona_variant)
+                    record.alert_received = True
+                    # Pre-record with provisional severity (policy default).
+                    # We mutate severity + metadata after AI verdict below.
+                    self._record_event(
+                        device_id=device_id,
+                        event_type="fall_detected",
+                        severity=policy.default_severity,
+                        message="Injected event fall_detected",
+                        metadata={
+                            "variant": variant or "",
+                            "persona_variant": persona_variant or "",
+                            "source": "inject_event",
+                        },
+                    )
+                    canonical_fall_event = self.event_history[-1]
+                elif event_type == "sos_cancel":
+                    # Module C: runtime-only event — PersonaEngine has no
+                    # concept of it, so we handle the FSM transition here.
+                    if device_id in self.devices and self.devices[device_id].state in {
+                        "fall_countdown",
+                        "sos_active",
+                    }:
                         self.devices[device_id].state = "streaming"
-                        self.devices[device_id].is_online = True
+                    for sim_device in record.simulator.devices:
+                        if sim_device.device_id == device_id:
+                            if sim_device.engine.state.activity_state == "fall":
+                                sim_device.engine.transition_to("recovery")
+                            break
+                    # Drop any stale AI verdict + countdown policy now that
+                    # the operator dismissed the SOS — keeps the FE clean.
+                    self._fall_predictions.pop(device_id, None)
+                    self._fall_motion_refs.pop(device_id, None)
+                    self._fall_countdown_policies.pop(device_id, None)
+                else:
+                    record.simulator.inject_event(device_id, event_type, variant)
+
+                if event_type == "device_offline" and device_id in self.devices:
+                    self.devices[device_id].state = "offline"
+                    self.devices[device_id].is_online = False
+                if event_type == "device_online" and device_id in self.devices:
+                    self.devices[device_id].state = "streaming"
+                    self.devices[device_id].is_online = True
+
+                # ---- Tick to generate motion (and vitals) for this event ----
+                if record.status == "running":
+                    effects.extend(self._tick_session_locked(record, force=True))
+
+                # ---- AI verdict + variant policy application (fall only) ----
+                ai_verdict: AIPrediction | None = None
+                motion_ref: MotionWindowRef | None = None
+                severity = "warning"
+                if event_type == "fall_detected" and policy is not None:
+                    payload = self._latest_motion_payload_locked(record, device_id)
+                    motion = (payload or {}).get("motion") or {}
+                    ai_verdict = self._call_fall_ai_locked(
+                        motion, device_id, variant or ""
+                    )
+                    motion_ref = self._build_motion_window_ref(payload, variant or "")
+                    self._fall_predictions[device_id] = ai_verdict
+                    if motion_ref is not None:
+                        self._fall_motion_refs[device_id] = motion_ref
+                    self._fall_countdown_policies[device_id] = CountdownPolicy(
+                        totalSec=int(policy.countdown_sec),
+                        autoResolve=bool(policy.auto_resolve),
+                        allowsCancel=bool(policy.allows_cancel),
+                    )
+                    if device_id in self.devices:
+                        self.devices[device_id].state = policy.device_state_on_inject  # type: ignore[assignment]
+                    severity = self._override_severity_from_verdict(policy, ai_verdict)
+                    # Mutate the canonical event we pre-recorded with the
+                    # final severity + AI metadata so the FE / Recent Events
+                    # feed shows a single coherent record.
+                    if canonical_fall_event is not None:
+                        canonical_fall_event.severity = severity
+                        canonical_fall_event.metadata["ai_label"] = ai_verdict.label
+                        canonical_fall_event.metadata["ai_probability"] = (
+                            f"{ai_verdict.probability:.4f}"
+                        )
+                        canonical_fall_event.metadata["ai_band"] = ai_verdict.riskBand
+                        canonical_fall_event.metadata["ai_status"] = (
+                            ai_verdict.modelStatus
+                        )
+
+                # ---- Non-fall event recording (single source of truth) ----
+                if event_type != "fall_detected":
                     severity = "warning"
-                    if event_type == "fall_detected":
-                        severity = "critical"
-                    elif event_type == "sos_cancel":
+                    if event_type == "sos_cancel":
                         severity = "normal"
                     elif event_type == "device_offline":
                         severity = "offline"
@@ -1347,22 +1793,55 @@ class SimulatorRuntime:
                         ),
                         metadata={"variant": variant or ""},
                     )
-                    if event_type == "fall_detected":
+
+                # ---- Backend alert webhook (conditional on policy + AI) ----
+                if event_type == "fall_detected" and policy is not None:
+                    should_push = policy.push_alert
+                    if ai_verdict is not None and ai_verdict.highPriorityAlert:
+                        # AI escalation overrides a non-pushing policy.
+                        should_push = True
+                    if should_push:
+                        # Confidence bridge (Module FA-2 fix): the BE's
+                        # `_pick_float(metadata, "confidence")` gate keys
+                        # off this single field.  We send
+                        # ``max(ai_probability, simulated_confidence)``
+                        # so:
+                        #   - The AI verdict is honoured when it's high
+                        #     enough to clear the BE threshold (0.7),
+                        #   - Each variant has a deterministic floor so
+                        #     test scenarios reach the right BE branch
+                        #     (soft-alert / SOS / SOS-no-cancel)
+                        #     regardless of the model's mood that day.
+                        ai_prob = (
+                            float(ai_verdict.probability) if ai_verdict else 0.0
+                        )
+                        confidence_value = max(
+                            ai_prob, float(policy.simulated_confidence)
+                        )
                         effects.pending_alerts.append(
                             PendingAlertCall(
                                 sim_device_id=device_id,
                                 event_type="fall_detected",
-                                severity="critical",
+                                severity=severity,
                                 metadata={
                                     "variant": variant or "",
+                                    "persona_variant": persona_variant or "",
                                     "source": "inject_event",
                                     "timestamp": _utc_now_iso(),
+                                    "ai_label": ai_verdict.label if ai_verdict else "unknown",
+                                    "ai_probability": (
+                                        f"{ai_verdict.probability:.4f}" if ai_verdict else "0.0"
+                                    ),
+                                    "ai_band": ai_verdict.riskBand if ai_verdict else "normal",
+                                    # The canonical field the BE reads.
+                                    "confidence": f"{confidence_value:.4f}",
+                                    "simulated_confidence": (
+                                        f"{policy.simulated_confidence:.4f}"
+                                    ),
                                 },
                             )
                         )
-                    if record.status == "running":
-                        effects.extend(self._tick_session_locked(record, force=True))
-                    break
+                break
             else:
                 raise KeyError(f"Device not found in active sessions: {device_id}")
         self._run_session_side_effects(effects)
@@ -1745,6 +2224,13 @@ class SimulatorRuntime:
                 None,
             )
 
+            # Module FA: countdown total is now variant-aware.  Falls back
+            # to the legacy 30s constant when no policy was cached (e.g.
+            # legacy event injected before the runtime started caching).
+            cached_policy = self._fall_countdown_policies.get(device_id)
+            countdown_total = (
+                cached_policy.totalSec if cached_policy else int(self._SOS_COUNTDOWN_SECONDS)
+            )
             countdown_remaining = 0
             countdown_started_at: str | None = None
             sos_active = False
@@ -1760,7 +2246,7 @@ class SimulatorRuntime:
                 if not cancelled_after_fall:
                     elapsed = self._iso_age_seconds(last_fall_event.timestamp)
                     countdown_remaining = max(
-                        0, int(round(self._SOS_COUNTDOWN_SECONDS - elapsed))
+                        0, int(round(countdown_total - elapsed))
                     )
                     sos_active = device.state == "sos_active" or countdown_remaining > 0
 
@@ -1781,7 +2267,7 @@ class SimulatorRuntime:
                 lastFallEventAt=last_fall_event.timestamp if last_fall_event else None,
                 countdownStartedAt=countdown_started_at,
                 countdownRemainingSec=countdown_remaining,
-                countdownTotalSec=int(self._SOS_COUNTDOWN_SECONDS),
+                countdownTotalSec=int(countdown_total),
                 sosActive=sos_active,
                 recentFallEvents=[
                     FallEventEntry(
@@ -1793,6 +2279,9 @@ class SimulatorRuntime:
                     )
                     for event in recent_fall_events
                 ],
+                aiPrediction=self._fall_predictions.get(device_id),
+                motionWindowRef=self._fall_motion_refs.get(device_id),
+                countdownPolicy=cached_policy,
             )
 
     @staticmethod
@@ -2040,6 +2529,55 @@ class SimulatorRuntime:
             return "DELAYED"
         return "PENDING"
 
+    def _auto_resolve_fall_countdowns_locked(self, record: SessionRecord) -> None:
+        """Module FA: clear ``fall_countdown`` devices whose policy auto-resolves.
+
+        ``fall_brief`` is the canonical case: a 10s countdown that ends
+        without operator intervention.  We synthesise a ``sos_cancel``
+        event so the recent-events feed + FE banner show the resolution
+        consistently with the operator-driven cancel path.
+        """
+        for device_id in list(record.device_ids):
+            policy = self._fall_countdown_policies.get(device_id)
+            if policy is None or not policy.autoResolve:
+                continue
+            device = self.devices.get(device_id)
+            if device is None or device.state not in {"fall_countdown", "sos_active"}:
+                continue
+            # Find the most recent fall_detected to compute elapsed time.
+            last_fall_event = next(
+                (
+                    event
+                    for event in reversed(self.event_history)
+                    if event.device_id == device_id and event.event_type == "fall_detected"
+                ),
+                None,
+            )
+            if last_fall_event is None:
+                continue
+            elapsed = self._iso_age_seconds(last_fall_event.timestamp)
+            if elapsed < float(policy.totalSec):
+                continue
+            # Auto-resolve: revert FSM + persona + emit a synthetic cancel.
+            device.state = "streaming"
+            for sim_device in record.simulator.devices:
+                if sim_device.device_id == device_id:
+                    if sim_device.engine.state.activity_state == "fall":
+                        sim_device.engine.transition_to("recovery")
+                    break
+            self._record_event(
+                device_id=device_id,
+                event_type="sos_cancel",
+                severity="normal",
+                message="Auto-resolved short fall (variant policy)",
+                metadata={"variant": "auto_resolve", "source": "tick_auto_resolve"},
+            )
+            # Drop AI verdict + policy so the FE doesn't keep rendering the
+            # countdown card after auto-resolve.
+            self._fall_predictions.pop(device_id, None)
+            self._fall_motion_refs.pop(device_id, None)
+            self._fall_countdown_policies.pop(device_id, None)
+
     def _tick_session_locked(self, record: SessionRecord, force: bool) -> SessionSideEffects:
         effects = SessionSideEffects()
         if record.status != "running":
@@ -2048,6 +2586,9 @@ class SimulatorRuntime:
         now = monotonic()
         if not force and now - record.last_tick_monotonic < target_interval:
             return effects
+        # Module FA: opportunistic auto-resolve for short-countdown variants.
+        # Runs every tick so the FE's polling sees the resolution promptly.
+        self._auto_resolve_fall_countdowns_locked(record)
         outputs = record.simulator.tick()
         buffered_messages: list[dict[str, Any]] = []
         for payload in outputs:
@@ -2106,24 +2647,47 @@ class SimulatorRuntime:
             state = payload.get("state") or {}
             emitted_at = str(payload.get("emitted_at") or _utc_now_iso())
             if state.get("activity_state") == "fall":
-                self._record_event(
-                    device_id=str(device_id),
-                    event_type="fall_detected",
-                    severity="critical",
-                    message="Fall-like motion detected during session tick",
-                )
-                effects.pending_alerts.append(
-                    PendingAlertCall(
-                        sim_device_id=str(device_id),
+                # Module FA fix: dedupe with `inject_event` recording.
+                # The tick loop is still the canonical trigger for
+                # replay-mode falls (where activity_state arrives from a
+                # dataset annotation, not an operator click).  But for
+                # operator-injected falls, ``inject_event`` already
+                # recorded the canonical event with AI verdict metadata
+                # attached — recording here too produced duplicate
+                # "Recent events" entries (QA-reported bug).
+                #
+                # We dedupe by checking whether a fall_detected was
+                # recorded for this device in the past 60 seconds.  The
+                # window must be longer than the persona engine's
+                # ``FALL_DURATION_TICKS`` window (10 ticks × default 5 s
+                # tick = 50 s) so the tick loop doesn't fire one event
+                # per tick while the same fall episode is still
+                # propagating through the persona state machine.  Using
+                # 5 s caused exactly the duplicate-event QA bug because
+                # the tick interval matched the dedupe window, so each
+                # tick observed a 5.0-s-old prior event and treated it
+                # as outside the dedupe window (boundary fail).
+                if not self._has_recent_fall_event_locked(
+                    device_id=str(device_id), seconds=60.0
+                ):
+                    self._record_event(
+                        device_id=str(device_id),
                         event_type="fall_detected",
                         severity="critical",
-                        metadata={
-                            "variant": str(state.get("fall_variant") or ""),
-                            "source": "tick",
-                            "timestamp": emitted_at,
-                        },
+                        message="Fall-like motion detected during session tick",
                     )
-                )
+                    effects.pending_alerts.append(
+                        PendingAlertCall(
+                            sim_device_id=str(device_id),
+                            event_type="fall_detected",
+                            severity="critical",
+                            metadata={
+                                "variant": str(state.get("fall_variant") or ""),
+                                "source": "tick",
+                                "timestamp": emitted_at,
+                            },
+                        )
+                    )
                 continue
 
             vitals_payload = payload.get("vitals") or {}
@@ -2240,7 +2804,7 @@ class SimulatorRuntime:
             return "warning"
         if scenario_id == "fall_high_confidence":
             return "fall_countdown"
-        if scenario_id in {"normal_rest", "good_sleep_night", "elderly_normal"}:
+        if scenario_id in {"normal_rest", "normal_walking", "good_sleep_night", "elderly_normal"}:
             return "streaming"
         return "streaming"
 
@@ -2294,6 +2858,10 @@ class SimulatorRuntime:
             "high_risk_cardiac": (128.0, 12.0, 91.0, 1.8, 38.0, 0.30, 165.0, 104.0, 12.0, 8.0, 24.0),
             # Pre-HTN + mild tachycardia. Composite medium-risk.
             "medium_risk_general": (94.0, 7.0, 94.5, 1.0, 37.3, 0.22, 142.0, 90.0, 8.5, 5.5, 18.0),
+            # WHO/AHA: moderate walking adult. HR 80-100, BP slightly elevated, SpO2 normal.
+            "normal_walking": (88.0, 5.0, 97.0, 0.5, 37.1, 0.15, 126.0, 82.0, 6.0, 4.0, 18.0),
+            # AASM elderly normal: less deep sleep, HR 55-65, mild BP elevation (age-adjusted).
+            "elderly_normal": (60.0, 4.0, 96.0, 0.8, 36.4, 0.15, 118.0, 75.0, 5.0, 3.5, 14.0),
             # NOTE: fall_* scenarios intentionally absent. Fall vitals = surge (Phase 3).
         }
         (hr_base, hr_amp, spo2_base, spo2_amp, temp_base, temp_amp,

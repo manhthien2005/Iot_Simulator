@@ -94,11 +94,17 @@ export function ScenariosPage() {
     activeCategory === "all" ? ["vitals", "fall", "sleep", "risk"] : [activeCategory];
 
   const runScenario = (scenarioId: string) => {
-    const query = new URLSearchParams({ scenario: scenarioId });
+    const scenario = scenarios.find((item) => item.id === scenarioId);
+    const query = new URLSearchParams();
     if (selectedDeviceId) {
       query.set("device", selectedDeviceId);
     }
-    navigate(`/session?${query.toString()}`);
+    if (scenario?.category === "fall") {
+      navigate(`/fall-lab?${query.toString()}`);
+    } else {
+      query.set("scenario", scenarioId);
+      navigate(`/session?${query.toString()}`);
+    }
   };
 
   return (
@@ -108,7 +114,7 @@ export function ScenariosPage() {
           <h1 className="page-title">Kịch bản</h1>
           <p className="page-subtitle">
             Mỗi card hiển thị key signals, mức nghiêm trọng và side-effect mà BE sẽ tự kích hoạt khi áp dụng — không
-            cần đoán. Chạy trực tiếp trong Phiên mô phỏng.
+            cần đoán. Chạy trực tiếp trong Mô phỏng tín hiệu sinh tồn.
           </p>
         </div>
         <label style={{ display: "grid", gap: "6px", minWidth: "260px" }}>

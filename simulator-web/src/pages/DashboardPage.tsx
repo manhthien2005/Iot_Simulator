@@ -39,7 +39,7 @@ export function DashboardPage() {
       <div>
         <h1 className="page-title">Bảng điều khiển</h1>
         <p className="page-subtitle">
-          Tổng quan sức khỏe hệ thống mô phỏng và dòng sự kiện. Phần sinh hiệu trực tiếp được hiển thị trong trang Phiên mô phỏng.
+          Tổng quan sức khỏe hệ thống mô phỏng và dòng sự kiện. Phần sinh hiệu trực tiếp được hiển thị trong trang Mô phỏng tín hiệu sinh tồn.
         </p>
       </div>
 
@@ -71,7 +71,7 @@ export function DashboardPage() {
 
       <Card>
         <p style={{ margin: 0, color: "var(--text-secondary)" }}>
-          Để theo dõi HR, SpO2, nhiệt độ và huyết áp theo thời gian thực, hãy vào trang <strong>Phiên mô phỏng</strong>.
+          Để theo dõi HR, SpO2, nhiệt độ và huyết áp theo thời gian thực, hãy vào trang <strong>Mô phỏng tín hiệu sinh tồn</strong>.
         </p>
       </Card>
 

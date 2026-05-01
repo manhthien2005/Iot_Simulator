@@ -53,7 +53,7 @@ function VerificationTableInner({ rows, onRefresh, deviceNameMap = {} }: Verific
         <EmptyState
           icon={ListChecks}
           title="Chưa có phiên để xác minh"
-          description="Mở Phiên mô phỏng và bắt đầu một phiên để bắt đầu thu thập bằng chứng."
+          description="Mở Mô phỏng tín hiệu sinh tồn và bắt đầu một phiên để bắt đầu thu thập bằng chứng."
         />
       </Card>
     );

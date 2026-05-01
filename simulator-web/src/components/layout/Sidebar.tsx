@@ -1,4 +1,4 @@
-import { BarChart3, Clapperboard, LayoutDashboard, Play, Settings, ShieldCheck, Watch, Wrench, ChevronLeft, ChevronRight, Menu } from "lucide-react";
+import { AlertTriangle, BarChart3, Clapperboard, LayoutDashboard, Play, Settings, ShieldCheck, Watch, Wrench, ChevronLeft, ChevronRight, Menu } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import type { QueryKey } from "@tanstack/react-query";
@@ -58,8 +58,18 @@ const links: NavLinkSpec[] = [
   },
   {
     to: "/session",
-    label: "Phiên mô phỏng",
+    label: "Mô phỏng tín hiệu sinh tồn",
     icon: Play,
+    prefetch: { queryKey: ["sessions"], queryFn: fetchSessions },
+  },
+  {
+    // Module FA — dedicated full-page Fall Lab for AI verdict + variant policy
+    // testing.  Reuses ["sessions"] for prefetch since the page is empty
+    // until an active session exists; the cooldown in `useHoverPrefetch`
+    // dedupes against the /session entry above.
+    to: "/fall-lab",
+    label: "Phòng thí nghiệm té ngã",
+    icon: AlertTriangle,
     prefetch: { queryKey: ["sessions"], queryFn: fetchSessions },
   },
   { to: "/analytics", label: "Phân tích", icon: BarChart3 },

@@ -1,4 +1,5 @@
-import { Copy, Play, Square, Trash2, UserPlus } from "lucide-react";
+import { Play, Square, Trash2, UserPlus } from "lucide-react";
+import { Tooltip } from "../ui/Tooltip";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { DbDevice } from "../../types/device";
 import { Badge } from "../ui/Badge";
@@ -110,7 +111,7 @@ export const DbDeviceTable = memo(function DbDeviceTable({
   return (
     <div className="surface-card" style={{ overflow: "hidden" }}>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "900px" }}>
           <thead>
             <tr style={{ color: "var(--text-secondary)", fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
               <th style={{ textAlign: "left", padding: "10px 12px", width: "44px" }}>
@@ -124,11 +125,10 @@ export const DbDeviceTable = memo(function DbDeviceTable({
                   style={{ accentColor: "var(--accent-cyan)", width: "16px", height: "16px", cursor: "pointer" }}
                 />
               </th>
-              <th style={{ textAlign: "left", padding: "10px 12px", width: "96px" }}>ID</th>
-              <th style={{ textAlign: "left", padding: "10px 12px" }}>Trạng thái</th>
+              <th style={{ textAlign: "left", padding: "10px 12px", width: "56px" }}>ID</th>
+              <th style={{ textAlign: "left", padding: "10px 12px", width: "100px" }}>Mobile</th>
               <th style={{ textAlign: "left", padding: "10px 12px" }}>Tên / Loại</th>
               <th style={{ textAlign: "left", padding: "10px 12px", minWidth: "290px" }}>Người dùng</th>
-              <th style={{ textAlign: "left", padding: "10px 12px" }}>Serial</th>
               <th style={{ textAlign: "right", padding: "10px 12px" }}>Hành động</th>
             </tr>
           </thead>
@@ -143,7 +143,6 @@ export const DbDeviceTable = memo(function DbDeviceTable({
               const canDeactivate = device.is_sim_running;
               const deactivateTitle = device.is_sim_running ? "Tắt chế độ sim" : "Thiết bị chưa chạy simulator";
               const userName = device.user_full_name?.trim();
-              const serial = device.serial_number?.trim() || "Chưa có";
               const assignOpen = showAssign[device.id] ?? false;
               const isSelected = selectedIds.includes(device.id);
 
@@ -175,14 +174,9 @@ export const DbDeviceTable = memo(function DbDeviceTable({
                     {device.id}
                   </td>
                   <td style={{ padding: "12px 12px", verticalAlign: "top" }}>
-                    <div style={{ display: "grid", gap: "8px" }}>
-                      <Badge severity={device.is_active ? "normal" : "offline"} dot pulse={device.is_active}>
-                        {device.is_active ? "Mobile Active" : "Inactive"}
-                      </Badge>
-                      <Badge severity={device.is_sim_running ? "info" : "offline"} dot pulse={device.is_sim_running}>
-                        {device.is_sim_running ? "Đang Sim" : "Chờ"}
-                      </Badge>
-                    </div>
+                    <Badge severity={device.is_active ? "normal" : "offline"} dot pulse={device.is_active}>
+                      {device.is_active ? "Active" : "Offline"}
+                    </Badge>
                   </td>
                   <td style={{ padding: "12px 12px", verticalAlign: "top" }}>
                     <div style={{ display: "grid", gap: "6px" }}>
@@ -225,22 +219,7 @@ export const DbDeviceTable = memo(function DbDeviceTable({
                           </span>
                         </div>
                       )}
-                      <div style={{ display: "grid", gap: "8px" }}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          leftIcon={<UserPlus size={13} />}
-                          disabled={batchActivating || busyKey !== null}
-                          onClick={() =>
-                            setShowAssign((prev) => ({
-                              ...prev,
-                              [device.id]: !(prev[device.id] ?? false),
-                            }))
-                          }
-                        >
-                          {assignOpen ? "Ẩn gán user" : device.user_email ? "Gán lại user" : "Gán user"}
-                        </Button>
-                        {assignOpen ? (
+                      {assignOpen ? (
                           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "8px" }}>
                             <Input
                               value={assignInputs[device.id] ?? ""}
@@ -263,69 +242,100 @@ export const DbDeviceTable = memo(function DbDeviceTable({
                             </Button>
                           </div>
                         ) : null}
-                      </div>
                     </div>
                   </td>
-                  <td style={{ padding: "12px 12px", verticalAlign: "top" }}>
-                    <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                      <span style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--text-primary)" }}>{serial}</span>
-                      <button
-                        type="button"
-                        title="Copy serial"
-                        onClick={() => {
-                          if (device.serial_number) {
-                            void navigator.clipboard?.writeText(device.serial_number);
-                          }
-                        }}
-                        style={{
-                          margin: 0,
-                          padding: 0,
-                          background: "transparent",
-                          border: "none",
-                          color: "var(--text-secondary)",
-                          cursor: device.serial_number ? "pointer" : "default",
-                        }}
-                      >
-                        <Copy size={13} />
-                      </button>
-                    </div>
-                  </td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", verticalAlign: "top" }}>
-                    <div style={{ display: "inline-flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      <span title={activateTitle} style={{ display: "inline-flex" }}>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          leftIcon={<Play size={13} />}
-                          loading={busyKey === `activate:${device.id}`}
-                          disabled={!canActivate || batchActivating || busyKey !== null}
-                          onClick={() => void runAction(`activate:${device.id}`, () => onActivateSim(device))}
-                        >
-                          Bật Sim
-                        </Button>
-                      </span>
-                      <span title={deactivateTitle} style={{ display: "inline-flex" }}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          leftIcon={<Square size={13} />}
-                          loading={busyKey === `deactivate:${device.id}`}
-                          disabled={!canDeactivate || batchActivating || busyKey !== null}
-                          onClick={() => void runAction(`deactivate:${device.id}`, () => onDeactivateSim(device))}
-                        >
-                          Tắt Sim
-                        </Button>
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        leftIcon={<Trash2 size={13} />}
-                        loading={busyKey === `delete:${device.id}`}
-                        disabled={batchActivating || busyKey !== null}
-                        onClick={() => void runAction(`delete:${device.id}`, () => onDelete(device.id))}
-                      >
-                        Xóa
-                      </Button>
+                  <td style={{ padding: "12px 8px", textAlign: "right", verticalAlign: "top" }}>
+                    <div style={{ display: "inline-flex", gap: "2px", alignItems: "center", justifyContent: "flex-end" }}>
+                      {/* Gán user */}
+                      <Tooltip content={assignOpen ? "Ẩn gán user" : device.user_email ? "Gán lại user" : "Gán user"}>
+                        <span style={{ display: "inline-flex" }}>
+                          <button
+                            type="button"
+                            aria-label={assignOpen ? "Ẩn gán user" : device.user_email ? "Gán lại user" : "Gán user"}
+                            disabled={batchActivating || busyKey !== null}
+                            onClick={() => setShowAssign((prev) => ({ ...prev, [device.id]: !(prev[device.id] ?? false) }))}
+                            style={{
+                              display: "inline-flex", alignItems: "center", justifyContent: "center",
+                              width: "28px", height: "28px", borderRadius: "var(--radius-sm)",
+                              border: "none", cursor: batchActivating || busyKey !== null ? "not-allowed" : "pointer",
+                              background: assignOpen ? "rgba(6,182,212,0.15)" : "transparent",
+                              color: assignOpen ? "var(--accent-cyan)" : "var(--text-secondary)",
+                              opacity: batchActivating || busyKey !== null ? 0.5 : 1,
+                            }}
+                          >
+                            <UserPlus size={14} />
+                          </button>
+                        </span>
+                      </Tooltip>
+                      {/* Bật Sim */}
+                      <Tooltip content={activateTitle}>
+                        <span style={{ display: "inline-flex" }}>
+                          <button
+                            type="button"
+                            aria-label={activateTitle}
+                            disabled={!canActivate || batchActivating || busyKey !== null}
+                            onClick={() => void runAction(`activate:${device.id}`, () => onActivateSim(device))}
+                            style={{
+                              display: "inline-flex", alignItems: "center", justifyContent: "center",
+                              width: "28px", height: "28px", borderRadius: "var(--radius-sm)",
+                              border: "none", cursor: canActivate && !batchActivating && busyKey === null ? "pointer" : "not-allowed",
+                              background: "transparent",
+                              color: canActivate ? "var(--accent-cyan)" : "var(--text-secondary)",
+                              opacity: !canActivate || batchActivating || busyKey !== null ? 0.4 : 1,
+                            }}
+                          >
+                            {busyKey === `activate:${device.id}`
+                              ? <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>...</span>
+                              : <Play size={14} />}
+                          </button>
+                        </span>
+                      </Tooltip>
+                      {/* Tắt Sim */}
+                      <Tooltip content={deactivateTitle}>
+                        <span style={{ display: "inline-flex" }}>
+                          <button
+                            type="button"
+                            aria-label={deactivateTitle}
+                            disabled={!canDeactivate || batchActivating || busyKey !== null}
+                            onClick={() => void runAction(`deactivate:${device.id}`, () => onDeactivateSim(device))}
+                            style={{
+                              display: "inline-flex", alignItems: "center", justifyContent: "center",
+                              width: "28px", height: "28px", borderRadius: "var(--radius-sm)",
+                              border: "none", cursor: canDeactivate && !batchActivating && busyKey === null ? "pointer" : "not-allowed",
+                              background: "transparent",
+                              color: canDeactivate ? "var(--text-primary)" : "var(--text-secondary)",
+                              opacity: !canDeactivate || batchActivating || busyKey !== null ? 0.4 : 1,
+                            }}
+                          >
+                            {busyKey === `deactivate:${device.id}`
+                              ? <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>...</span>
+                              : <Square size={14} />}
+                          </button>
+                        </span>
+                      </Tooltip>
+                      {/* Xoá */}
+                      <Tooltip content="Xoá thiết bị">
+                        <span style={{ display: "inline-flex" }}>
+                          <button
+                            type="button"
+                            aria-label="Xoá thiết bị"
+                            disabled={batchActivating || busyKey !== null}
+                            onClick={() => void runAction(`delete:${device.id}`, () => onDelete(device.id))}
+                            style={{
+                              display: "inline-flex", alignItems: "center", justifyContent: "center",
+                              width: "28px", height: "28px", borderRadius: "var(--radius-sm)",
+                              border: "none", cursor: batchActivating || busyKey !== null ? "not-allowed" : "pointer",
+                              background: "transparent",
+                              color: "#ef4444",
+                              opacity: batchActivating || busyKey !== null ? 0.4 : 1,
+                            }}
+                          >
+                            {busyKey === `delete:${device.id}`
+                              ? <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>...</span>
+                              : <Trash2 size={14} />}
+                          </button>
+                        </span>
+                      </Tooltip>
                     </div>
                   </td>
                 </tr>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 from math import isnan
 from random import Random
 from typing import Any
@@ -220,4 +221,31 @@ class MotionGenerator:
         if not windows:
             event = self.registry.get_fall_event(variant)
             return {"event": event} if event else None
-        return deepcopy(windows[self._rng.randrange(len(windows))])
+        return deepcopy(self._select_best_fall_window(windows))
+
+    @staticmethod
+    def _select_best_fall_window(windows: list[dict]) -> dict:
+        """Return the window with the highest accel peak magnitude.
+
+        Choosing the highest-impact window maximises the accel_peak_to_mean
+        and accel_x_range features, which are strong positive SHAP contributors
+        for fall detection. With env injection the model sees a full fall
+        signature (large spike + floor contact) instead of low-amplitude drift.
+        """
+        def _peak_accel(window: dict) -> float:
+            # Use explicit None checks — window arrays are numpy ndarrays from
+            # the parquet pipeline; `arr or []` raises ValueError on ndarrays.
+            ax_raw = window.get("accel_x")
+            ay_raw = window.get("accel_y")
+            az_raw = window.get("accel_z")
+            ax = list(ax_raw) if ax_raw is not None else []
+            ay = list(ay_raw) if ay_raw is not None else []
+            az = list(az_raw) if az_raw is not None else []
+            n = min(len(ax), len(ay), len(az))
+            if n == 0:
+                return 0.0
+            return max(
+                math.sqrt(float(ax[i]) ** 2 + float(ay[i]) ** 2 + float(az[i]) ** 2)
+                for i in range(n)
+            )
+        return max(windows, key=_peak_accel)

@@ -35,6 +35,11 @@ const FALL_VARIANT_LABELS: Record<string, string> = {
   fall_no_response: "Không phản hồi",
   confirmed: "Té ngã xác nhận",
   false_fall: "Té ngã giả",
+  // Module FA additions
+  slip_recovery: "Trượt — tự đứng dậy",
+  fall_from_bed: "Té khỏi giường",
+  // Persona-engine internal variants (rarely shown directly but mapped
+  // here so the FE doesn't render the raw token if BE leaks them).
   fall_1: "Té ngã (chuẩn)",
   fall_generic: "Té ngã (chung)",
 };

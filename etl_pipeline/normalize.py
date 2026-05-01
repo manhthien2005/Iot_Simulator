@@ -140,7 +140,7 @@ class NormalizedArtifactPipeline:
         vitaldb_cases = cls._default_vitaldb_cases()
         return {
             "pif_v3": {"subjects": ["PID1"], "session_start": "2026-03-22T10:00:00+07:00"},
-            "up_fall": {"subjects": ["Subject_01"]},
+            "up_fall": {"subjects": ["Subject_01", "Subject_02", "Subject_03", "Subject_04"]},
             "pamap2": {"subjects": ["subject101"], "session_start": "2026-03-22T10:00:00+07:00"},
             "ppg_dalia": {"subjects": ["S1"]},
             "vitaldb": {
@@ -210,9 +210,19 @@ class NormalizedArtifactPipeline:
         up_config = config.get("up_fall", {})
         up_subjects = list(up_config.get("subjects", []))
         if up_subjects:
-            up = UPFallAdapter()
-            for subject in up_subjects:
-                rows.extend(self._rows_from_frame(up.load_subject(subject)))
+            try:
+                up = UPFallAdapter()
+            except FileNotFoundError as exc:
+                logger.warning("UP-Fall dataset not found — skipping fall motion rows: %s", exc)
+                up = None
+            if up is not None:
+                for subject in up_subjects:
+                    try:
+                        rows.extend(self._rows_from_frame(up.load_subject(subject)))
+                    except FileNotFoundError:
+                        logger.debug("UP-Fall subject %s not found — skipping", subject)
+                    except Exception as exc:  # pragma: no cover — defensive ETL guard
+                        logger.warning("Skip UP-Fall subject %s: %s", subject, exc)
 
         pamap2_config = config.get("pamap2", {})
         pamap2_subjects = list(pamap2_config.get("subjects", []))

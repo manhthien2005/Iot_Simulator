@@ -54,6 +54,8 @@ plans/
 # IDE / AI tool config
 .windsurf/
 .roo/
+.claude/
+CLAUDE.md
 
 # Internal AI session tracking artifacts
 docs/ux/

@@ -171,7 +171,7 @@ describe("ScenariosPage smoke", () => {
     expect(navigateSpy).not.toHaveBeenCalled();
 
     // Confirm → navigate.
-    await user.click(screen.getByRole("button", { name: /Mở Phiên mô phỏng/ }));
+    await user.click(screen.getByRole("button", { name: /Mở Mô phỏng tín hiệu sinh tồn/ }));
 
     await waitFor(() => {
       expect(navigateSpy).toHaveBeenCalledTimes(1);
