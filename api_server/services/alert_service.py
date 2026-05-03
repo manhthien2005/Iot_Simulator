@@ -56,6 +56,7 @@ class AlertService:
         telemetry_alert_endpoint_fn: Any,  # callable(base_url) -> str
         publish_device_log_fn: Any,  # callable(sim_device_id, *, level, message, timestamp) -> None
         dashboard_cache_ref: list,  # mutable container: [DashboardSummary | None]
+        internal_secret: str | None = None,
     ) -> None:
         # Shared mutable state — same object references as SimulatorRuntime
         self.devices = devices
@@ -69,6 +70,7 @@ class AlertService:
         self._telemetry_alert_endpoint = telemetry_alert_endpoint_fn
         self._publish_device_log = publish_device_log_fn
         self._dashboard_cache_ref = dashboard_cache_ref
+        self._internal_secret = internal_secret
 
         # Dedicated thread pool for alert push retries so that
         # time.sleep() backoff does NOT block the background tick thread.
@@ -155,9 +157,12 @@ class AlertService:
         last_exc: Exception | None = None
         status_code: int | None = None
 
+        _iot_headers: dict[str, str] = {"X-Internal-Service": "iot-simulator"}
+        if self._internal_secret:
+            _iot_headers["X-Internal-Secret"] = self._internal_secret
         for attempt in range(1, _ALERT_PUSH_MAX_RETRIES + 1):
             try:
-                status_code = self._http_sender(endpoint, prepared.payload_json)
+                status_code = self._http_sender(endpoint, prepared.payload_json, _iot_headers)
                 last_exc = None
                 break
             except Exception as exc:

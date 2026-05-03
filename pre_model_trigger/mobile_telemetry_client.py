@@ -91,10 +91,12 @@ class MobileTelemetryClient:
         base_url: str,
         http_sender: HttpSenderWithBodyFn,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        internal_secret: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._http_sender = http_sender
         self._timeout = timeout
+        self._internal_secret = internal_secret
 
     # ------------------------------------------------------------------
     # IMU window dispatch (slice 2b)
@@ -177,10 +179,12 @@ class MobileTelemetryClient:
     ) -> dict[str, Any] | None:
         endpoint = f"{self._base_url}{path}"
         body_str = json.dumps(payload, default=str)
-        headers = {
+        headers: dict[str, str] = {
             "Content-Type": "application/json",
             "X-Internal-Service": "iot-simulator",
         }
+        if self._internal_secret:
+            headers["X-Internal-Secret"] = self._internal_secret
         try:
             status, body_text = self._http_sender(
                 endpoint, body_str, headers, self._timeout
