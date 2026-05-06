@@ -14,6 +14,7 @@ from typing import Any, Sequence
 
 from pre_model_trigger.fall_pre_trigger import FallPreTrigger
 from pre_model_trigger.healthguard_client import HealthGuardAPIClient
+from pre_model_trigger.normalization import normalize_vitals_for_rules, validate_data_quality
 from pre_model_trigger.response_handler import ResponseHandler
 from pre_model_trigger.rule_engine import RuleEngine
 from pre_model_trigger.settings_provider import SystemSettingsProvider
@@ -109,13 +110,41 @@ class TriggerOrchestrator:
         list[TriggerActionItem]
             Actionable items sorted by severity (most urgent first).
         """
-        # Step 1 — buffer vitals for time-series analysis
-        self._vitals_buffer.push(device_id, vitals)
+        # Step 0 — normalize field names and compute derived metrics (Fix #1 #2)
+        normalized_vitals = normalize_vitals_for_rules(vitals)
+
+        # Step 0b — data quality gate (Fix #3)
+        _dq_ok, _dq_errors = validate_data_quality(normalized_vitals)
+        if not _dq_ok:
+            logger.warning(
+                "Data quality gate SUPPRESSED all vitals rules for device=%s errors=%s "
+                "(drop_or_hold_if_invalid=true). URGENT rules also skipped — review "
+                "if this device may have a real clinical event.",
+                device_id,
+                _dq_errors,
+            )
+            actions: list[TriggerActionItem] = [
+                TriggerActionItem(
+                    action_type="log",
+                    severity="normal",
+                    message=f"Data quality check failed: {', '.join(_dq_errors)}",
+                    source="orchestrator",
+                    metadata={"device_id": device_id, "errors": str(_dq_errors)},
+                )
+            ]
+            # Still evaluate fall trigger — motion-based, not vitals-dependent
+            if motion is not None:
+                fall_actions = self._fall_pre_trigger.evaluate(motion=motion)
+                actions.extend(fall_actions)
+            return self._response_handler.process(actions, device_id=device_id)
+
+        # Step 1 — buffer normalized vitals for time-series analysis
+        self._vitals_buffer.push(device_id, normalized_vitals)
         history = self._vitals_buffer.get_history(device_id)
 
         # Step 2 — vitals rule evaluation
-        actions: list[TriggerActionItem] = self._rule_engine.evaluate(
-            vitals=vitals,
+        actions = self._rule_engine.evaluate(
+            vitals=normalized_vitals,
             persona=persona,
             history=history,
         )
@@ -129,7 +158,7 @@ class TriggerOrchestrator:
         if self._enable_model_calls and self._should_escalate_to_model(actions):
             model_actions = self._request_model_prediction(
                 device_id=device_id,
-                vitals=vitals,
+                vitals=normalized_vitals,
                 persona=persona,
             )
             actions.extend(model_actions)

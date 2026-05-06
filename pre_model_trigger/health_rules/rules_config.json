@@ -420,6 +420,27 @@
     "enabled": true,
     "notes": "Time-series rules only escalate severity. They never downgrade an abnormal instant reading.",
     "persistent_drift": {
+      "_notes": "Structured format: metric, threshold, direction (above|above_eq|below|below_eq), window (readings), reason_code. Evaluated by _evaluate_time_series_rules().",
+      "watch": [],
+      "send_to_risk_model": [
+        {
+          "metric": "heart_rate",
+          "threshold": 100,
+          "direction": "above",
+          "window": 10,
+          "reason_code": "HR_PERSISTENT_HIGH_AT_REST"
+        },
+        {
+          "metric": "resp_rate",
+          "threshold": 20,
+          "direction": "above_eq",
+          "window": 10,
+          "reason_code": "RR_PERSISTENT_HIGH_AT_REST"
+        }
+      ]
+    },
+    "pending_baseline_drift": {
+      "_notes": "These rules require baseline tracking (not yet implemented). Kept here for future implementation.",
       "watch": [
         {
           "condition": "heart_rate >= baseline_heart_rate + 10 for >= 5 minutes",
@@ -452,16 +473,8 @@
           "reason_code": "HR_BASELINE_DELTA_SEND"
         },
         {
-          "condition": "heart_rate > 100 for >= 10 minutes at rest",
-          "reason_code": "HR_PERSISTENT_HIGH_AT_REST"
-        },
-        {
           "condition": "resp_rate >= baseline_resp_rate + 4 for >= 10 minutes",
           "reason_code": "RR_BASELINE_DELTA_SEND"
-        },
-        {
-          "condition": "resp_rate >= 20 for >= 10 minutes at rest",
-          "reason_code": "RR_PERSISTENT_HIGH_AT_REST"
         },
         {
           "condition": "body_temp >= baseline_body_temp + 1.0 within 24 hours",

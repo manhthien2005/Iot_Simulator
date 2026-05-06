@@ -695,6 +695,10 @@ class SimulatorRuntime:
             self._orch_enable_model_calls: bool = os.environ.get(
                 "PRE_MODEL_TRIGGER_ENABLE_MODEL_CALLS", ""
             ).lower() in ("1", "true", "yes")
+            # enable_model_calls=False intentionally (architecture Option A):
+            # The orchestrator only decides action severity; the runtime handles
+            # the actual model call via _trigger_risk_inference (correct endpoint
+            # + auth header).  _orch_enable_model_calls gates that runtime path.
             self._trigger_orchestrator = TriggerOrchestrator(
                 settings_provider=_settings_provider,
                 rule_engine=_rule_engine,
