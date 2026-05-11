@@ -37,11 +37,12 @@ Detect current repo, then load patterns:
 git -C <repo> branch --show-current
 ```
 
-Trunk per repo (NEVER commit directly):
-- HealthGuard: `deploy`
-- health_system, Iot_Simulator_clean: `develop`
+Trunk per repo (NEVER commit directly — per ADR-003):
+- HealthGuard, health_system, Iot_Simulator_clean: `develop`
 - healthguard-model-api: `master`
 - PM_REVIEW: `main`
+
+HealthGuard `deploy` is user-owned release branch — AI never touches it.
 
 If on trunk → STOP. Create branch: `feat/<short-desc>` or `fix/<short-desc>` (English type, kebab-case, ≤ 50 chars).
 

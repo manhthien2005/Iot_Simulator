@@ -361,20 +361,17 @@ Run: `pytest tests/test_fall_router.py::test_predict_fall_unauthorized` (focused
 ## Quick commands
 
 ```pwsh
-# health_system/backend
-cd d:\DoAn2\VSmartwatch\health_system\backend
+# cwd: d:\DoAn2\VSmartwatch\health_system\backend
 uvicorn app.main:app --reload --port 8000
 pytest tests/test_fall.py::test_predict_unauthorized
 pytest                           # full
 black . && isort .               # before commit
 mypy app/                        # if mypy configured
 
-# healthguard-model-api
-cd d:\DoAn2\VSmartwatch\healthguard-model-api
+# cwd: d:\DoAn2\VSmartwatch\healthguard-model-api
 uvicorn app.main:app --reload --port 8001
 
-# Iot_Simulator_clean
-cd d:\DoAn2\VSmartwatch\Iot_Simulator_clean
+# cwd: d:\DoAn2\VSmartwatch\Iot_Simulator_clean
 uvicorn api_server.main:app --reload --port 8002
 ```
 

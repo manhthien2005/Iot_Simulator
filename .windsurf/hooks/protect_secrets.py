@@ -116,17 +116,21 @@ def match_secret_path(path: str) -> str | None:
     return None
 
 
-def scan_content_for_secrets(content: str) -> list[tuple[str, str]]:
-    """Return list of (matched_snippet, label) for secrets found in content."""
+def scan_content_for_secrets(content: str) -> list[str]:
+    """Return list of labels for secrets found in content.
+
+    CRITICAL: never return the matched snippet itself — the matched bytes ARE
+    the secret, and this output ends up in Cascade UI / logs. We only return
+    the category label so the user knows which class of secret was detected
+    without leaking any characters of it.
+    """
     if not content:
         return []
-    findings: list[tuple[str, str]] = []
+    findings: list[str] = []
     for pattern, label in CONTENT_SECRET_PATTERNS:
-        match = re.search(pattern, content)
-        if match:
-            # Truncate matched snippet to avoid leaking the full secret in error
-            snippet = match.group(0)[:60]
-            findings.append((snippet, label))
+        if re.search(pattern, content):
+            if label not in findings:
+                findings.append(label)
     return findings
 
 
@@ -188,11 +192,15 @@ def main() -> int:
         for content in extract_write_content(tool_info):
             findings = scan_content_for_secrets(content)
             if findings:
-                msgs = [f"  - {label}: '{snippet}...'" for snippet, label in findings[:3]]
+                # Only print labels — never the matched bytes. The matched
+                # value IS the secret; leaking 20+ chars of an AWS key or
+                # GitHub PAT is a security incident.
+                msgs = [f"  - {label} detected" for label in findings[:5]]
                 print(
                     f"[hook:protect_secrets] BLOCKED — content contains secret-like patterns "
-                    f"in '{file_path}':\n" + "\n".join(msgs) + "\n"
-                    f"Move secrets to .env (gitignored). Use placeholder in code.",
+                    f"in '{file_path or '<unknown>'}':\n" + "\n".join(msgs) + "\n"
+                    f"Move secrets to .env (gitignored). Use placeholder in code.\n"
+                    f"Note: matched values are not printed to avoid leaking the secret.",
                     file=sys.stderr,
                 )
                 return 2

@@ -72,7 +72,7 @@ Skipping any step = lying.
 ### Tests
 
 ```
-✅ "I ran `flutter test test/feed/`. 12/12 pass. Done."
+✅ "I ran `flutter test test/features/emergency/`. 12/12 pass. Done."
 ❌ "Tests should pass now."
 ```
 
