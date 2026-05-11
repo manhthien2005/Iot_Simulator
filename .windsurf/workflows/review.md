@@ -8,7 +8,7 @@ description: Self-review code before merging — 5 axes (correctness, readabilit
 
 Workflow for reviewing already-written code (your own commit / branch / PR) before merge.
 
-> ⚠️ **Thứ tự bắt buộc:** `/build` (implement + commit) → `/review` (self-review) → `gh pr create` (tạo PR). KHÔNG tạo PR trước khi `/review` sạch.
+> ⚠️ **Thứ tự bắt buộc:** `/build` (implement + commit) → `/review` (self-review) → push + PR (nếu cần). KHÔNG mở PR trước khi `/review` sạch.
 
 ## Pre-flight
 
@@ -19,45 +19,91 @@ Workflow for reviewing already-written code (your own commit / branch / PR) befo
 
 ## Phase 1 — Read context
 
-1. **Spec/plan** — `docs/specs/<feature>.md` + `docs/plans/<feature>.md`. Does the code match acceptance criteria?
-2. **Commit messages** — what did the author intend?
-3. **Diff overview:**
-   ```bash
-   git diff develop...HEAD --stat
-   git log develop..HEAD --oneline
+1. **Spec/UC** — `<repo>/docs/specs/<feature>.md` + `PM_REVIEW/Resources/UC/<Module>/UC<XXX>.md`. Does code match acceptance criteria?
+2. **Commit messages** — what did the author (you) intend?
+3. **Diff overview** (replace `<trunk>` per repo: deploy/develop/master/main):
+   ```pwsh
+   git -C <repo> diff <trunk>...HEAD --stat
+   git -C <repo> log <trunk>..HEAD --oneline
    ```
-4. **Map changed files** to layers (data / application / presentation / config / rules / functions).
+4. **Map changed files** to layers (per stack):
+   - Flutter: `data/` (repos, models) / `domain/` / `presentation/` (screens, providers)
+   - FastAPI: `routers/` / `services/` / `repositories/` / `models/`
+   - Express: `routes/` / `controllers/` / `services/` / `lib/`
+   - React: `pages/` / `features/` / `hooks/` / `components/`
 
 ## Phase 2 — Run automated checks
 
 Let the machine do the easy part FIRST. Any warning/error → flag and pause detailed review.
 
-```bash
-# Flutter
-cd apps/mobile
+```pwsh
+# Flutter (health_system/lib)
+cd d:\DoAn2\VSmartwatch\health_system
 flutter analyze
 flutter test
 dart format --set-exit-if-changed .
 
-# Functions / BE
-cd firebase/functions
-npm run lint
+# FastAPI (health_system/backend, healthguard-model-api, Iot_Simulator_clean)
+cd d:\DoAn2\VSmartwatch\<repo>
+pytest
+black --check . ; isort --check-only .
+mypy app/   # if configured
+
+# Express+Prisma (HealthGuard/backend)
+cd d:\DoAn2\VSmartwatch\HealthGuard\backend
 npm test
+npm run lint
+
+# React+Vite (HealthGuard/frontend)
+cd d:\DoAn2\VSmartwatch\HealthGuard\frontend
+npm test
+npm run lint
 ```
 
 ## Phase 3 — Manual 5-axis pass
 
 **→ Apply skill `code-review-five-axis`** for the 5 axes (Correctness / Readability / Architecture / Security / Performance), full checklist per axis, severity rubric, and output format. Don't re-derive the checklist here.
 
-### Meep-specific things to flag (in addition to the skill checklist)
+### VSmartwatch-specific things to flag (in addition to skill checklist)
 
-- **Firestore rule changes:** MUST have new rules unit tests covering owner / friend / stranger / unauthenticated.
-- **Cloud Function trigger:** check region (`asia-southeast1`), `maxInstances`, `timeoutSeconds` are explicit.
-- **Image / video upload:** size + MIME validated SERVER-SIDE (Storage rules or Function), not just client.
-- **PII in logs:** grep `email`, `phoneNumber`, `displayName`, `caption` in `console.log` / `logger.*` / `print` → flag.
-- **`--dart-define` env keys:** no key hardcoded in Dart source (`grep -rn 'apiKey\|secret\|token' lib/`).
-- **Native widget code (`apps/widget/`):** does it call Firebase directly? It should NOT — only read locally cached data.
-- **Naming:** does the diff use the canonical terms from `CONTEXT.md`? (`uid`, `pairId`, `Post`, `home-screen widget`, etc.)
+**Cross-cutting (any stack):**
+- **PHI in logs:** grep `email`, `phone`, `bloodPressure`, `heartRate`, `vital` in `console.log` / `logger.*` / `print()` → flag (medical app, leak = serious).
+- **Hardcoded secret:** `grep -rnE "(api[_-]?key|secret|token|password)\s*=\s*['\"]" <changed file>` → flag.
+- **Cross-repo contract change:** if API request/response shape changed, check `topology.md` for downstream consumer. Update prediction_contract.py / repository signature accordingly.
+- **Audit log missing:** PHI access (read/write user vital, fall event, sleep data) MUST log to audit table per `PM_REVIEW/Audit_Log_Specification.md`.
+
+**Mobile (Flutter):**
+- `setState()` after `await` without `mounted` check → race crash.
+- `dispose()` thiếu cho `Timer`/`StreamSubscription`/`Controller` → memory leak.
+- `Dio()` constructor inline trong screen → bypass JWT interceptor.
+- Hardcoded color/string → use theme token + `app_strings.dart`.
+- FCM background handler navigate ngay → store deep link, navigate on resume.
+- Touch target < 48dp (or < 56dp for emergency UI) → fail accessibility.
+
+**FastAPI:**
+- `except Exception:` không log + không re-raise.
+- `str(exc)` leaked to client response → security risk.
+- Sync I/O trong async function (use `asyncio.to_thread`).
+- Pydantic v1 syntax (`@validator`, `class Config`) — must be v2.
+- CORS `["*"]` in production config.
+- Endpoint thiếu auth dependency.
+
+**Express+Prisma:**
+- `new PrismaClient()` outside `lib/prisma.js` singleton.
+- SQL string concat (always Prisma parameterized).
+- `app.use(cors())` không có origin allowlist (production).
+- `io.emit` broadcast tất cả socket (use room-based).
+- Pre-signed S3 URL bypassed (proxy file qua backend = memory bloat).
+- Stack trace in 500 response.
+
+**React+Vite:**
+- `dangerouslySetInnerHTML` với user input → XSS.
+- `localStorage` lưu JWT (use httpOnly cookie hoặc memory store).
+- Inline anonymous function in list render → unnecessary re-render.
+- Missing `key` or `key={index}` for reorderable list.
+- Direct DOM manipulation (`getElementById`) trừ khi thật cần.
+
+**Naming:** check diff dùng đúng VSmartwatch canonical terms — `User` role với linked profiles (NOT deprecated `patient`/`caregiver`), `fall_events` (snake_case table), `User Linked` for family share.
 
 ## Phase 4 — Output
 

@@ -4,19 +4,30 @@ description: Fix a specific issue (link/description/Crashlytics report) end-to-e
 
 # /fix-issue — Targeted Issue Resolution
 
-End-to-end fix for a specific issue: GitHub issue, Crashlytics report, user complaint, or a clear bug with reproduction steps.
+End-to-end fix for a specific issue: bug report, Logcat/console error, user complaint, JIRA bug story, or a clear bug with reproduction steps.
+
+> **Anti-loop rule:** if `PM_REVIEW/BUGS/<BUG-ID>.md` exists, READ ALL prior attempts FIRST. Don't propose any approach already marked `failed`. If only failed approaches remain → `/stuck` workflow.
 
 ## Pre-flight
 
-1. **Invoke skills:** `systematic-debugging` (primary), `tdd`, `karpathy-guidelines`.
+1. **Invoke skills:** `systematic-debugging` (primary), `tdd`, `karpathy-guidelines`, `bug-log` (if recurring/non-trivial bug).
 2. **Get issue details:**
-   - Link / ID / description of the issue.
-   - Repro steps (who? doing what? expected vs actual?).
+   - Link / ID / description of the issue (JIRA bug story, free-form).
+   - Repro steps (who actor? doing what? expected vs actual?).
    - Stack trace / error log if available.
-   - Affected version / platform / device.
-3. **New branch:**
-   ```bash
-   git checkout -b fix/<short-description>
+   - Affected repo + version + platform.
+3. **Check bug log** (anti-loop):
+   ```pwsh
+   $bug = "d:\DoAn2\VSmartwatch\PM_REVIEW\BUGS\<BUG-ID>.md"
+   if (Test-Path $bug) { Get-Content $bug }
+   ```
+   If exists → list prior failed approaches. DO NOT retry them.
+   If non-trivial bug + no log → create one (skill `bug-log`).
+4. **New branch** from correct trunk (deploy/develop/master/main per repo):
+   ```pwsh
+   git -C <repo> checkout <trunk>
+   git -C <repo> pull origin <trunk>
+   git -C <repo> checkout -b fix/<short-description>
    ```
 
 ## Step 1: Understand the issue
@@ -44,19 +55,26 @@ End-to-end fix for a specific issue: GitHub issue, Crashlytics report, user comp
 
 **→ Apply skill `systematic-debugging`** Phases 1-3 (read errors carefully → reproduce → check recent changes → trace data flow → form hypothesis).
 
-Meep-specific entry points (which layer to suspect first):
+VSmartwatch entry points (which layer to suspect first):
 
-```bash
-git log -n 20 --oneline -- <affected files>
-git blame <file> | grep <line>
+```pwsh
+git -C <repo> log -n 20 --oneline -- <affected files>
+git -C <repo> blame <file> | Select-String <line>
 ```
 
-| Symptom | First check |
-|---|---|
-| Crashlytics: `setState() after dispose` | Riverpod migration vs `mounted` guard |
-| Firestore query empty in prod, OK in emulator | Rules → index → field-name typo |
-| FCM not delivered | Token registration → topic → payload → fg/bg state |
-| Auth token expired loop | Refresh handler in `AuthRepository` boundary |
+| Symptom | First check | Repo |
+|---|---|---|
+| Mobile: `setState() after dispose` | `mounted` guard after `await`, dispose Timer/Subscription | health_system/lib |
+| Mobile: API call returns 401 loop | dio refresh interceptor + token storage | health_system/lib |
+| Mobile: FCM not delivered | Token registration → server payload → fg/bg handler | health_system/lib + backend |
+| Mobile: Fall alert không hiển thị | Full-screen intent permission (Android) + critical alert (iOS) | health_system/lib |
+| BE: Endpoint 500 lộ stack trace | Exception handler in `app/main.py` (FastAPI) or `errorHandler` middleware (Express) | health_system/backend, HealthGuard/backend |
+| BE: Postgres query slow | Missing index → run `EXPLAIN ANALYZE`; check Prisma `select` for over-fetching | HealthGuard/backend, health_system/backend |
+| BE: SQL constraint violation in test | Prisma `P2002` mapping not handled in errorHandler | HealthGuard/backend |
+| Cross-repo: API contract mismatch | `topology.md` + check producer Pydantic schema vs consumer dio call | multiple |
+| Auth: token expired loop | Refresh handler boundary; check `iss` claim matches (`healthguard-mobile` vs `healthguard-admin`) | All |
+| ML: Model API 500 | Check model file path in env, fallback when model load fails | healthguard-model-api |
+| IoT: Trigger không tới backend | Check internal secret header + endpoint URL in `Iot_Simulator_clean/transport/http_publisher.py` | Iot_Simulator_clean |
 
 ## Step 3: Plan a minimal fix
 
@@ -82,17 +100,32 @@ Name the test `regression: <issue title> (#<id>)` so it's traceable later. Witho
 
 Beyond unit tests:
 
-### Mobile fix
+### Mobile fix (Flutter — health_system/lib)
 
-- Run the app on a real device (not just the simulator if device-specific).
-- Repro the original steps → confirm bug gone.
-- Smoke-test related features for no regression.
+- Run app on real device (not just emulator if device-specific bug, e.g., FCM/sensor).
+- Repro original steps → confirm bug gone.
+- Smoke-test related features (e.g., fall fix → also check SOS escalation).
 
-### BE / Functions fix
+### Backend fix (FastAPI — health_system/backend, model-api, IoT sim)
 
-- Deploy to emulator → run integration tests.
-- Check logs have no new errors.
-- Test with edge cases from the original issue.
+- Run focused pytest first, then full suite.
+- Hit endpoint locally with curl or Postman → assert expected response shape.
+- Check log output (no new error patterns, no PHI leaked).
+- Test with edge cases from the original report.
+
+### Admin BE fix (Express+Prisma — HealthGuard/backend)
+
+- Run focused jest test, then full suite.
+- Hit endpoint with admin JWT → assert response.
+- Check Prisma query log (no N+1, no over-fetch).
+- Verify audit log entry created if action mutates PHI.
+
+### Admin FE fix (React+Vite — HealthGuard/frontend)
+
+- `npm run dev` → manually click through affected page.
+- Repro original UX issue → confirm fixed.
+- Check console: no warning, no React render error.
+- Smoke-test linked pages (e.g., device list → device detail).
 
 ### Apply skill `verification-before-completion`
 
@@ -104,18 +137,19 @@ Don't claim "fixed" until:
 
 ## Step 6: Commit
 
-Conventional Commits with the issue reference:
+Conventional Commits — Vietnamese subject, English type prefix:
 
-```bash
-git add <files>
-git commit -m "fix(<scope>): <description>
+```pwsh
+git -C <repo> add <files>
+git -C <repo> commit -m "fix(<scope>): <mô tả tiếng Việt>
 
-Root cause: <short — what was wrong>
+Root cause: <ngắn — gốc vấn đề>
 Fix: <approach>
-Test: regression test in <test file>
-
-Closes #<issue-id>"
+Test: regression test trong <test file>
+Bug log: PM_REVIEW/BUGS/<BUG-ID>.md (nếu đã tạo)"
 ```
+
+Update bug log: mark this attempt as `successful` with link to fix commit.
 
 ## Step 7: PR / merge
 
@@ -123,42 +157,45 @@ Closes #<issue-id>"
 
 Apply workflow `/review`:
 
-```bash
-git diff develop...HEAD
-flutter analyze
-flutter test
+```pwsh
+git -C <repo> diff <trunk>...HEAD
+# + per-stack lint/test (xem /review workflow)
 ```
 
-### Open a PR (if your workflow uses PRs)
+### Open a PR (optional for solo dev)
 
-PR description template:
+PR description template (Vietnamese):
 
 ```markdown
 ## Issue
-Closes #<id>
+Bug ID: `<BUG-ID>` (xem `PM_REVIEW/BUGS/<BUG-ID>.md`)
+JIRA: <Story-ID> (nếu có)
+UC: UC<XXX> (nếu có)
 
 ## Root cause
-<1-2 sentences>
+<1-2 câu>
 
 ## Fix
-<approach + why this approach>
+<approach + tại sao approach này>
 
 ## Test
-- Regression test: `<test file>`
-- Manual repro: <steps + expected>
+- Regression test: `<test file>::<test name>`
+- Manual repro: <bước + kết quả>
 
 ## Verification
-- [ ] `flutter test` passes
-- [ ] `flutter analyze` clean
+- [ ] Tests pass (per stack)
+- [ ] Lint clean
 - [ ] Manual repro confirmed bug gone
 - [ ] Smoke-tested related features
+- [ ] Bug log updated (`PM_REVIEW/BUGS/<BUG-ID>.md`)
 ```
 
 ## Step 8: Post-merge
 
-- Confirm the fix deployed successfully (if CI/CD triggered).
-- Monitor Crashlytics / logs for 24h to spot regressions.
-- Close the issue with a comment confirming the fix is verified.
+- Confirm fix deployed if CI/CD triggered.
+- Monitor logs for 24h to spot regressions (mobile: Logcat / iOS Console; BE: stdout/log file).
+- Close JIRA bug story if applicable.
+- Update `PM_REVIEW/BUGS/<BUG-ID>.md`: status = `resolved`, link to fix commit, note how to verify.
 
 ## When the issue isn't a bug
 

@@ -105,6 +105,16 @@ Example:
 | Suggesting a rewrite of a whole module in a small PR | Scope creep |
 | Blocking PRs over style preference (`if` vs ternary) | Going religious, not shipping |
 
+## Cross-skill / when to use vs others
+
+| Need | Use |
+|---|---|
+| Quick PR/commit self-review (5-min checklist) | This skill |
+| Feature deep audit with 8-criteria score + Vietnamese report (cho stakeholder) | `detailed-feature-review` skill |
+| Module-level code health audit | `/audit` workflow |
+| Project-level overview (entire admin or mobile) | `TongQuan` skill |
+| Sync PM_REVIEW docs với code reality | `CHECK` skill |
+
 ## Self-review = ship faster
 
 15 minutes of self-review saves:

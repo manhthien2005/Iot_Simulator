@@ -33,15 +33,15 @@ Before defining tasks, list:
 ## Phase 3 — Vertical slice ordering
 
 ```
-❌ Horizontal:
-   T1: All Firestore models
-   T2: All Cloud Functions
-   T3: All Flutter UI
+❌ Horizontal (build all of one layer first):
+   T1: All Postgres tables for Fall feature
+   T2: All FastAPI endpoints for Fall feature
+   T3: All Flutter UI for Fall feature
 
-✅ Vertical:
-   T1: Create + view one post (model + repo + controller + minimal UI)
-   T2: Like a post (FieldValue.increment + button + count display)
-   T3: Comment on a post (subcollection + UI + rule)
+✅ Vertical (each task delivers a thin end-to-end slice):
+   T1: Detect + log fall event (DB row + endpoint + minimal UI alert)
+   T2: Confirm safe (cancel button + endpoint + audit log entry)
+   T3: SOS escalation (countdown timeout + endpoint + emergency contact notify)
 ```
 
 Order tasks by:

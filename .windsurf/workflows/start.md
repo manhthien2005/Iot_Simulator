@@ -1,116 +1,192 @@
 ---
-description: Start working on a GitHub issue — load full context, verify blockers, create branch, prepare environment.
+description: Kickoff a new VSmartwatch task — load context (UC + JIRA Story + spec), check blockers, create branch.
 ---
 
-# /start <issue-id> — Task Kickoff
+# /start <task-ref> — Task Kickoff (VSmartwatch)
 
-> Run this before `/build`. Never start coding without completing this checklist.
+> Run BEFORE `/build`. Never start coding without completing this checklist.
 
-## Step 1 — Fetch issue details
+`<task-ref>` accepted formats:
+- JIRA Story: `HG-S-042` or `Story-042` (looks up in PM_REVIEW)
+- UC ID: `UC010`
+- Plan task: `T2.1` (with optional `--plan <feature>` arg)
+- Bug ID: `HG-001` (looks up `PM_REVIEW/BUGS/`)
+- Free text: "fix sos countdown" — em hỏi để locate UC/Story
 
-```bash
-gh issue view <issue-id> --repo manhthien2005/Meep
+## Step 1 — Resolve task reference
+
+### Case: JIRA Story
+```pwsh
+# Find which Sprint contains the story
+Get-ChildItem -Path 'd:\DoAn2\VSmartwatch\PM_REVIEW\Resources\TASK\JIRA' -Filter 'STORIES.md' -Recurse | 
+  Select-String -Pattern '<task-ref>'
+```
+→ Read the matching `STORIES.md` + sibling `_EPIC.md` for context.
+
+### Case: UC
+```pwsh
+Get-ChildItem -Path 'd:\DoAn2\VSmartwatch\PM_REVIEW\Resources\UC' -Filter '<UC-ID>.md' -Recurse
+```
+→ Read the UC + related JIRA Epic(s) via `JIRA/README.md` UC→Epic Lookup.
+
+### Case: Bug
+```pwsh
+$bug = "d:\DoAn2\VSmartwatch\PM_REVIEW\BUGS\<BUG-ID>.md"
+if (Test-Path $bug) { Get-Content $bug }
+```
+→ Read full bug log. Note prior failed attempts (DO NOT retry them).
+
+### Case: Free text
+- Search UC: `grep -r "<keyword>" PM_REVIEW/Resources/UC/`
+- Search JIRA: `grep -r "<keyword>" PM_REVIEW/Resources/TASK/JIRA/`
+- If multiple match → ask user which one.
+- If no match → propose creating new UC via `/spec` first.
+
+## Step 2 — Extract acceptance criteria
+
+From UC + JIRA Story, build a clear list:
+
+```markdown
+## Task: <name>
+
+**Source:** UC<XXX> + JIRA <Story-ID>
+**Module:** <Module>
+**Repos affected:** <list>
+
+### Acceptance criteria (from UC main flow + business rules)
+- [ ] <criterion 1>
+- [ ] <criterion 2>
+- ...
+
+### Out-of-scope
+- <thing NOT in this iteration>
+
+### Files to read first (context)
+- <path 1> — <why>
+- <path 2> — <why>
+
+### Files allowed to touch (scope guard)
+- <path or pattern>
 ```
 
-Read and extract:
-- **Title** — task name + scope
-- **Assignee** — who owns this task
-- **Lane label** — `lane:specialty-be-native` (BE) or `lane:specialty-ui-design` (FE) or `lane:open`
-- **Acceptance criteria** — what done looks like
-- **Files có thể chạm** — output scope
-- **Files phải đọc trước** — context files (read these in Step 3)
-- **Dependencies / blockers** — issue numbers that must be closed first
-- **Plan reference** — `docs/plans/` path
+This becomes the working contract for the session.
 
-## Step 2 — Check blockers
+## Step 3 — Check blockers
 
-For every issue listed under "Blocked by #":
+For every dependency listed in UC "Related" or JIRA Story:
+- Other UC must be implemented (look in code)
+- Other Story must be Done (check STORIES.md status)
+- DB migration must be deployed (`PM_REVIEW/SQL SCRIPTS/`)
 
-```bash
-gh issue view <blocking-id> --repo manhthien2005/Meep --json state,title
+If any blocker open → STOP. Report: "Blocker `<ref>` chưa done. Không bắt đầu task này."
+
+## Step 4 — Sync trunk + check working tree
+
+Repo of focus determined by Step 2 ("Repos affected"). For each:
+
+```pwsh
+git -C <repo> fetch origin
+git -C <repo> status --short
 ```
 
-- If state = `OPEN` → **STOP**. Report: "Issue #X (`<title>`) chưa done. Không thể bắt đầu task này."
-- If all blockers = `CLOSED` → continue.
+If uncommitted changes → ask user: stash or commit first?
 
-## Step 3 — Load context files
+## Step 5 — Create branch
 
-Pull latest develop to ensure contracts are up to date:
+Per rule 20-stack-conventions.md format: `<type>/<short-desc>` (kebab-case, ≤ 50 chars, no DevName).
 
-```bash
-git fetch origin develop
-git status
+| Type | When |
+|---|---|
+| `feat/` | New functionality |
+| `fix/` | Bug fix |
+| `refactor/` | Restructure without behavior change |
+| `chore/` | Infra, config, docs (NOT feature) |
+| `docs/` | Documentation only |
+
+Trunk per repo (start branch from this):
+
+| Repo | Trunk |
+|---|---|
+| HealthGuard | `deploy` |
+| health_system, Iot_Simulator_clean | `develop` |
+| healthguard-model-api | `master` |
+| PM_REVIEW | `main` |
+
+```pwsh
+git -C <repo> checkout <trunk>
+git -C <repo> pull origin <trunk>
+git -C <repo> checkout -b <type>/<short-desc>
 ```
 
-Read every file listed under **"Files phải đọc trước"** in the issue.
+## Step 6 — Pre-existing fix attempts (bug only)
 
-If the section is empty or missing:
-- Read every file listed under "Files có thể chạm" that already exists on `develop`.
-- Focus on: abstract interfaces, freezed models, Riverpod providers, AppError hierarchy.
-
-**Goal:** Understand the existing contract before writing a single line.
-
-## Step 4 — Determine role + load rule context
-
-Check the lane label from Step 1:
-
-| Label | Role | Key rules to internalize |
-|---|---|---|
-| `lane:specialty-ui-design` | FE | Scope: `presentation/` only. Read `24-flutter-ui-patterns.md`. Use typed mock from leader's freezed models. Never call Firebase directly. |
-| `lane:specialty-be-native` | BE | Scope: `data/` + `application/`. Implement abstract interface exactly. Never touch `presentation/`. |
-| `lane:open` | Open | Check task scope in issue — follow whichever rules apply. |
-
-If no lane label is set → ask: "Bạn là FE hay BE dev cho task này?"
-
-## Step 5 — Verify contract exists (FE only)
-
-If role = FE:
-- Confirm that the freezed models and providers needed by this screen exist on `develop`.
-- Check: `git log --oneline origin/develop -- lib/features/<feature>/data/` for recent model commits.
-- If models not yet merged → **STOP**. Report: "Contract chưa có trên develop. Hỏi leader trước khi start."
-
-## Step 6 — Create branch + update project status
-
-Branch format: `feature/<DevName>/<short-desc>`
-
-DevName mapping (GitHub handle → DevName):
-| GitHub handle | DevName | Role |
-|---|---|---|
-| `manhthien2005` | `ThienPDM` | Leader |
-| `CatS1mp` | `KhoaLND` | BE |
-| `katheramp` | `HanDHG` | FE |
-| `JanaKimmm` | `NganTNK` | FE |
-
-Resolve DevName from the assignee fetched in Step 1. If the assignee is not in this table → ask: "DevName của bạn là gì?"
-
-**Run the following (in order):**
-
-```bash
-# 1. Create and switch to the feature branch
-git checkout -b feature/<DevName>/<short-desc> origin/develop
-
-# 2. Update issue status to "In Progress" on the project board
-pwsh -File scripts/set-issue-status.ps1 -IssueNum <issue-id> -Status "In Progress"
+If this is a bug fix:
+```pwsh
+$bug = "d:\DoAn2\VSmartwatch\PM_REVIEW\BUGS\<BUG-ID>.md"
+if (Test-Path $bug) { Get-Content $bug }
 ```
 
-## Step 7 — Summary + handoff to /build
+Note all prior failed approaches. **DO NOT retry them in `/build`.**
 
-Print a concise summary:
+If file doesn't exist + this is a real bug worth tracking → create new bug log entry (skill `bug-log`):
+```pwsh
+# Use template
+Copy-Item 'd:\DoAn2\VSmartwatch\PM_REVIEW\BUGS\_TEMPLATE.md' "d:\DoAn2\VSmartwatch\PM_REVIEW\BUGS\<NEW-ID>.md"
+```
+
+## Step 7 — Summary + handoff
+
+Print concise summary:
 
 ```
-Issue:    #<id> <title>
-Role:     FE / BE / Open
-Blockers: ✅ all closed / ❌ blocked by #X
-Contract: ✅ models on develop / ⚠️ missing (stop + ask leader)
-Branch:   feature/<DevName>/<short-desc>
-Status:   ✅ set to "In Progress" on project board
-Scope:    <list of files allowed to touch>
+Task:        <name>
+Source:      UC<XXX> + JIRA <Story-ID>  (or Bug <ID>)
+Repos:       <list>
+Blockers:    ✅ all done / ❌ blocked by <ref>
+Branch:      <type>/<short-desc> (from <trunk>)
+Bug log:     ✅ no prior attempts / ⚠️ N prior attempts (DO NOT retry: <list>)
 
-Context loaded:
-  - <file1> — <why>
-  - <file2> — <why>
+Acceptance criteria (N items):
+  □ <criterion 1>
+  □ <criterion 2>
+  ...
+
+Files to read first:
+  - <path> — <why>
+
+Files allowed to touch:
+  - <pattern>
 
 Ready → run /build to start TDD cycle.
 ```
 
-If any blocker or contract check failed → do NOT proceed to `/build`.
+## Step 8 — If anything fails
+
+| Failure | Action |
+|---|---|
+| Task ref ambiguous (multiple matches) | Ask user to pick |
+| No matching UC/Story | Propose `/spec` first |
+| Blocker open | STOP, report blocker |
+| Uncommitted changes | Stash or commit first |
+| Bug has only failed attempts | Switch to `/stuck` workflow |
+
+## Cross-repo task
+
+If task affects multiple repos:
+- Create branch with same name in each affected repo (sync naming).
+- Sequence work per dependency order (use `topology.md` data flow):
+  1. PM_REVIEW (spec/UC update)
+  2. SQL canonical (if schema change)
+  3. Producer side (BE producing API)
+  4. Consumer side (mobile/admin consuming)
+  5. E2E test
+- See `/cross-repo-feature` workflow for detailed sequencing.
+
+## Output
+
+- ✅ UC + Story + acceptance criteria identified
+- ✅ Blockers verified clear
+- ✅ Branch created from correct trunk
+- ✅ Bug log checked (if applicable)
+- ✅ Working tree clean
+- ✅ User has clear handoff to `/build`

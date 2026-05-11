@@ -9,7 +9,7 @@ trigger: always_on
 ## This repo
 
 - **Name:** `Iot_Simulator_clean`
-- **Path:** `d:\DoAn2\VSmartwatch\Iot_Simulator_clean`
+- **Path:** `D:\DoAn2\VSmartwatch\Iot_Simulator_clean`
 - **Stack:** Python FastAPI (api_server + simulator-web)
 - **Overlays applied:** `fastapi`
 - **Trunk branch:** `develop`
@@ -32,4 +32,4 @@ trigger: always_on
 
 ## Last sync
 
-Generated: 2026-05-11 19:20
+Generated: 2026-05-11 20:38

@@ -1,272 +1,314 @@
 ---
-description: Build + deploy app (Flutter store, Firebase Hosting, Cloud Functions, Firestore rules) — careful checklist, with rollback plan.
+description: Deploy VSmartwatch services per stack (Flutter store, Express BE, FastAPI BE, React frontend, DB migration). Stack-aware checklist with rollback.
 ---
 
-# /deploy — Deploy Workflow
+# /deploy — Deploy Workflow (VSmartwatch)
 
-> "Pre-deploy verification > rollback firefighting."
+> **Deploy = production impact.** Always: pre-flight → staging → smoke test → production → monitor. Never skip steps.
 
-Deploys carry production-impact risk — always checklist before, monitor after.
+> **Solo dev note:** Anh chưa khoá deploy strategy cho từng stack (đồ án 2). Workflow này là **skeleton** — verify actual commands per anh's hosting choice. Mark TODO trong ADR (`PM_REVIEW/ADR/`).
 
-## Pre-flight
+## Pre-flight (ALL deploys)
 
-1. **Make sure the branch is `deploy`** (production) or `develop` (staging). DON'T deploy directly from a feature branch.
-2. **Working tree clean:** `git status` empty.
-3. **Up-to-date:** `git pull origin deploy` (or `develop` for staging).
-4. **Read the spec/plan of the feature being deployed** — know its acceptance criteria.
-5. **Apply skill `verification-before-completion`** — every step verifies for real, doesn't assume.
+### 1. Verify branch + working tree
 
-## Pre-deploy checklist
-
-### Universal
-
-- [ ] All tests pass:
-  ```bash
-  flutter test
-  npm test --prefix functions
-  npm test --prefix services/api  # if exists
-  ```
-- [ ] Lint clean:
-  ```bash
-  flutter analyze
-  npm run lint --prefix functions
-  ```
-- [ ] No `console.log` / `print` debug left over:
-  ```bash
-  grep -rn "console.log\|print(" --include="*.dart" --include="*.ts" lib/ functions/src/ services/
-  ```
-- [ ] No TODO without a linked issue:
-  ```bash
-  grep -rn "TODO\|FIXME" --include="*.dart" --include="*.ts" lib/ functions/src/
-  ```
-- [ ] Version bump correct (if release):
-  - Flutter: `pubspec.yaml` `version: x.y.z+build`
-  - Functions: `package.json` version
-- [ ] Changelog updated (if maintained).
-- [ ] Spec/plan marked "Implemented".
-
-### Security
-
-- [ ] No hardcoded secrets:
-  ```bash
-  grep -rEn "(api[_-]?key|secret|password|token)\s*=\s*['\"][^'\"]{10,}" --include="*.dart" --include="*.ts" lib/ functions/src/
-  ```
-- [ ] `.env*` not staged:
-  ```bash
-  git ls-files | grep -E "\.env($|\.)"
-  # Expect: empty (only .env.example allowed)
-  ```
-- [ ] Service account JSON, keystore not staged:
-  ```bash
-  git ls-files | grep -iE "(serviceaccount|firebase-adminsdk|\.keystore$|\.jks$|google-services\.json|GoogleService-Info\.plist)"
-  # Expect: empty
-  ```
-
-## Path A: Flutter mobile app
-
-### A.1 Android (Play Store / APK)
-
-```bash
-# Build release APK
-flutter build apk --release
-
-# Or App Bundle for Play Store
-flutter build appbundle --release
+```pwsh
+git -C <repo> branch --show-current
+git -C <repo> status --short          # MUST be empty
+git -C <repo> log -1 --oneline
 ```
 
-**Verify:**
-- [ ] Exit 0.
-- [ ] Output `build/app/outputs/bundle/release/app-release.aab` reasonable size.
-- [ ] Test the AAB on emulator/device:
-  ```bash
-  flutter install
+### 2. Sanity checks
+
+- [ ] All tests pass (per stack — see `/test` workflow):
+  - Flutter: `flutter test ; flutter analyze`
+  - FastAPI: `pytest`
+  - Express: `npm test ; npm run lint`
+  - React: `npm test ; npm run lint`
+- [ ] No secret committed:
+  ```pwsh
+  git -C <repo> ls-files | Select-String -Pattern "(\.env$|prod\.env|serviceaccount|\.keystore$|\.jks$|google-services\.json|GoogleService-Info\.plist)"
+  # Empty = OK. If anh's stack drops Firebase later, remove google-services entries.
+  # Expect: empty
   ```
-- [ ] Smoke test: login, post, feed, push notification.
+- [ ] Migration / schema change committed (if applicable) — see Path E.
+- [ ] CHANGELOG / release note updated.
+- [ ] Rollback plan written (commit hash to revert to + DB rollback script).
 
-**Upload to Play Console:**
-- Manual upload via dashboard, or use `fastlane` if set up.
-- **Internal testing track** before production.
-- Release notes: use a template, link to spec.
+### 3. Backup tag
 
-### A.2 iOS (App Store / TestFlight) — _DEFERRED per ADR-0002_
+```pwsh
+git -C <repo> tag pre-deploy-$(Get-Date -Format yyyy-MM-dd-HHmm)
+git -C <repo> push origin --tags
+```
 
-> **Skip this section for MVP.** iOS targeting is out of scope until post-MVP. Content kept as future reference. Do **NOT** run `flutter build ipa` in CI or locally during MVP.
+## Path A: Mobile app (Flutter — health_system)
 
-<details>
-<summary>Future reference (post-MVP, after ADR-0002 is revisited)</summary>
+### Build release
 
-```bash
-# Build release IPA
+```pwsh
+cd d:\DoAn2\VSmartwatch\health_system
+
+# Bump version in pubspec.yaml first: version: X.Y.Z+build
+flutter clean   # only if pubspec or platform/native changed (per anh's rule, confirm before run)
+flutter pub get
+
+# Android
+flutter build apk --release
+flutter build appbundle --release
+
+# iOS (requires macOS + Xcode)
 flutter build ipa --release
 ```
 
-**Verify:**
-- [ ] Exit 0.
-- [ ] Output `build/ios/ipa/*.ipa`.
-- [ ] Open Xcode → Window → Organizer → Validate.
-- [ ] Distribute App → App Store Connect.
+### Pre-store checklist
 
-**TestFlight:**
-- Upload via Xcode or `Transporter` app.
-- **TestFlight internal** test before public release.
-- App Review usually 1-3 days.
+- [ ] App icon + splash updated.
+- [ ] Manifest permissions reviewed (location, FCM, sensor, full-screen intent).
+- [ ] ProGuard/R8 rules don't strip needed classes (test release APK on device).
+- [ ] Release notes drafted (Vietnamese + English).
+- [ ] Screenshots updated for store listing.
 
-</details>
+### Submit
 
-## Path B: Firebase Cloud Functions
+**TODO (anh fill in):** anh's chosen track — Internal testing → Closed beta → Production?
 
-```bash
-cd firebase/functions
+```pwsh
+# Google Play (TODO: chosen workflow — Play Console upload manual hay fastlane?)
+# fastlane supply --apk build/app/outputs/bundle/release/app-release.aab --track internal
+
+# App Store (TODO: chosen workflow)
+# fastlane pilot upload
+```
+
+### Post-deploy
+
+- Monitor crash reports (FCM error, native crash) for 24h.
+- Smoke test: install fresh on test device, login, trigger fall, confirm SOS.
+- Rollback: previous version on Play Console (re-promote old AAB).
+
+## Path B: Admin Backend (Express+Prisma — HealthGuard/backend)
+
+```pwsh
+cd d:\DoAn2\VSmartwatch\HealthGuard\backend
 npm install
-npm run build
+npm run lint
 npm test
 ```
 
-**Pre-deploy:**
-- [ ] Tests pass.
-- [ ] TypeScript compiles clean (`npm run build` exit 0).
-- [ ] Region correct in code (`asia-southeast1` for VN users).
-- [ ] Secrets exist in Secret Manager:
-  ```bash
-  gcloud secrets list --project=meep-prod
+### Migration first (if schema change)
+
+```pwsh
+# Production migration — verify staging worked
+npx prisma migrate deploy
+```
+
+⚠️ **Cấm:** `prisma migrate dev` against production. `dev` shadow-DB pattern is destructive.
+
+### Deploy
+
+**TODO (anh fill in):** anh's chosen hosting:
+- Option 1: VPS + PM2 + Nginx reverse proxy
+- Option 2: Docker + Docker Compose
+- Option 3: Render / Railway / Fly.io PaaS
+- Option 4: AWS EC2 / ECS
+
+```pwsh
+# Example for PM2 (placeholder)
+# ssh user@server
+# git pull
+# npm ci --production
+# npx prisma migrate deploy
+# npx prisma generate
+# pm2 reload ecosystem.config.js --env production
+```
+
+### Post-deploy
+
+- [ ] Endpoint smoke test:
+  ```pwsh
+  curl -i https://<api-domain>/health
+  curl -i -H "Authorization: Bearer <admin-jwt>" https://<api-domain>/api/admin/users
   ```
+- [ ] Log monitor 15-30 min: no new error patterns.
+- [ ] DB connection healthy (Prisma logs no `Cannot reach database`).
+- [ ] Audit log entries normal rate.
 
-**Deploy staging first:**
+### Rollback
 
-```bash
-firebase deploy --only functions --project meep-staging
+```pwsh
+# Revert app code
+git -C <repo> revert <bad-commit>
+# OR redeploy previous tag
+
+# Revert migration (if needed — DESTRUCTIVE)
+# Manual SQL rollback per migration file
 ```
 
-**Verify staging:**
-- [ ] Deploy log: no errors.
-- [ ] Function logs clean after a test request:
-  ```bash
-  firebase functions:log --project meep-staging --limit 50
-  ```
-- [ ] Smoke test: trigger a real function from the staging app.
+## Path C: Admin Frontend (React+Vite — HealthGuard/frontend)
 
-**Deploy production:**
-
-⚠️ **Confirm with the user before running:**
-
-```bash
-firebase deploy --only functions --project meep-prod
+```pwsh
+cd d:\DoAn2\VSmartwatch\HealthGuard\frontend
+npm install
+npm run lint
+npm test
+npm run build           # outputs dist/
 ```
 
-**Post-deploy production:**
-- [ ] Monitor logs for 15-30 minutes:
-  ```bash
-  firebase functions:log --project meep-prod --limit 100
-  ```
-- [ ] Check error rate in Firebase Console > Functions.
-- [ ] Smoke test critical functions from prod app.
+**TODO (anh fill in):** static host:
+- Option 1: Nginx serve dist/ on same VPS as backend
+- Option 2: S3 + CloudFront
+- Option 3: Vercel / Netlify
 
-## Path C: Firestore / Storage rules
-
-⚠️ **Rules deploy = immediate production impact.**
-
-```bash
-# Test rules in emulator first
-firebase emulators:exec --only firestore "npm run test:rules"
+```pwsh
+# Example — rsync to VPS
+# rsync -av --delete dist/ user@server:/var/www/healthguard-admin/
+# Or: aws s3 sync dist/ s3://<bucket> --delete --cache-control "max-age=31536000"
 ```
 
-**Verify:**
-- [ ] Rules unit tests pass.
-- [ ] Re-read rules — any `allow ... if true`?
+### Post-deploy
 
-**Deploy staging:**
+- [ ] Hard reload `/` — no console error, no 404 for assets.
+- [ ] Login flow works.
+- [ ] WebSocket reconnects (vital monitor page).
+- [ ] No CORS error in browser console.
 
-```bash
-firebase deploy --only firestore:rules,storage --project meep-staging
+## Path D: FastAPI services (health_system/backend, healthguard-model-api, Iot_Simulator_clean)
+
+```pwsh
+cd d:\DoAn2\VSmartwatch\<repo>
+pytest
+black --check . ; isort --check-only .
 ```
 
-**Verify staging:** test auth/post/friend flows on the staging app.
+### Build container (recommended)
 
-**Deploy production:**
-
-⚠️ **Confirm with the user:**
-
-```bash
-firebase deploy --only firestore:rules,storage --project meep-prod
+```pwsh
+# TODO: Dockerfile per repo not yet committed — anh chuẩn bị khi deploy
+# docker build -t healthguard/<repo>:<version> .
+# docker push <registry>/healthguard/<repo>:<version>
 ```
 
-**Rollback if something goes wrong:**
+### Deploy
 
-```bash
-# Get previous deployed rules
-firebase firestore:rules:list --project meep-prod
-# Restore old version via Firebase Console or redeploy the old file
+**TODO (anh fill in):** chosen hosting:
+- Option 1: Docker on VPS (same as Path B)
+- Option 2: PaaS (Render, Railway)
+- Option 3: AWS Lambda (for stateless model-api)
+
+```pwsh
+# Generic systemd reload
+# ssh user@server
+# cd /opt/<repo>
+# git pull
+# pip install -r requirements.txt
+# systemctl reload <repo>.service
 ```
 
-## Path D: Firestore indexes
+### Post-deploy
 
-```bash
-firebase deploy --only firestore:indexes --project meep-prod
+- [ ] `/health` endpoint returns 200.
+- [ ] Test endpoint with sample payload + valid auth header.
+- [ ] Log monitor 15 min: no new error.
+- [ ] Cross-repo dependency check:
+  - mobile-backend deploys → check IoT sim still triggers correctly
+  - model-api deploys → check mobile-backend can call predict endpoint
+
+## Path E: Database migration (Postgres)
+
+⚠️ **Schema change = highest risk.** Test against test DB first.
+
+### Steps
+
+1. **Write migration file:**
+   - Prisma (HealthGuard): `npx prisma migrate dev --name <desc>` (creates `prisma/migrations/.../migration.sql`)
+   - Raw SQL (FastAPI repos): write `PM_REVIEW/SQL SCRIPTS/migrations/YYYYMMDD_<desc>.sql`
+2. **Update canonical schema:** `PM_REVIEW/SQL SCRIPTS/init_full_setup.sql` reflects post-migration state.
+3. **Test against test DB:**
+   ```pwsh
+   psql -h localhost -U test -d test_db -f migration.sql
+   ```
+4. **Backup production DB:**
+   ```pwsh
+   pg_dump -h <host> -U <user> -d <db> -F c -f backup-$(Get-Date -Format yyyyMMdd-HHmm).dump
+   ```
+5. **Run on production:**
+   ```pwsh
+   # Prisma
+   npx prisma migrate deploy
+   
+   # Raw SQL
+   psql -h <host> -U <user> -d <db> -f migration.sql
+   ```
+6. **Verify:**
+   ```pwsh
+   psql -h <host> -U <user> -d <db> -c "\d <table>"
+   psql -h <host> -U <user> -d <db> -c "SELECT COUNT(*) FROM <table>"
+   ```
+
+### Rollback (DESTRUCTIVE — verify backup first)
+
+```pwsh
+# Restore from dump
+pg_restore -h <host> -U <user> -d <db> --clean backup.dump
 ```
 
-Index build can be slow (minutes to hours depending on data size). Monitor:
-
-```bash
-firebase firestore:indexes --project meep-prod
+OR write reverse migration SQL (preferable — non-destructive):
+```sql
+-- migrations/YYYYMMDD_revert_<desc>.sql
+ALTER TABLE ... DROP COLUMN ...;
 ```
 
-## Post-deploy monitoring
+## Cross-repo deploy order (full system update)
 
-**First 24 hours after deploy:**
+When change affects multiple repos:
 
-- [ ] Crashlytics: no error spike.
-- [ ] Firebase Analytics: new feature getting hits?
-- [ ] Firestore reads/writes: no abnormal spikes.
-- [ ] Function invocations: success rate, p99 latency.
-- [ ] User feedback (if you have a channel).
+1. **PM_REVIEW** — UC, SRS, SQL canonical (no runtime impact, safe first).
+2. **DB migration** — Path E, with backup.
+3. **Producer side** — repo that EXPOSES the new contract:
+   - Backend new endpoint → deploy backend first.
+   - Model API new prediction → deploy model-api first.
+4. **Consumer side** — repo that CALLS the new contract:
+   - Mobile calls backend → deploy backend, THEN mobile.
+   - Backend calls model-api → deploy model-api, THEN backend.
+5. **E2E smoke test** — full flow from device → backend → model → response.
+6. **Tag release:**
+   ```pwsh
+   foreach ($r in @('HealthGuard','health_system','...')) {
+     git -C $r tag release-<feature>-$(date +%Y%m%d)
+     git -C $r push origin --tags
+   }
+   ```
 
-## Rollback plan
+## Apply skill `verification-before-completion`
 
-**Mobile app:**
-- Play Store: pause rollout, deploy old version with version bump.
-- App Store: TestFlight not revertible; for production, expedited review of old version.
+Before claiming "deployed":
 
-**Functions:**
-```bash
-git checkout <previous-good-sha> -- firebase/functions
-cd firebase/functions
-npm install && npm run build
-firebase deploy --only functions --project meep-prod
-git checkout develop -- firebase/functions  # restore code state (or deploy if production)
-```
-
-**Rules:**
-- Restore from history via Firebase Console.
-- Or commit a revert + redeploy:
-  ```bash
-  git revert <bad-sha>
-  firebase deploy --only firestore:rules,storage --project meep-prod
-  ```
-
-## Tag the release
-
-After confirming the deploy is stable (24h+):
-
-```bash
-git tag -a v1.2.0 -m "Release: feature X, fix Y"
-git push origin v1.2.0
-```
+| Claim | Required evidence |
+|---|---|
+| "Deployed to staging" | Smoke test endpoint returns 200 + correct shape |
+| "Deployed to prod" | Same + log monitor 15-30 min clean |
+| "Migration applied" | DB query confirms new column/index exists |
+| "Rollback works" | Tested rollback on staging FIRST |
 
 ## Anti-patterns
 
-| Anti-pattern | Problem |
+| Anti-pattern | Risk |
 |---|---|
-| Deploy direct to prod, skip staging | Bugs land in users' hands |
-| Deploy on Friday afternoon / weekend | No one to monitor |
-| Skip post-deploy monitoring | Latent bugs go undetected |
-| Force deploy bypassing tests | False confidence |
-| `firebase deploy` without `--project` | Might deploy to the wrong project |
-| Push uncommitted code to prod | Can't trace deployed code |
+| Deploy without staging | Bug discovered by users, not by you |
+| Migration without backup | Data loss = catastrophe (medical app) |
+| Deploy app before BE contract | Mobile app crashes on launch |
+| Skip log monitor | Errors discovered hours later when escalated |
+| Deploy on Friday evening | Weekend rollback nightmare |
+| Hardcode prod URL/secret | Leaked = security breach |
+| Skip rollback plan | "Hope" is not a strategy |
 
-## Output
+## Open TODOs for anh
 
-- ✅ Pre-deploy checklist 100% pass.
-- ✅ Staging deploy + smoke test pass.
-- ✅ Production deploy successful, logs clean for 30 minutes.
-- ✅ Release tagged in git.
-- ✅ Monitored 24h, no critical issues.
+When deploy strategy is finalized, update this workflow + write ADR:
+
+- [ ] `PM_REVIEW/ADR/<num>-deploy-strategy.md` — record actual hosting + rationale.
+- [ ] Replace TODO blocks with real commands.
+- [ ] CI/CD pipeline (optional) — GitHub Actions per repo.
+- [ ] Secret management — anh's chosen secret store (env file, AWS Secrets Manager, Doppler).
+- [ ] Monitoring tool — anh's chosen (Sentry for Flutter? Sentry/Datadog for BE? simple log file?).
