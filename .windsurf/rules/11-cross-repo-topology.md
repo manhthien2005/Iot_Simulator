@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: Cross-repo data flow and integration boundaries (mobile -> backend -> model API, IoT sim, admin web). Apply when feature touches >1 repo, when changing API contracts, or when debugging cross-repo data flow.
 ---
 
 # Cross-Repo Topology — Data Flow

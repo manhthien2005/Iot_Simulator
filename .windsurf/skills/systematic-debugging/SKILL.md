@@ -5,7 +5,7 @@ description: Use when encountering any bug, test failure, or unexpected behavior
 
 # Systematic Debugging
 
-> Adapted from `superpowers/skills/systematic-debugging`. Trimmed for solo Flutter+Firebase workflow.
+> Adapted from `superpowers/skills/systematic-debugging`. Trimmed for VSmartwatch multi-stack workflow (Flutter + FastAPI + Express+Prisma + React).
 
 ## Core principle
 
@@ -45,15 +45,16 @@ Phase 1 not done → no fix proposals.
    - The error happens at line X, value Y is wrong.
    - Where does Y come from? Which function sets Y? Which caller passes Y?
    - Trace back to the **real source** of the bad data — don't stop at the first non-null caller.
-5. **Multi-component system** (UI → controller → repo → Firestore → rules):
+5. **Multi-component system** (Mobile UI → dio → FastAPI → asyncpg → Postgres, or Admin UI → axios → Express → Prisma → Postgres):
    - Add a log/print at each boundary.
    - Run once to find WHERE it fails.
    - Then focus the investigation on that component.
+   - For cross-repo bugs (mobile → BE → model API): trace request_id through logs end-to-end.
 
 ### Phase 2 — Pattern analysis
 
 1. **Find similar working code** in the same codebase. Compare.
-2. **Read the full reference** if you're following a pattern (Flutter docs, Firebase docs) — don't skim.
+2. **Read the full reference** if you're following a pattern (Flutter docs, FastAPI docs, Prisma docs) — don't skim.
 3. **List every difference** between working and broken code, no matter how small. Don't assume "that doesn't matter".
 4. **Understand dependencies** — config, env, version, platform-specific.
 
@@ -116,9 +117,11 @@ First-time fix rate: 95% vs 40%.
 | **3. Hypothesis** | Form theory, test minimally | Confirmed or new theory |
 | **4. Fix** | Reproduction test → fix root → verify | Bug gone, tests pass |
 
-## Applied to Meep
+## Applied to VSmartwatch
 
-- **Flutter widget doesn't rebuild:** trace from `build` method → state → notifier → repo. Don't `setState()` randomly hoping.
-- **Firestore query empty:** check rules first (debug with the emulator), check the index, check field-name typo (case-sensitive), check the query path.
-- **FCM not received:** check token registration timing → topic subscription → server payload → device foreground/background state.
-- **Flaky test:** don't retry. Find the race condition / shared state / timing assumption.
+- **Flutter widget doesn't rebuild:** trace from `build` method → Riverpod provider → notifier → repo. Don't `setState()` randomly hoping. Check `ref.watch` vs `ref.read`.
+- **FastAPI endpoint returns 422:** check Pydantic schema first (field name typo? type mismatch? missing required?), then router signature, then dependency `Depends()` order.
+- **Prisma query returns empty:** check `where` clause for type coercion (string vs int IDs), check Prisma schema indexes, check soft-delete `deletedAt` filter.
+- **FCM not received:** check token registration timing → topic subscription → backend payload format → device foreground/background state → FCM project ID match.
+- **Cross-repo flow broken:** add request_id at producer (FastAPI), propagate through downstream service calls, check log of each repo for that request_id to localize fail point.
+- **Flaky test:** don't retry. Find the race condition / shared state / timing assumption (often missing `await` in Dart, missing `awaitable` mock in Python).

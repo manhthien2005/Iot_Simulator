@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: Branch naming, commit message format (Conventional Commits), versioning, and migration discipline. Apply when creating branches, writing commit messages, opening PRs, or running migrations.
 ---
 
 # Stack Conventions — Branching, Commits, Versioning

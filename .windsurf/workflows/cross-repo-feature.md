@@ -142,7 +142,7 @@ Commit + push branch in PM_REVIEW.
 ### Step 5.2 — DB migration (HealthGuard or PM_REVIEW SQL)
 
 ```pwsh
-cd HealthGuard\backend
+# cwd: HealthGuard\backend
 npx prisma migrate dev --name add_fall_severity
 # Migration auto-generated in prisma/migrations/
 
@@ -159,7 +159,7 @@ Implement Pydantic schema + service + router per `/build` workflow + skill `fast
 
 **Verification:**
 ```pwsh
-cd <producer-repo>
+# cwd: <producer-repo>
 pytest tests/test_fall_severity.py
 uvicorn app.main:app --port 8000
 # Manual: curl test endpoint with valid X-Internal-Secret + sample payload

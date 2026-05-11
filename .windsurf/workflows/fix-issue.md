@@ -23,7 +23,7 @@ End-to-end fix for a specific issue: bug report, Logcat/console error, user comp
    ```
    If exists → list prior failed approaches. DO NOT retry them.
    If non-trivial bug + no log → create one (skill `bug-log`).
-4. **New branch** from correct trunk (deploy/develop/master/main per repo):
+4. **New branch** from correct trunk (develop/master/main per repo — see rule 10):
    ```pwsh
    git -C <repo> checkout <trunk>
    git -C <repo> pull origin <trunk>

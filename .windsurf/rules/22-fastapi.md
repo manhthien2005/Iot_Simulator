@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: glob
+globs: backend/**/*.py,app/**/*.py,api_server/**/*.py,tests/**/*.py,requirements.txt,pyproject.toml,**/conftest.py
 ---
 
 # FastAPI Rules — Python Backend

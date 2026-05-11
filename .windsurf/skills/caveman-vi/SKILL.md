@@ -7,7 +7,7 @@ description: Ultra-compressed Vietnamese mode. ONLY activate when the user types
 
 Caveman mode — extremely short replies, technical content preserved, all filler stripped. Output language stays **Vietnamese**.
 
-> Adapted from `caveman/.windsurf/skills/caveman/SKILL.md`. Localized for Vietnamese output and tuned for Meep.
+> Adapted from `caveman/.windsurf/skills/caveman/SKILL.md`. Localized for Vietnamese output and tuned for VSmartwatch.
 
 ## Activation
 
@@ -83,10 +83,12 @@ If you are about to:
 
 Example:
 
-> ⚠️ **Cảnh báo:** Lệnh sau xoá toàn bộ Firestore production database, không revert được:
+> ⚠️ **Cảnh báo:** Lệnh sau xoá toàn bộ Postgres production database, không revert được:
 >
 > ```bash
-> firebase firestore:delete --all-collections --project meep-prod
+> npx prisma migrate reset --force
+> # hoặc
+> psql -h prod-host -U admin -d healthguard -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 > ```
 >
 > Anh đã backup chưa? Confirm "yes, deleted backup verified" để em chạy.

@@ -70,50 +70,48 @@ Each step = 1 action ~2-5 minutes:
 ### Task N: [Component name]
 
 **Files:**
-- Create: `apps/mobile/lib/features/feed/data/post_repository.dart`
-- Create: `apps/mobile/test/features/feed/post_repository_test.dart`
-- Modify: `apps/mobile/lib/features/feed/feed.dart` (add export)
+- Create: `health_system/lib/features/emergency/data/sos_repository.dart`
+- Create: `health_system/test/features/emergency/sos_repository_test.dart`
+- Modify: `health_system/lib/features/emergency/emergency.dart` (add export)
 
 **Dependencies:** Task 1, 2
 
 - [ ] **Step 1: Write failing test**
 
 ```dart
-test('createPost saves to Firestore with serverTimestamp', () async {
-  final repo = PostRepository(firestore: fakeFirestore);
-  await repo.createPost(authorId: 'u1', caption: 'hello', imageUrl: 'x.jpg');
-  final docs = await fakeFirestore.collection('posts').get();
-  expect(docs.docs.length, 1);
-  expect(docs.docs.first.data()['createdAt'], isNotNull);
+test('confirmSOS posts to backend with userId + timestamp', () async {
+  final dio = MockDio();
+  final repo = SosRepository(dio: dio);
+  when(() => dio.post(any(), data: any(named: 'data')))
+      .thenAnswer((_) async => Response(requestOptions: RequestOptions(path: ''), statusCode: 200, data: {'id': 'sos-1'}));
+  final result = await repo.confirmSOS(userId: 'u1');
+  expect(result.id, 'sos-1');
+  verify(() => dio.post('/api/mobile/sos/confirm', data: {'userId': 'u1'})).called(1);
 });
 ```
 
 - [ ] **Step 2: Run test, confirm FAIL**
 
 ```bash
-flutter test test/features/feed/post_repository_test.dart
+# cwd: d:\DoAn2\VSmartwatch\health_system
+flutter test test/features/emergency/sos_repository_test.dart
 ```
 
-Expected: FAIL — `PostRepository` not defined.
+Expected: FAIL — `SosRepository` not defined.
 
 - [ ] **Step 3: Implement minimal**
 
 ```dart
-class PostRepository {
-  PostRepository({required this.firestore});
-  final FirebaseFirestore firestore;
+class SosRepository {
+  SosRepository({required this.dio});
+  final Dio dio;
 
-  Future<void> createPost({
-    required String authorId,
-    required String caption,
-    required String imageUrl,
-  }) async {
-    await firestore.collection('posts').add({
-      'authorId': authorId,
-      'caption': caption,
-      'imageUrl': imageUrl,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+  Future<SosResult> confirmSOS({required String userId}) async {
+    final res = await dio.post(
+      '/api/mobile/sos/confirm',
+      data: {'userId': userId},
+    );
+    return SosResult(id: res.data['id']);
   }
 }
 ```
@@ -121,7 +119,7 @@ class PostRepository {
 - [ ] **Step 4: Run test, confirm PASS**
 
 ```bash
-flutter test test/features/feed/post_repository_test.dart
+flutter test test/features/emergency/sos_repository_test.dart
 ```
 
 Expected: PASS 1/1.
@@ -129,8 +127,8 @@ Expected: PASS 1/1.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/mobile/lib/features/feed/ apps/mobile/test/features/feed/
-git commit -m "feat(feed): add PostRepository.createPost"
+git add health_system/lib/features/emergency/ health_system/test/features/emergency/
+git commit -m "feat(emergency): them SosRepository.confirmSOS"
 ```
 ```
 
@@ -161,9 +159,9 @@ Order tasks by:
    Task 3: Create all UI
 
 ✅ Vertical (correct):
-   Task 1: User can create one post (Firestore + repo + controller + UI)
-   Task 2: User can view the feed (query + UI)
-   Task 3: User can like a post (FieldValue.increment + UI)
+   Task 1: User can confirm SOS from countdown dialog (UI + repo + backend POST + Postgres insert)
+   Task 2: User can cancel SOS during countdown (UI + repo + backend cancel endpoint)
+   Task 3: Family contact gets FCM notification on SOS (backend trigger + FCM payload + mobile foreground handler)
 ```
 
 ## Checkpoints

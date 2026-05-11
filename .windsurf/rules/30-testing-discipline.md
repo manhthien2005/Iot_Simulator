@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: Test pyramid per stack (Flutter/FastAPI/Express+Prisma/React+Vite), boundary testing, flaky test policy, coverage targets. Apply when writing/modifying tests, debugging test failures, or implementing TDD cycle.
 ---
 
 # Testing Discipline

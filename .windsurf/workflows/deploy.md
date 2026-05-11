@@ -47,7 +47,7 @@ git -C <repo> push origin --tags
 ### Build release
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\health_system
+# cwd: d:\DoAn2\VSmartwatch\health_system
 
 # Bump version in pubspec.yaml first: version: X.Y.Z+build
 flutter clean   # only if pubspec or platform/native changed (per anh's rule, confirm before run)
@@ -90,7 +90,7 @@ flutter build ipa --release
 ## Path B: Admin Backend (Express+Prisma — HealthGuard/backend)
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\HealthGuard\backend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\backend
 npm install
 npm run lint
 npm test
@@ -148,7 +148,7 @@ git -C <repo> revert <bad-commit>
 ## Path C: Admin Frontend (React+Vite — HealthGuard/frontend)
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\HealthGuard\frontend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\frontend
 npm install
 npm run lint
 npm test
@@ -176,7 +176,7 @@ npm run build           # outputs dist/
 ## Path D: FastAPI services (health_system/backend, healthguard-model-api, Iot_Simulator_clean)
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\<repo>
+# cwd: d:\DoAn2\VSmartwatch\<repo>
 pytest
 black --check . ; isort --check-only .
 ```

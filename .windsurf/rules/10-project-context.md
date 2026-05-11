@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: Project metadata (5 repos, paths, trunks, domain context) for VSmartwatch HealthGuard. Apply when user references repo names, paths, stack info, UC requirements, or asks about cross-repo features.
 ---
 
 # Project Context — VSmartwatch HealthGuard
@@ -52,11 +53,19 @@ Mỗi feature trải qua nhiều repo. Khi sửa 1 feature, kiểm tra cả pipe
 
 ## Khi anh request feature/bug fix
 
-Trước khi code, em phải:
+Phân loại trước khi action:
+
+### Domain feature / behavior bug (mobile UI, BE business logic, end-user flow)
 1. **Locate UC** trong `PM_REVIEW/Resources/UC/` — nếu chưa có UC, hỏi anh muốn dùng UC nào hoặc tạo mới.
 2. **Check cross-repo impact** — feature này chạm mấy repo? (xem topology.md)
 3. **Identify acceptance criteria** từ UC + JIRA story tương ứng.
 4. **Chỉ sau đó** mới đề xuất implementation plan.
+
+### Infra / tooling / test harness / CI bug (workflow, hook, sync script, gitignore, lint config)
+1. **Locate ADR** trong `PM_REVIEW/ADR/` nếu có decision liên quan.
+2. **Check workflow** trong `.windsurf/workflows/` để biết convention.
+3. **Skip UC requirement** — UC là cho domain behavior, không phải infra.
+4. Direct fix nếu trivial (typo, paths, version bump). Plan nếu structural change.
 
 ## Repo-specific overlays
 
