@@ -13,6 +13,16 @@ date_updated: "2026-03-04"
 
 Evaluate the **holistic structure and progress** of the HealthGuard project to ensure it aligns with the SRS, follows industry-standard architecture, and stays on track with JIRA sprint tasks (Epics/Stories).
 
+## Cross-skill / when to use vs others
+
+| Need | Use |
+|---|---|
+| Project-level overview (admin OR mobile, holistic) — THIS SKILL | `TongQuan` |
+| Module-level code health audit | `/audit` workflow |
+| Feature-level deep audit with 8-criteria score | `detailed-feature-review` skill |
+| Quick PR/commit review | `code-review-five-axis` skill |
+| Sync PM_REVIEW docs với code reality | `CHECK` skill |
+
 ## When to Use This Skill
 
 Automatically activates when the user wants to:

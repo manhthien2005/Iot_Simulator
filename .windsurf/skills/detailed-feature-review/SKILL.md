@@ -32,6 +32,16 @@ date_updated: "2026-03-06"
 
 Evaluate actual source code against 8 standardized criteria (100 points) to ensure every feature scores ≥76/100 before release.
 
+## Cross-skill / when to use vs others
+
+| Need | Use |
+|---|---|
+| Quick PR/commit self-review (5-min) | `code-review-five-axis` skill |
+| Feature deep audit with score + Vietnamese report (THIS SKILL) | `detailed-feature-review` |
+| Module-level code health audit (less formal) | `/audit` workflow |
+| Project-level overview (admin/mobile holistic) | `TongQuan` skill |
+| Sync PM_REVIEW docs với code reality | `CHECK` skill |
+
 # Instructions
 
 ## Step 0: Project Detection

@@ -16,6 +16,16 @@ Ensure PM_REVIEW always reflects the true state of source code by scanning
 actual project files and updating `Project_Structure.md` + `summaries/*.md`.
 One command replaces 30–60 minutes of manual cross-referencing.
 
+## Cross-skill / when to use vs others
+
+| Need | Use |
+|---|---|
+| Sync PM_REVIEW docs với code reality (THIS SKILL — utility, no scoring) | `CHECK` |
+| Project-level overview với scoring | `TongQuan` skill |
+| Module-level code health audit | `/audit` workflow |
+| Feature-level deep audit with score | `detailed-feature-review` skill |
+| Quick PR/commit review | `code-review-five-axis` skill |
+
 ---
 
 # Instructions

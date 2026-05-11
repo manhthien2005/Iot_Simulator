@@ -10,7 +10,7 @@ Hệ thống smartwatch giám sát sức khỏe người cao tuổi. Đồ án 2
 
 | Repo | Path | Vai trò | Stack | Trunk |
 |---|---|---|---|---|
-| `HealthGuard` | `d:\DoAn2\VSmartwatch\HealthGuard` | Admin web | Express + Prisma + Vite frontend | `deploy` |
+| `HealthGuard` | `d:\DoAn2\VSmartwatch\HealthGuard` | Admin web | Express + Prisma + Vite frontend | `develop` (integration) / `deploy` (release) |
 | `health_system` | `d:\DoAn2\VSmartwatch\health_system` | Mobile + Backend | Flutter 3.11 / FastAPI Python 3.11 | `develop` |
 | `Iot_Simulator_clean` | `d:\DoAn2\VSmartwatch\Iot_Simulator_clean` | IoT giả lập | Python FastAPI + simulator-web | `develop` |
 | `healthguard-model-api` | `d:\DoAn2\VSmartwatch\healthguard-model-api` | Model API | Python FastAPI + ML models | `master` |
@@ -61,3 +61,11 @@ Trước khi code, em phải:
 ## Repo-specific overlays
 
 Mỗi repo còn có thêm rules đặc thù trong `.windsurf/rules/` (số 21-25). Đọc cả overlay khi work trong repo đó.
+
+## Trunk branching note
+
+`HealthGuard` có **2 trunks**:
+- **`develop`** — integration branch. Mọi PR merge vào đây. Em PHẢI branch feature/fix/chore từ `develop`.
+- **`deploy`** — release branch. Anh manual promote từ `develop` khi muốn release. Em KHÔNG tự ý merge `develop` → `deploy`.
+
+Các repos khác có single trunk (xem table trên).
