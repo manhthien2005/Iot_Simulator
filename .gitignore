@@ -80,3 +80,20 @@ datasets/
 # Normalized ETL artifacts — committed to repo for tester convenience
 # To rebuild locally: python etl_pipeline/normalize.py
 # normalized_artifacts/
+# === AI tooling artifacts (managed by .windsurf-template) ===
+.claude/
+.code-review-graph/
+.codex_appdata/
+.codex
+.cursor/
+.gitnexus/
+.roo/
+.rooignore
+.roomodes
+.worktrees/
+roo-code-settings-optimized.json
+AGENTS.md
+CLAUDE.md
+progress.md
+task_plan.md
+
