@@ -29,6 +29,12 @@ import sys
 # ---- Trunks per repo (per ADR-003: HealthGuard = develop) -----------------
 TRUNK_BRANCHES = frozenset({"main", "master", "develop", "deploy", "production", "prod", "release"})
 
+# ---- Reusable git prefix that handles `git -C <repo>` variants ------------
+# Matches: "git ", "git -C path ", "git -C \"path with space\" ", "git -C 'path' "
+# Used in CONFIRMED_PATTERNS so subcommand checks (push --force, reset --hard,
+# clean -fdx) work regardless of whether `-C <repo>` is present.
+GIT_PREFIX = r"\bgit\s+(?:-C\s+(?:\"[^\"]+\"|'[^']+'|\S+)\s+)?"
+
 # ---- Patterns that are ALWAYS blocked (no override) -----------------------
 HARD_BLOCK_PATTERNS: list[tuple[str, str]] = [
     (r"\brm\s+-[rRf]+\s+/(?:\s|$)", "rm -rf / (recursive root delete)"),
@@ -65,7 +71,7 @@ HARD_BLOCK_PATTERNS: list[tuple[str, str]] = [
 # Token is scoped per-pattern. "# CONFIRMED-GIT-CLEAN" does NOT bypass "git push --force".
 CONFIRMED_PATTERNS: list[tuple[str, str, str, str]] = [
     (
-        r"\bgit\s+push\s+(?:.*\s)?(?:-f|--force|--force-with-lease)\b",
+        rf"{GIT_PREFIX}push\s+(?:.*\s)?(?:-f|--force|--force-with-lease)\b",
         "git push --force",
         "CONFIRMED-FORCE-PUSH",
         "Add `# CONFIRMED-FORCE-PUSH` to the command, OR use --force-with-lease on a feature branch.",
@@ -95,7 +101,7 @@ CONFIRMED_PATTERNS: list[tuple[str, str, str, str]] = [
         "Add `# CONFIRMED-PUB-PUBLISH` if intentional.",
     ),
     (
-        r"\bgit\s+reset\s+(?:.*\s)?--hard\b",
+        rf"{GIT_PREFIX}reset\s+(?:.*\s)?--hard\b",
         "git reset --hard (destructive — drops uncommitted work)",
         "CONFIRMED-RESET-HARD",
         "Add `# CONFIRMED-RESET-HARD` if you really want to discard local changes.",
@@ -107,7 +113,7 @@ CONFIRMED_PATTERNS: list[tuple[str, str, str, str]] = [
         "Add `# CONFIRMED-FLUTTER-CLEAN` if you intentionally want to wipe build cache.",
     ),
     (
-        r"\bgit\s+clean\s+-[fdx]+",
+        rf"{GIT_PREFIX}clean\s+-[fdx]+",
         "git clean -fdx (deletes untracked files including ignored)",
         "CONFIRMED-GIT-CLEAN",
         "Add `# CONFIRMED-GIT-CLEAN` if intentional.",
