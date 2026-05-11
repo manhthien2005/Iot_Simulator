@@ -33,35 +33,37 @@ Wrote code before the test? Delete it. Start over from the test.
 ### 1. RED — Write a failing test
 
 ```dart
-// Flutter example
-test('rejects post with empty caption', () async {
-  final controller = PostController(repo: FakePostRepository());
-  final result = await controller.createPost(caption: '', imageUrl: 'x.jpg');
+// Flutter example - VSmartwatch SOS confirm flow
+test('SosController rejects confirm when no active fall event', () async {
+  final controller = SosController(repo: FakeSosRepository(activeFall: null));
+  final result = await controller.confirmSOS();
   expect(result.isFailure, true);
-  expect(result.error, isA<EmptyCaptionError>());
+  expect(result.error, isA<NoActiveFallError>());
 });
 ```
 
 ```ts
-// Functions / BE example
-test('returns 400 when authorId missing', async () => {
-  const res = await request(app).post('/posts').send({ caption: 'hi' });
+// Express+Prisma example - VSmartwatch admin device endpoint
+test('returns 400 when imei missing', async () => {
+  const res = await request(app).post('/api/admin/devices').send({ name: 'watch-1' });
   expect(res.status).toBe(400);
-  expect(res.body.error).toBe('authorId required');
+  expect(res.body.error).toBe('imei required');
 });
 ```
 
 **Requirements:**
 - One behavior per test.
 - A clear name (describes behavior, not implementation).
-- Real-ish code where possible (`fake_cloud_firestore`, in-memory fakes — not full mocking of everything).
+- Real-ish code where possible (in-memory fakes for repos, mocked dio responses, test Postgres for Express+Prisma — not full mocking of everything).
 
 ### 2. Verify RED — run the test, watch it fail
 
 ```bash
-flutter test test/features/feed/post_controller_test.dart
-# or
-npm test -- post_controller.test.ts
+# cwd: d:\DoAn2\VSmartwatch\health_system
+flutter test test/features/emergency/sos_controller_test.dart
+# or for FastAPI BE
+# cwd: d:\DoAn2\VSmartwatch\health_system\backend
+pytest tests/test_sos_service.py::test_rejects_when_no_active_fall
 ```
 
 **Confirm:**
@@ -76,13 +78,14 @@ npm test -- post_controller.test.ts
 Write only enough code for the test to pass. No extra options, no abstractions, no "for later" code.
 
 ```dart
-class PostController {
-  Future<Result<Post, AppError>> createPost({
-    required String caption,
-    required String imageUrl,
-  }) async {
-    if (caption.isEmpty) return Result.failure(EmptyCaptionError());
-    // ... minimal happy path
+class SosController {
+  SosController({required this.repo});
+  final SosRepository repo;
+
+  Future<Result<SosConfirmation, AppError>> confirmSOS() async {
+    final activeFall = await repo.getActiveFall();
+    if (activeFall == null) return Result.failure(NoActiveFallError());
+    return Result.success(await repo.confirmSOS(fallId: activeFall.id));
   }
 }
 ```
@@ -106,8 +109,8 @@ flutter test  # full suite
 ### 6. Commit
 
 ```bash
-git add tests/... lib/...
-git commit -m "feat(feed): reject empty caption in createPost"
+git add test/features/emergency/ lib/features/emergency/
+git commit -m "feat(emergency): tu choi confirmSOS khi khong co fall event active"
 ```
 
 ### 7. Loop

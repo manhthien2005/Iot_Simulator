@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: Project metadata (5 repos, paths, trunks, domain context) for VSmartwatch HealthGuard. Apply when user references repo names, paths, stack info, UC requirements, or asks about cross-repo features.
 ---
 
 # Project Context — VSmartwatch HealthGuard
@@ -10,7 +11,7 @@ Hệ thống smartwatch giám sát sức khỏe người cao tuổi. Đồ án 2
 
 | Repo | Path | Vai trò | Stack | Trunk |
 |---|---|---|---|---|
-| `HealthGuard` | `d:\DoAn2\VSmartwatch\HealthGuard` | Admin web | Express + Prisma + Vite frontend | `develop` (integration) / `deploy` (release) |
+| `HealthGuard` | `d:\DoAn2\VSmartwatch\HealthGuard` | Admin web | Express + Prisma + Vite frontend | `develop` |
 | `health_system` | `d:\DoAn2\VSmartwatch\health_system` | Mobile + Backend | Flutter 3.11 / FastAPI Python 3.11 | `develop` |
 | `Iot_Simulator_clean` | `d:\DoAn2\VSmartwatch\Iot_Simulator_clean` | IoT giả lập | Python FastAPI + simulator-web | `develop` |
 | `healthguard-model-api` | `d:\DoAn2\VSmartwatch\healthguard-model-api` | Model API | Python FastAPI + ML models | `master` |
@@ -52,20 +53,20 @@ Mỗi feature trải qua nhiều repo. Khi sửa 1 feature, kiểm tra cả pipe
 
 ## Khi anh request feature/bug fix
 
-Trước khi code, em phải:
+Phân loại trước khi action:
+
+### Domain feature / behavior bug (mobile UI, BE business logic, end-user flow)
 1. **Locate UC** trong `PM_REVIEW/Resources/UC/` — nếu chưa có UC, hỏi anh muốn dùng UC nào hoặc tạo mới.
 2. **Check cross-repo impact** — feature này chạm mấy repo? (xem topology.md)
 3. **Identify acceptance criteria** từ UC + JIRA story tương ứng.
 4. **Chỉ sau đó** mới đề xuất implementation plan.
 
+### Infra / tooling / test harness / CI bug (workflow, hook, sync script, gitignore, lint config)
+1. **Locate ADR** trong `PM_REVIEW/ADR/` nếu có decision liên quan.
+2. **Check workflow** trong `.windsurf/workflows/` để biết convention.
+3. **Skip UC requirement** — UC là cho domain behavior, không phải infra.
+4. Direct fix nếu trivial (typo, paths, version bump). Plan nếu structural change.
+
 ## Repo-specific overlays
 
 Mỗi repo còn có thêm rules đặc thù trong `.windsurf/rules/` (số 21-25). Đọc cả overlay khi work trong repo đó.
-
-## Trunk branching note
-
-`HealthGuard` có **2 trunks**:
-- **`develop`** — integration branch. Mọi PR merge vào đây. Em PHẢI branch feature/fix/chore từ `develop`.
-- **`deploy`** — release branch. Anh manual promote từ `develop` khi muốn release. Em KHÔNG tự ý merge `develop` → `deploy`.
-
-Các repos khác có single trunk (xem table trên).

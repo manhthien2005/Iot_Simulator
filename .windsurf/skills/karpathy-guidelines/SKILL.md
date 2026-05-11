@@ -1,6 +1,6 @@
 ---
 name: karpathy-guidelines
-description: Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. Applies to ALL code work in Meep.
+description: Behavioral guidelines to reduce common LLM coding mistakes. Use when writing, reviewing, or refactoring code to avoid overcomplication, make surgical changes, surface assumptions, and define verifiable success criteria. Applies to ALL code work in VSmartwatch.
 ---
 
 # Karpathy Guidelines
@@ -68,9 +68,10 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-## Applied to Meep
+## Applied to VSmartwatch
 
-- Before writing new Dart/TS code → state assumptions (state mgmt choice, Firestore data shape, error model).
-- When editing an existing Flutter file → don't reformat, don't rename to your preferred convention.
-- When the user says "add validation to the login form" → success criteria = "tests reject empty email, invalid format, password <8 chars; all pass". Don't add rate limiting / captcha unprompted.
-- When unsure whether to use `riverpod` or `bloc` for a new feature → list 2-3 options with tradeoffs and ask.
+- Before writing new Dart/Python/JS code → state assumptions (state mgmt choice, DB schema shape via Prisma/SQL, error model, auth flow).
+- When editing an existing Flutter screen / FastAPI router / Express controller → don't reformat, don't rename to your preferred convention. Match codebase style.
+- When user says "add validation to login" → success criteria = "tests reject empty email, invalid format, password <8 chars; all pass". Don't add rate limiting / captcha unprompted (rate limit usually exists in middleware already — verify first).
+- When unsure on architectural choice (vd: notify via FCM vs WebSocket, REST vs Socket.IO event) → list 2-3 options with tradeoffs, reference UC + topology, ask anh.
+- For HealthGuard / health_system / Iot_Simulator_clean / healthguard-model-api — each has its own conventions overlay (rules 21-25). Read overlay before assuming.

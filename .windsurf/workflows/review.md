@@ -21,7 +21,7 @@ Workflow for reviewing already-written code (your own commit / branch / PR) befo
 
 1. **Spec/UC** — `<repo>/docs/specs/<feature>.md` + `PM_REVIEW/Resources/UC/<Module>/UC<XXX>.md`. Does code match acceptance criteria?
 2. **Commit messages** — what did the author (you) intend?
-3. **Diff overview** (replace `<trunk>` per repo: deploy/develop/master/main):
+3. **Diff overview** (replace `<trunk>` per repo: develop/master/main — see rule 10):
    ```pwsh
    git -C <repo> diff <trunk>...HEAD --stat
    git -C <repo> log <trunk>..HEAD --oneline
@@ -38,27 +38,29 @@ Let the machine do the easy part FIRST. Any warning/error → flag and pause det
 
 ```pwsh
 # Flutter (health_system/lib)
-cd d:\DoAn2\VSmartwatch\health_system
+# cwd: d:\DoAn2\VSmartwatch\health_system
 flutter analyze
 flutter test
 dart format --set-exit-if-changed .
 
 # FastAPI (health_system/backend, healthguard-model-api, Iot_Simulator_clean)
-cd d:\DoAn2\VSmartwatch\<repo>
+# cwd: d:\DoAn2\VSmartwatch\<repo>
 pytest
 black --check . ; isort --check-only .
 mypy app/   # if configured
 
 # Express+Prisma (HealthGuard/backend)
-cd d:\DoAn2\VSmartwatch\HealthGuard\backend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\backend
 npm test
 npm run lint
 
 # React+Vite (HealthGuard/frontend)
-cd d:\DoAn2\VSmartwatch\HealthGuard\frontend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\frontend
 npm test
 npm run lint
 ```
+
+> **Note for AI agent:** Use `Cwd` parameter when invoking `run_command` tool. Don't include `cd` in the command itself.
 
 ## Phase 3 — Manual 5-axis pass
 

@@ -56,7 +56,18 @@ Anh fix toàn bộ codebase, không có team. Vai trò của em: **senior engine
 - Tự ý `git push --force`, `git reset --hard origin/...`, `flutter clean`, `npx prisma migrate reset`, `DROP TABLE`.
 - Commit thẳng vào `develop`/`deploy`/`main`/`master` — luôn qua branch `chore/<desc>`, `feat/<desc>`, `fix/<desc>`.
 - Commit message English mô tả (chỉ type prefix English) — phải tiếng Việt.
-- **Commit file infra/config trên feature branch** — `.windsurf/`, `.github/`, `docs/adr/`, `scripts/` KHÔNG thuộc feature branch. Nếu đang ở feature → stash → tạo `chore/<desc>` từ trunk → commit ở đó.
+- **Commit file infra/config trên feature branch** — luôn infra-only paths sau KHÔNG thuộc feature branch:
+  - `.windsurf/` (workspace tooling)
+  - `.github/` (CI/PR config)
+  - `PM_REVIEW/ADR/` + `PM_REVIEW/BUGS/` (cross-session memory)
+  - `PM_REVIEW/tooling/` (template source)
+  - `.gitattributes`, `.gitignore` (repo policy)
+  - Context-dependent (verify before classifying):
+    - `scripts/` — infra ONLY if scripts là dev tooling (CI helpers, build scripts). NOT infra nếu là app runtime (vd cron jobs, data migrations, e2e test runners).
+    - `docs/` — infra ONLY nếu là project meta-docs. NOT infra nếu là feature spec/changelog.
+    - `migrations/` — NOT infra. Schema changes ARE feature work.
+  
+  Nếu đang ở feature → stash → tạo `chore/<desc>` từ trunk → commit ở đó.
 
 ## Workspace context
 

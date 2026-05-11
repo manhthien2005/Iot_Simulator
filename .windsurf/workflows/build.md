@@ -37,11 +37,12 @@ Detect current repo, then load patterns:
 git -C <repo> branch --show-current
 ```
 
-Trunk per repo (NEVER commit directly):
-- HealthGuard: `deploy`
-- health_system, Iot_Simulator_clean: `develop`
+Trunk per repo (NEVER commit directly — per ADR-003):
+- HealthGuard, health_system, Iot_Simulator_clean: `develop`
 - healthguard-model-api: `master`
 - PM_REVIEW: `main`
+
+HealthGuard `deploy` is user-owned release branch — AI never touches it.
 
 If on trunk → STOP. Create branch: `feat/<short-desc>` or `fix/<short-desc>` (English type, kebab-case, ≤ 50 chars).
 
@@ -68,7 +69,7 @@ Quick command reference:
 ### Flutter (`health_system/lib/`)
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\health_system
+# cwd: d:\DoAn2\VSmartwatch\health_system
 flutter test test/features/<area>/<file>_test.dart   # focused (RED + GREEN)
 flutter test                                          # full suite (final)
 flutter analyze                                       # zero warnings
@@ -77,7 +78,7 @@ flutter analyze                                       # zero warnings
 ### FastAPI (Python BE repos)
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\<repo>
+# cwd: d:\DoAn2\VSmartwatch\<repo>
 pytest tests/<file>::<test_name>                      # focused
 pytest                                                 # full suite
 black . ; isort .                                     # format before commit
@@ -86,7 +87,7 @@ black . ; isort .                                     # format before commit
 ### Express + Prisma (`HealthGuard/backend/`)
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\HealthGuard\backend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\backend
 npm test -- <file>.test.js                            # focused
 npm test                                               # full suite
 npm run lint                                           # zero errors
@@ -95,7 +96,7 @@ npm run lint                                           # zero errors
 ### React + Vite (`HealthGuard/frontend/`)
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\HealthGuard\frontend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\frontend
 npm test -- <component>.test.jsx                      # focused
 npm test
 npm run lint

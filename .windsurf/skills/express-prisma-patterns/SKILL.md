@@ -240,7 +240,7 @@ exports.getDeviceForUser = async (deviceId, userId) => {
 ## Migrations
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\HealthGuard\backend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\backend
 npx prisma migrate dev --name add_device_status   # dev — auto-apply
 npx prisma migrate deploy                         # production — CI/CD
 npx prisma generate                               # after schema change
@@ -348,7 +348,7 @@ Run: `npm test -- deviceService.test.js` (focused) trước `npm test` (full).
 ## Quick commands
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\HealthGuard\backend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\backend
 npm install
 npm run dev                                       # nodemon
 npx prisma generate                               # after schema change

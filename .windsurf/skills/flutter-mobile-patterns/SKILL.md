@@ -308,7 +308,7 @@ Run: `flutter test test/features/emergency/` (focused) trước `flutter test` (
 ## Quick build commands
 
 ```pwsh
-cd d:\DoAn2\VSmartwatch\health_system
+# cwd: d:\DoAn2\VSmartwatch\health_system
 flutter pub get
 flutter analyze                              # zero warnings before commit
 flutter test test/features/emergency/        # focused

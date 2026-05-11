@@ -80,20 +80,22 @@ Report by severity:
 Example:
 
 ```markdown
-## Code Review: PostRepository
+## Code Review: FallRepository (health_system mobile)
 
 ### 🔴 Critical
-- `createPost` doesn't validate `authorId` ≠ null before the query → crash if the user logs out racing with upload. Fix: throw `AppError.unauthenticated()` early.
+- `confirmSOS` doesn't validate `userId` ≠ null before the dio.post → crash if user logs out racing with countdown. Fix: throw `AppError.unauthenticated()` early in repo, OR enforce auth at controller layer before calling repo.
 
 ### 🟡 Important
-- Field `imageUrl` is stored raw from the client. If the client sends a URL outside Firebase Storage (third-party CDN) → loss of control. Suggest: validate the prefix `gs://meep-prod.appspot.com/` or upload via a Function.
+- Endpoint URL `/api/mobile/sos/confirm` hardcoded inline. If backend renames endpoint, mobile needs rebuild. Suggest: extract to `ApiPaths.sosConfirm` constant in `lib/core/network/api_paths.dart`.
+- `dio.post` not wrapped in try-catch → raw `DioException` propagates to UI. Suggest: catch + map to domain error (`Result.failure(NetworkError(...))`).
 
 ### 🟢 Suggestion
-- Magic string `'posts'` appears 3 times. Extract `static const _collection = 'posts'`.
+- Magic string `'/api/mobile/sos/confirm'` appears 2 times. Extract to constant.
 
 ### ✅ Good
-- Tests cover empty caption, max length, server timestamp.
-- Clear naming `createPost` instead of `add`.
+- Tests cover happy path, missing userId, network failure, 401 response.
+- Clear naming `confirmSOS` matches UC013 wording (not generic `submit`).
+- dio interceptor configured at app boot — no per-call boilerplate.
 ```
 
 ## Anti-patterns in review

@@ -107,8 +107,7 @@ Trunk per repo (start branch from this):
 
 | Repo | Trunk |
 |---|---|
-| HealthGuard | `deploy` |
-| health_system, Iot_Simulator_clean | `develop` |
+| HealthGuard, health_system, Iot_Simulator_clean | `develop` |
 | healthguard-model-api | `master` |
 | PM_REVIEW | `main` |
 

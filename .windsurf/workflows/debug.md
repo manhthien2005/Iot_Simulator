@@ -26,8 +26,7 @@ Use when you hit:
    ```
    If only failed approaches remain → switch to `/stuck` workflow.
 4. **Branch** (per rule 20-stack-conventions.md): `fix/<short-desc>` from correct trunk:
-   - HealthGuard → `deploy`
-   - health_system, Iot_Simulator_clean → `develop`
+   - HealthGuard, health_system, Iot_Simulator_clean → `develop`
    - healthguard-model-api → `master`
    - PM_REVIEW → `main`
 
@@ -39,24 +38,24 @@ Skill walks Phases 1-4 (root cause → pattern → hypothesis → fix). This wor
 
 ```pwsh
 # === Flutter (health_system/lib) ===
-cd d:\DoAn2\VSmartwatch\health_system
+# cwd: d:\DoAn2\VSmartwatch\health_system
 flutter test test/features/<area>/<file>_test.dart --reporter=expanded
 flutter analyze
 adb logcat | Select-String -Pattern "(HealthGuard|FATAL|ERROR)"  # mobile runtime
 
 # === FastAPI (Python BE) ===
-cd d:\DoAn2\VSmartwatch\<repo>
+# cwd: d:\DoAn2\VSmartwatch\<repo>
 pytest tests/<file>::<test> -xvs   # stop on first fail, verbose, no capture
 # Live log:
 uvicorn app.main:app --reload --log-level debug
 
 # === Express+Prisma (HealthGuard/backend) ===
-cd d:\DoAn2\VSmartwatch\HealthGuard\backend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\backend
 npm test -- <file>.test.js --verbose
 DEBUG=prisma:* npm run dev   # see all Prisma queries
 
 # === React+Vite (HealthGuard/frontend) ===
-cd d:\DoAn2\VSmartwatch\HealthGuard\frontend
+# cwd: d:\DoAn2\VSmartwatch\HealthGuard\frontend
 npm test -- <component>.test.jsx --reporter=verbose
 
 # === Recent changes (any repo) ===

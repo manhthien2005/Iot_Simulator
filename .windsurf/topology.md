@@ -7,7 +7,7 @@ Tài liệu này là **reference detailed** cho `shared/rules/11-cross-repo-topo
 
 | Repo | Vai trò | Stack | Port (dev) | Trunk |
 |---|---|---|---|---|
-| HealthGuard | Admin web (BE + FE) | Express + Prisma + Vite/React | 5000 (BE), 5173 (FE) | `deploy` |
+| HealthGuard | Admin web (BE + FE) | Express + Prisma + Vite/React | 5000 (BE), 5173 (FE) | `develop` |
 | health_system | Mobile (UI) + Backend | Flutter 3.11 + FastAPI Python 3.11 | 8000 (BE) | `develop` |
 | Iot_Simulator_clean | IoT simulation | Python FastAPI + simulator-web | 8002 | `develop` |
 | healthguard-model-api | ML Model API | Python FastAPI | 8001 | `master` |

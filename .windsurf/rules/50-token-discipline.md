@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: Context efficiency guidelines - read smart not greedy, batch tool calls, prefer diffs over full files. Apply when exploring large codebases, doing multi-step searches, or when context is getting heavy.
 ---
 
 # Token Discipline

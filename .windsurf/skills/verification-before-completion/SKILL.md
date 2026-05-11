@@ -72,7 +72,7 @@ Skipping any step = lying.
 ### Tests
 
 ```
-✅ "I ran `flutter test test/feed/`. 12/12 pass. Done."
+✅ "I ran `flutter test test/features/emergency/`. 12/12 pass. Done."
 ❌ "Tests should pass now."
 ```
 
@@ -129,12 +129,15 @@ Run the command. Read the output. THEN claim.
 
 Non-negotiable.
 
-## Applied to Meep
+## Applied to VSmartwatch
 
 | Claim | Verification command |
 |---|---|
-| "Flutter feature done" | `flutter test test/<feature>/` + `flutter analyze` |
-| "Functions deploy OK" | `firebase functions:log --only <fn>` shows no error within 5 minutes after deploy |
-| "Firestore rules OK" | `firebase emulators:exec --only firestore "npm test:rules"` |
-| "App release build OK" | `flutter build apk --release` (iOS build deferred per ADR-0002) |
-| "BE Node tests pass" | `npm test` exit 0 + coverage didn't drop |
+| "Flutter feature done" | `flutter test test/<feature>/` + `flutter analyze` (zero warnings) |
+| "FastAPI endpoint done" | `pytest tests/test_<feature>.py` + manual `curl` with valid auth headers |
+| "Express+Prisma endpoint done" | `npm test -- <file>.test.js` + `npm run lint` zero errors |
+| "React feature done" | `npm test -- <component>` + manual click-through in browser |
+| "Migration applied" | `npx prisma migrate status` shows no pending OR `psql -c "\d <table>"` confirms new column |
+| "Cross-repo contract works" | E2E smoke test: producer endpoint returns expected shape + consumer parses it correctly |
+| "Bug fixed" | Regression test that reproduced the bug now passes (RED before fix → GREEN after fix → revert fix locally to confirm RED comes back — don't commit the revert) |
+| "Lint passes" | `flutter analyze` / `black --check . ; isort --check-only .` / `npm run lint` exit 0 |
