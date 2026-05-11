@@ -1,0 +1,20 @@
+# Phần 1: Giới thiệu (Introduction)
+1.1 Mục đích (Purpose)
+1.2 Phạm vi (Scope)
+1.3 Thuật ngữ và Viết tắt (Definitions, Acronyms, and Abbreviations)
+1.4 Tài liệu tham khảo (References)
+1.5 Tổng quan (Overview)
+
+# Phần 2: Mô tả Chung (Overall Description)
+2.1 Bối cảnh sản phẩm (Product Perspective)
+2.2 Chức năng sản phẩm (Product Functions)
+2.3 Đặc điểm người dùng (User Characteristics)
+2.4 Các ràng buộc (Constraints)
+2.5 Các giả định và phụ thuộc (Assumptions and Dependencies)
+
+# Phần 3: Yêu cầu Chi tiết (Specific Requirements)
+3.1 Yêu cầu Giao diện Bên ngoài (External Interface Requirements)
+3.2 Yêu cầu Chức năng (Functional Requirements) - Dựa vào Use Cases
+3.3 Yêu cầu Hiệu năng (Performance Requirements)
+3.4 Ràng buộc Thiết kế (Design Constraints)
+3.5 Thuộc tính Chất lượng Phần mềm (Software System Attributes)

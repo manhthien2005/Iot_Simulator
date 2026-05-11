@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "pre_run_command": [
+      {
+        "command": "python3 .windsurf/hooks/block_dangerous_commands.py",
+        "powershell": "python .windsurf/hooks/block_dangerous_commands.py",
+        "show_output": true
+      }
+    ],
+    "pre_read_code": [
+      {
+        "command": "python3 .windsurf/hooks/protect_secrets.py",
+        "powershell": "python .windsurf/hooks/protect_secrets.py",
+        "show_output": true
+      }
+    ],
+    "pre_write_code": [
+      {
+        "command": "python3 .windsurf/hooks/protect_secrets.py",
+        "powershell": "python .windsurf/hooks/protect_secrets.py",
+        "show_output": true
+      }
+    ]
+  }
+}
