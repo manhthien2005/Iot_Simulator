@@ -16,14 +16,19 @@ class HttpPublisher(Publisher):
         endpoint: str,
         *,
         sender: Callable[[str, str], int] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.endpoint = endpoint
         self._sender = sender or self._default_sender
+        self._headers: dict[str, str] = headers or {}
 
     def publish(self, messages: list[dict[str, Any]]) -> PublishResult:
         payload = json_dumps({"messages": messages})
         try:
-            status_code = self._sender(self.endpoint, payload)
+            if self._headers:
+                status_code = self._sender(self.endpoint, payload, self._headers)
+            else:
+                status_code = self._sender(self.endpoint, payload)
         except Exception as exc:  # pragma: no cover - network path not used in tests
             return PublishResult(
                 ok=False,
@@ -43,12 +48,19 @@ class HttpPublisher(Publisher):
         )
 
     @staticmethod
-    def _default_sender(endpoint: str, payload: str) -> int:
+    def _default_sender(
+        endpoint: str,
+        payload: str,
+        headers: dict[str, str] | None = None,
+    ) -> int:
+        merged = {"Content-Type": "application/json"}
+        if headers:
+            merged.update(headers)
         request = Request(
             endpoint,
             data=payload.encode("utf-8"),
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=merged,
         )
         try:
             with urlopen(request, timeout=10) as response:

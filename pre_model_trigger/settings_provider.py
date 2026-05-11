@@ -12,48 +12,16 @@ from __future__ import annotations
 
 from typing import Any
 
+try:
+    from Iot_Simulator.api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
+except ModuleNotFoundError:
+    from api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
 
 # ---------------------------------------------------------------------------
-# Fallback threshold dictionaries — single source of truth
+# Fallback threshold dictionaries — single source of truth is vitals_service.py
 # ---------------------------------------------------------------------------
-# Keys follow the naming convention used throughout dependencies.py:
-#   hr_critical_low, hr_critical_high, hr_warning_low, hr_warning_high,
-#   spo2_critical, spo2_warning, rr_critical_low, rr_critical_high,
-#   bp_sys_critical, bp_dia_critical, bp_sys_warning, bp_dia_warning
-# Sleep adds: osa_alert_spo2_threshold, nocturnal_tachy_hr, apnea_rr_threshold
-
-_FALLBACK_DAYTIME: dict[str, float] = {
-    "hr_critical_low": 50.0,
-    "hr_critical_high": 120.0,
-    "hr_warning_low": 55.0,
-    "hr_warning_high": 110.0,
-    "spo2_critical": 90.0,
-    "spo2_warning": 94.0,
-    "rr_critical_low": 10.0,
-    "rr_critical_high": 25.0,
-    "bp_sys_critical": 180.0,
-    "bp_dia_critical": 120.0,
-    "bp_sys_warning": 140.0,
-    "bp_dia_warning": 90.0,
-}
-
-_FALLBACK_SLEEP: dict[str, float] = {
-    "hr_critical_low": 38.0,
-    "hr_critical_high": 100.0,
-    "hr_warning_low": 42.0,
-    "hr_warning_high": 90.0,
-    "spo2_critical": 85.0,
-    "spo2_warning": 90.0,
-    "rr_critical_low": 6.0,
-    "rr_critical_high": 25.0,
-    "bp_sys_critical": 180.0,
-    "bp_dia_critical": 120.0,
-    "bp_sys_warning": 160.0,
-    "bp_dia_warning": 100.0,
-    "osa_alert_spo2_threshold": 88.0,
-    "nocturnal_tachy_hr": 120.0,
-    "apnea_rr_threshold": 6.0,
-}
+_FALLBACK_DAYTIME: dict[str, float] = dict(DAYTIME_THRESHOLDS)
+_FALLBACK_SLEEP: dict[str, float] = dict(SLEEP_THRESHOLDS)
 
 
 class SystemSettingsProvider:

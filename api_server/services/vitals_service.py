@@ -31,15 +31,16 @@ if TYPE_CHECKING:
 # ── Threshold constants ──────────────────────────────────────────────────
 
 DAYTIME_THRESHOLDS: dict[str, float] = {
-    "hr_critical_low": 50.0,
-    "hr_critical_high": 120.0,
+    "hr_critical_low": 41.0,
+    "hr_critical_high": 131.0,
     "hr_warning_low": 55.0,
     "hr_warning_high": 110.0,
     "spo2_critical": 90.0,
     "spo2_warning": 94.0,
-    "rr_critical_low": 10.0,
+    "rr_critical_low": 9.0,
     "rr_critical_high": 25.0,
     "bp_sys_critical": 180.0,
+    "bp_sys_critical_low": 90.0,
     "bp_dia_critical": 120.0,
     "bp_sys_warning": 140.0,
     "bp_dia_warning": 90.0,
@@ -189,7 +190,7 @@ class VitalsService:
                 or respiratory_rate > thresholds["rr_critical_high"]
             )
         )
-        low_sys_critical = blood_pressure_sys is not None and blood_pressure_sys < 80.0
+        low_sys_critical = blood_pressure_sys is not None and blood_pressure_sys < thresholds.get("bp_sys_critical_low", 80.0)
         # Multi-signal severity with context-aware thresholds for waking vs sleeping.
         severity = "normal"
         if (

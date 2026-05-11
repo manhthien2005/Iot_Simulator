@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pre_model_trigger.fall_pre_trigger import FallPreTrigger
 from pre_model_trigger.healthguard_client import HealthGuardAPIClient
+from pre_model_trigger.normalization import normalize_vitals_for_rules, validate_data_quality
 from pre_model_trigger.orchestrator import TriggerOrchestrator
 from pre_model_trigger.response_handler import ResponseHandler
 from pre_model_trigger.rule_engine import RuleEngine
@@ -32,6 +33,8 @@ __all__ = [
     "TriggerActionItem",
     "TriggerOrchestrator",
     "VitalsHistoryBuffer",
+    "normalize_vitals_for_rules",
+    "validate_data_quality",
     "_FALLBACK_DAYTIME",
     "_FALLBACK_SLEEP",
 ]

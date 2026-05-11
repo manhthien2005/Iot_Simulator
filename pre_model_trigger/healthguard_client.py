@@ -43,16 +43,18 @@ class HealthGuardAPIClient:
         )
     """
 
-    _PREDICT_PATH = "/api/risk/predict"
+    _PREDICT_PATH = "/mobile/risk/calculate"
     _HEALTH_CHECK_PATH = "/api/health"
 
     def __init__(
         self,
         base_url: str,
         http_sender: HttpSenderFn,
+        internal_secret: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._http_sender = http_sender
+        self._internal_secret = internal_secret
 
     # ------------------------------------------------------------------
     # Public API
@@ -63,35 +65,47 @@ class HealthGuardAPIClient:
         device_id: str,
         vitals: dict[str, Any],
         persona: dict[str, Any] | None = None,
+        db_device_id: int | None = None,
     ) -> list[TriggerActionItem]:
-        """Send vitals to the Health Backend for ML prediction.
+        """Send a risk-calculation request to the Health Backend.
 
         Parameters
         ----------
         device_id:
-            Unique device identifier.
+            Simulator device identifier (used for logging only).
         vitals:
-            Current vitals snapshot.
+            Current vitals snapshot (ignored by backend — it fetches
+            vitals directly from its DB).
         persona:
-            Optional patient profile metadata.
+            Optional patient profile metadata (ignored by backend).
+        db_device_id:
+            **Required for a successful call.** The bound integer device
+            ID in the Health Backend DB.  If ``None`` the request is
+            skipped and an empty list is returned.
 
         Returns
         -------
         list[TriggerActionItem]
             Actions derived from the prediction response.  Returns an
-            empty list when the backend is unreachable or returns an
-            error.
+            empty list when the backend is unreachable, returns an
+            error, or ``db_device_id`` is not provided.
         """
-        endpoint = f"{self._base_url}{self._PREDICT_PATH}"
-        payload: dict[str, Any] = {
-            "device_id": device_id,
-            "vitals": vitals,
-        }
-        if persona:
-            payload["persona"] = persona
+        if db_device_id is None:
+            logger.debug(
+                "request_prediction skipped for device %s: db_device_id not provided",
+                device_id,
+            )
+            return []
 
-        payload_json = json.dumps(payload, default=str)
-        headers = {"Content-Type": "application/json"}
+        endpoint = f"{self._base_url}{self._PREDICT_PATH}"
+        payload: dict[str, Any] = {"device_id": db_device_id}
+        payload_json = json.dumps(payload)
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "X-Internal-Service": "iot-simulator",
+        }
+        if self._internal_secret:
+            headers["X-Internal-Secret"] = self._internal_secret
 
         try:
             status_code = self._http_sender(endpoint, payload_json, headers)

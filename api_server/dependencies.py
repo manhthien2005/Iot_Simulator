@@ -75,6 +75,7 @@ try:
     from Iot_Simulator.pre_model_trigger import (
         FallPreTrigger,
         HealthGuardAPIClient,
+        PersonaProfile,
         ResponseHandler,
         RuleEngine,
         SystemSettingsProvider,
@@ -141,6 +142,7 @@ except ModuleNotFoundError:
     from pre_model_trigger import (  # noqa: F811
         FallPreTrigger,
         HealthGuardAPIClient,
+        PersonaProfile,
         ResponseHandler,
         RuleEngine,
         SystemSettingsProvider,
@@ -668,6 +670,7 @@ class SimulatorRuntime:
         http = HttpPublisher(
             endpoint=self._telemetry_ingest_endpoint(self._health_backend_url),
             sender=self._http_sender,
+            headers={"X-Internal-Service": "iot-simulator"},
         )
         self.transport_router = TransportRouter(mqtt, http)
         # ── Pre-model TriggerOrchestrator wiring (Phase 0.3) ─────────────
@@ -686,11 +689,16 @@ class SimulatorRuntime:
             _api_client = HealthGuardAPIClient(
                 base_url=self._health_backend_url,
                 http_sender=self._http_sender,
+                internal_secret=os.environ.get("INTERNAL_SERVICE_SECRET") or None,
             )
             _vitals_buffer = VitalsHistoryBuffer(max_size=60)
-            _enable_model_calls = os.environ.get(
+            self._orch_enable_model_calls: bool = os.environ.get(
                 "PRE_MODEL_TRIGGER_ENABLE_MODEL_CALLS", ""
             ).lower() in ("1", "true", "yes")
+            # enable_model_calls=False intentionally (architecture Option A):
+            # The orchestrator only decides action severity; the runtime handles
+            # the actual model call via _trigger_risk_inference (correct endpoint
+            # + auth header).  _orch_enable_model_calls gates that runtime path.
             self._trigger_orchestrator = TriggerOrchestrator(
                 settings_provider=_settings_provider,
                 rule_engine=_rule_engine,
@@ -698,12 +706,12 @@ class SimulatorRuntime:
                 api_client=_api_client,
                 response_handler=ResponseHandler,
                 vitals_buffer=_vitals_buffer,
-                enable_model_calls=_enable_model_calls,
+                enable_model_calls=False,
             )
             logger.info(
                 "TriggerOrchestrator wired (pre_trigger_enabled=%s, enable_model_calls=%s)",
                 _PRE_MODEL_TRIGGER_ENABLED,
-                _enable_model_calls,
+                self._orch_enable_model_calls,
             )
         except Exception:
             logger.warning(
@@ -767,6 +775,7 @@ class SimulatorRuntime:
             telemetry_alert_endpoint_fn=self._telemetry_alert_endpoint,
             publish_device_log_fn=self._publish_device_log,
             dashboard_cache_ref=self._dashboard_cache_ref,
+            internal_secret=os.environ.get("INTERNAL_SERVICE_SECRET") or None,
         )
 
         # ── SessionService (Task 3.2) ────────────────────────────────────
@@ -1915,12 +1924,12 @@ class SimulatorRuntime:
             # claim shadow/active capability we cannot actually exercise.
             mode = "off"
         else:
-            mode = "active" if self._trigger_orchestrator._enable_model_calls else "shadow"
+            mode = "active" if getattr(self, "_orch_enable_model_calls", False) else "shadow"
 
         threshold_source = "unavailable"
         enable_model_calls = False
         if self._trigger_orchestrator is not None:
-            enable_model_calls = bool(self._trigger_orchestrator._enable_model_calls)
+            enable_model_calls = getattr(self, "_orch_enable_model_calls", False)
             try:
                 provider = self._trigger_orchestrator._settings
                 day = provider.get_vitals_thresholds(is_sleeping=False)
@@ -2529,6 +2538,18 @@ class SimulatorRuntime:
             return "DELAYED"
         return "PENDING"
 
+    def _build_trigger_persona(self, device_id: str) -> "PersonaProfile":
+        """Build a PersonaProfile from the device's stored persona_config."""
+        device = self.devices.get(str(device_id))
+        pcfg = (device.persona_config if device is not None else None) or {}
+        return PersonaProfile(
+            age=int(pcfg.get("age", 35)),
+            gender=str(pcfg.get("gender", "unknown")),
+            weight_kg=float(pcfg.get("weight_kg", 70.0)),
+            height_cm=float(pcfg.get("height_cm", 170.0)),
+            medical_conditions=list(pcfg.get("medical_conditions") or []),
+        )
+
     def _auto_resolve_fall_countdowns_locked(self, record: SessionRecord) -> None:
         """Module FA: clear ``fall_countdown`` devices whose policy auto-resolves.
 
@@ -2775,6 +2796,45 @@ class SimulatorRuntime:
                         },
                     )
                 )
+
+        # Shadow orchestrator evaluation (Fix R2/R5).
+        # Runs only when PRE_MODEL_TRIGGER_ENABLED=1 and the orchestrator was
+        # successfully wired at startup.  Results are logged only (shadow mode):
+        # they do NOT modify ``effects.pending_alerts`` so the existing alert
+        # flow is untouched.  When ``enable_model_calls=True`` and the
+        # orchestrator decides to escalate, we use ``_trigger_risk_inference``
+        # (correct endpoint + header) instead of the broken HealthGuardAPIClient
+        # path (Fix R3 alternative).
+        if _PRE_MODEL_TRIGGER_ENABLED and self._trigger_orchestrator is not None:
+            for payload in outputs:
+                _orch_device_id = str(payload.get("device_id") or "")
+                if _orch_device_id not in self.devices:
+                    continue
+                try:
+                    _orch_actions = self._trigger_orchestrator.evaluate_tick(
+                        device_id=_orch_device_id,
+                        vitals=payload.get("vitals") or {},
+                        motion=payload.get("motion"),
+                        state=payload.get("state") or {},
+                        persona=self._build_trigger_persona(_orch_device_id),
+                    )
+                    if _orch_actions:
+                        logger.debug(
+                            "Orchestrator [shadow] device=%s actions=%s",
+                            _orch_device_id,
+                            [(a.action_type, a.severity) for a in _orch_actions],
+                        )
+                        if getattr(self, "_orch_enable_model_calls", False) and any(
+                            a.severity in {"SEND_TO_RISK_MODEL", "URGENT"}
+                            for a in _orch_actions
+                        ):
+                            self._trigger_risk_inference(_orch_device_id)
+                except Exception:
+                    logger.exception(
+                        "Orchestrator evaluation failed for device %s (non-fatal)",
+                        _orch_device_id,
+                    )
+
         return effects
 
     def _publish_tick_buffer_locked(self, now: float, force: bool) -> PendingTickPublish | None:

@@ -66,6 +66,17 @@ _OPS: dict[str, Any] = {
     "!=": float.__ne__,
 }
 
+# Mapping from profile-escalation output reason_code → source instant reason_code.
+# Used by _apply_profile_adjustments to match actions by their actual reason_code
+# rather than the profile-specific output code.
+_PROFILE_ESCALATION_SOURCE_MAP: dict[str, str] = {
+    "PROFILE_ESCALATED_HR_BORDERLINE": "HR_BORDERLINE_HIGH",
+    "PROFILE_ESCALATED_RR_BORDERLINE": "RR_BORDERLINE_HIGH",
+    "PROFILE_ESCALATED_DBP_BORDERLINE": "DBP_BORDERLINE_HIGH",
+    "PROFILE_ESCALATED_SBP_BORDERLINE": "SBP_BORDERLINE_HIGH",
+    "PROFILE_ESCALATED_SPO2_DROP": "SPO2_BORDERLINE_LOW",
+}
+
 
 def _eval_single_cmp(left_raw: str, op: str, right_raw: str, value: float) -> bool:
     """Evaluate one comparison, substituting *value* for any non-numeric token."""
@@ -77,6 +88,43 @@ def _eval_single_cmp(left_raw: str, op: str, right_raw: str, value: float) -> bo
     if cmp_fn is None:
         return False
     return bool(cmp_fn(left, right))
+
+
+def _eval_multi_metric_condition(condition_str: str, vitals: dict[str, Any]) -> bool:
+    """Evaluate a multi-metric condition expression against a vitals snapshot.
+
+    Unlike ``_check_condition`` which operates on a single pre-resolved
+    metric value, this function resolves *both* sides of every comparison
+    from the *vitals* dict, enabling combination rules such as::
+
+        "heart_rate > 100 and resp_rate >= 20"
+        "spo2 <= 94 and resp_rate >= 20"
+    """
+    parts = [p.strip() for p in condition_str.split(" and ")]
+    for part in parts:
+        match = _CMP_RE.match(part)
+        if match is None:
+            logger.warning("Unparseable combination condition fragment: %r", part)
+            return False
+        left_raw, op, right_raw = match.group(1), match.group(2), match.group(3)
+
+        left_f = _safe_float(left_raw)
+        if left_f is None:
+            left_f = _safe_float(vitals.get(left_raw))
+
+        right_f = _safe_float(right_raw)
+        if right_f is None:
+            right_f = _safe_float(vitals.get(right_raw))
+
+        if left_f is None or right_f is None:
+            return False
+
+        cmp_fn = _OPS.get(op)
+        if cmp_fn is None:
+            return False
+        if not cmp_fn(left_f, right_f):
+            return False
+    return True
 
 
 def _check_condition(value: float, condition: dict[str, Any]) -> bool:
@@ -147,6 +195,7 @@ class RuleEngine:
         self._instant_rules: dict[str, Any] = self._config.get("instant_rules", {})
         self._profile_rules: dict[str, Any] = self._config.get("profile_adjusted_rules", {})
         self._severity_order: dict[str, int] = self._config.get("severity", {}).get("order", _SEVERITY_ORDER)
+        self._source_to_profile: dict[str, str] = self._build_source_to_profile_map()
 
     # ------------------------------------------------------------------
     # Public API
@@ -189,6 +238,9 @@ class RuleEngine:
         # Phase 3: time-series rules (if history available)
         if history:
             actions.extend(self._evaluate_time_series_rules(vitals, history))
+
+        # Phase 4: combination rules (Fix #5)
+        actions.extend(self._evaluate_combination_rules(vitals))
 
         # Sort by severity descending
         actions.sort(
@@ -242,34 +294,35 @@ class RuleEngine:
         actions: list[TriggerActionItem],
         persona: PersonaProfile,
     ) -> list[TriggerActionItem]:
-        """Escalate WATCH → SEND_TO_RISK_MODEL for high-sensitivity profiles."""
+        """Escalate WATCH → SEND_TO_RISK_MODEL for high-sensitivity profiles.
+
+        Fix #6: uses _PROFILE_ESCALATION_SOURCE_MAP to match actions by their
+        *instant rule* reason_code (e.g. HR_BORDERLINE_HIGH) rather than the
+        profile output reason_code (e.g. PROFILE_ESCALATED_HR_BORDERLINE) which
+        was never present in action.reason_codes.
+        """
         if not persona.is_high_sensitivity:
             return actions
 
-        escalation_rules = self._profile_rules.get("watch_to_send_if_profile_high_sensitivity", [])
-        escalation_codes: set[str] = set()
-        for rule in escalation_rules:
-            code = rule.get("reason_code", "")
-            if code:
-                escalation_codes.add(code)
-
         result: list[TriggerActionItem] = []
         for action in actions:
-            if (
-                action.severity == "WATCH"
-                and any(rc in escalation_codes for rc in action.reason_codes)
-            ):
-                # Escalate: create new action with higher severity
-                result.append(TriggerActionItem(
-                    action_type="model_call",
-                    severity="SEND_TO_RISK_MODEL",
-                    message=f"{action.message} (escalated: high-sensitivity profile)",
-                    source="rule_engine",
-                    metadata={**action.metadata, "escalated_from": "WATCH"},
-                    reason_codes=action.reason_codes,
-                ))
-            else:
-                result.append(action)
+            if action.severity == "WATCH":
+                matched_profiles = [
+                    self._source_to_profile[rc]
+                    for rc in action.reason_codes
+                    if rc in self._source_to_profile
+                ]
+                if matched_profiles:
+                    result.append(TriggerActionItem(
+                        action_type="model_call",
+                        severity="SEND_TO_RISK_MODEL",
+                        message=f"{action.message} (escalated: high-sensitivity profile)",
+                        source="rule_engine",
+                        metadata={**action.metadata, "escalated_from": "WATCH"},
+                        reason_codes=action.reason_codes + matched_profiles,
+                    ))
+                    continue
+            result.append(action)
 
         return result
 
@@ -313,17 +366,18 @@ class RuleEngine:
                     continue  # Not enough data
 
                 # Check if all recent values breach in the specified direction
-                if direction == "above" and all(v > threshold for v in recent):
-                    reason_code = cond.get("reason_code", f"drift_{metric}_{severity_key}")
-                    actions.append(TriggerActionItem(
-                        action_type="model_call",
-                        severity=severity_key.upper(),
-                        message=f"{metric} persistently {direction} {threshold} for {len(recent)} ticks",
-                        source="rule_engine",
-                        metadata={"metric": metric, "window": str(len(recent))},
-                        reason_codes=[reason_code],
-                    ))
-                elif direction == "below" and all(v < threshold for v in recent):
+                # Fix #4: added above_eq / below_eq direction support
+                breached = False
+                if direction == "above":
+                    breached = all(v > threshold for v in recent)
+                elif direction == "above_eq":
+                    breached = all(v >= threshold for v in recent)
+                elif direction == "below":
+                    breached = all(v < threshold for v in recent)
+                elif direction == "below_eq":
+                    breached = all(v <= threshold for v in recent)
+
+                if breached:
                     reason_code = cond.get("reason_code", f"drift_{metric}_{severity_key}")
                     actions.append(TriggerActionItem(
                         action_type="model_call",
@@ -336,12 +390,64 @@ class RuleEngine:
 
         return actions
 
+    # ------------------------------------------------------------------
+    # Combination rules (Fix #5)
+    # ------------------------------------------------------------------
+
+    def _evaluate_combination_rules(self, vitals: dict[str, Any]) -> list[TriggerActionItem]:
+        """Evaluate multi-metric combination rules from ``rules_config.json``.
+
+        Handles conditions such as::
+
+            "heart_rate > 100 and resp_rate >= 20"
+            "spo2 <= 94 and resp_rate >= 20"
+
+        These rules are escalation-only: they can only add actions at the
+        configured severity, never downgrade existing actions.
+        """
+        actions: list[TriggerActionItem] = []
+        combo_config = self._config.get("combination_rules", {})
+
+        if not combo_config.get("enabled", False):
+            return actions
+
+        for severity_key in ("urgent", "send_to_risk_model", "watch"):
+            for rule in combo_config.get(severity_key, []):
+                condition_str = rule.get("condition", "")
+                if not condition_str:
+                    continue
+                reason_code = rule.get("reason_code", f"combo_{severity_key}")
+                if _eval_multi_metric_condition(condition_str, vitals):
+                    action_type = "alert" if severity_key == "urgent" else "model_call"
+                    actions.append(TriggerActionItem(
+                        action_type=action_type,
+                        severity=severity_key.upper(),
+                        message=f"Combination rule triggered: {reason_code}",
+                        source="rule_engine",
+                        metadata={"condition": condition_str, "metric": reason_code},
+                        reason_codes=[reason_code],
+                    ))
+
+        return actions
+
+    def _build_source_to_profile_map(self) -> dict[str, str]:
+        """Build the source_instant_code -> profile_output_code reverse map."""
+        result: dict[str, str] = {}
+        escalation_rules = self._profile_rules.get("watch_to_send_if_profile_high_sensitivity", [])
+        for rule in escalation_rules:
+            profile_code = rule.get("reason_code", "")
+            if profile_code and profile_code in _PROFILE_ESCALATION_SOURCE_MAP:
+                source_code = _PROFILE_ESCALATION_SOURCE_MAP[profile_code]
+                result[source_code] = profile_code
+        return result
+
     def reload_config(self) -> None:
         """Hot-reload the rules configuration from disk."""
         self._config = _load_rules_config()
         self._instant_rules = self._config.get("instant_rules", {})
         self._profile_rules = self._config.get("profile_adjusted_rules", {})
         self._severity_order = self._config.get("severity", {}).get("order", _SEVERITY_ORDER)
+        self._source_to_profile = self._build_source_to_profile_map()
 
 
 __all__ = ["RuleEngine"]
