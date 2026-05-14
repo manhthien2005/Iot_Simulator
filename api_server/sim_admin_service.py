@@ -195,6 +195,9 @@ class SimAdminService:
 
         user_id = target["user_id"]
         if user_id is None:
+            # IS-009: rollback session before raise to avoid dirty state if caller
+            # has prior pending mutations in same transaction scope.
+            db.rollback()
             raise ValueError(f"Device {device_id} is not assigned to a user")
 
         db.execute(
@@ -298,16 +301,9 @@ class SimAdminService:
 
     @staticmethod
     def list_active_devices(db: Session) -> list[dict[str, Any]]:
-        """Return full device info for every active (non-deleted) device."""
-        rows = db.execute(
-            text(
-                "SELECT id FROM devices "
-                "WHERE is_active = TRUE AND deleted_at IS NULL"
-            )
-        ).mappings().all()
-        results: list[dict[str, Any]] = []
-        for row in rows:
-            info = SimAdminService._fetch_device(int(row["id"]), db)
-            if info is not None:
-                results.append(info)
-        return results
+        """Return full device info for every active (non-deleted) device.
+
+        IS-008 fix: single batch JOIN query (was 1 + N roundtrips).
+        """
+        typed = DeviceRepository.list_admin_devices(db, active_only=True)
+        return [d.model_dump() for d in typed]

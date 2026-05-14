@@ -30,6 +30,9 @@ TRACK_DIRECTORY_MAP = {
     BP_DIA_TRACK: "Solar8000_NIBP_DIA",
 }
 TRACK_ORDER = (HR_TRACK, SPO2_TRACK, BP_SYS_TRACK, BP_DIA_TRACK)
+# IS-013: tracks required by ETL pipeline for full vitals ingestion (HR + SpO2 + BP).
+# Promoted from etl_pipeline.normalize._default_vitaldb_cases inline literal.
+REQUIRED_TRACKS_FOR_VITALS: tuple[str, ...] = (SPO2_TRACK, BP_SYS_TRACK, BP_DIA_TRACK)
 REQUIRED_COLUMNS = [
     "timestamp",
     "subject_id",
@@ -101,6 +104,19 @@ class VitalDBAdapter(DatasetAdapter):
             if self._resolve_track(caseid, HR_TRACK) is not None
         ]
         return sorted(subjects, key=_case_sort_key)
+
+    def has_required_tracks(self, caseid: str | int) -> bool:
+        """Check whether case has all tracks needed for vitals ingestion.
+
+        Returns True if every track in REQUIRED_TRACKS_FOR_VITALS resolves
+        to an existing file. Used by the ETL pipeline to filter cases
+        before loading (replaces external private `_resolve_track` access).
+        """
+        case_str = str(caseid)
+        return all(
+            self._resolve_track(case_str, track) is not None
+            for track in REQUIRED_TRACKS_FOR_VITALS
+        )
 
     def load_subject(self, subject_id: str, session_start: str) -> Any:
         caseid = str(subject_id)

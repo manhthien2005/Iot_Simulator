@@ -13,17 +13,12 @@ import logging
 import time
 from typing import Any
 
-from pre_model_trigger.types import TriggerActionItem
+from pre_model_trigger.types import SEVERITY_RANK, TriggerActionItem
 
 logger = logging.getLogger(__name__)
 
-# Severity ordering for dedup (keep highest)
-_SEVERITY_RANK: dict[str, int] = {
-    "NORMAL": 0,
-    "WATCH": 1,
-    "SEND_TO_RISK_MODEL": 2,
-    "URGENT": 3,
-}
+# IS-005c: alias to centralized SEVERITY_RANK in types module (single source of truth).
+_SEVERITY_RANK = SEVERITY_RANK
 
 
 class ResponseHandler:

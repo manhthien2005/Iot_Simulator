@@ -23,18 +23,6 @@ from pre_model_trigger.vitals_buffer import VitalsHistoryBuffer
 
 logger = logging.getLogger(__name__)
 
-# Keys extracted from the raw vitals dict for model calls / snapshots.
-_VITALS_SNAPSHOT_KEYS: tuple[str, ...] = (
-    "heart_rate",
-    "spo2",
-    "resp_rate",
-    "body_temp",
-    "sys_bp",
-    "dia_bp",
-    "hrv",
-    "activity_state",
-)
-
 # Severity values that qualify an action for model escalation.
 _MODEL_ESCALATION_SEVERITIES: frozenset[str] = frozenset({
     "SEND_TO_RISK_MODEL",
@@ -183,31 +171,6 @@ class TriggerOrchestrator:
             persona=persona,
         )
         return self._response_handler.process(model_actions, device_id=device_id)
-
-    # ------------------------------------------------------------------
-    # Vitals snapshot extraction
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _extract_vitals_snapshot(vitals_dict: dict[str, Any]) -> dict[str, Any]:
-        """Extract relevant vitals keys from a raw tick payload.
-
-        Returns a flat dict with only the keys needed for model calls,
-        converting values to float where possible.
-        """
-        snapshot: dict[str, Any] = {}
-        for key in _VITALS_SNAPSHOT_KEYS:
-            value = vitals_dict.get(key)
-            if value is None:
-                continue
-            if key == "activity_state":
-                snapshot[key] = str(value)
-            else:
-                try:
-                    snapshot[key] = float(value)
-                except (TypeError, ValueError):
-                    snapshot[key] = value
-        return snapshot
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -439,65 +439,6 @@
         }
       ]
     },
-    "pending_baseline_drift": {
-      "_notes": "These rules require baseline tracking (not yet implemented). Kept here for future implementation.",
-      "watch": [
-        {
-          "condition": "heart_rate >= baseline_heart_rate + 10 for >= 5 minutes",
-          "reason_code": "HR_BASELINE_DELTA_WATCH"
-        },
-        {
-          "condition": "resp_rate >= baseline_resp_rate + 2 for >= 5 minutes",
-          "reason_code": "RR_BASELINE_DELTA_WATCH"
-        },
-        {
-          "condition": "body_temp >= baseline_body_temp + 0.5 in >= 2 readings",
-          "reason_code": "TEMP_BASELINE_DELTA_WATCH"
-        },
-        {
-          "condition": "spo2 <= baseline_spo2 - 2 in >= 2 readings",
-          "reason_code": "SPO2_BASELINE_DROP_WATCH"
-        },
-        {
-          "condition": "hrv <= baseline_hrv * 0.9 in >= 2 windows",
-          "reason_code": "HRV_BASELINE_DROP_WATCH"
-        },
-        {
-          "condition": "abs(pulse_pressure - baseline_pulse_pressure) >= 10 in >= 2 readings",
-          "reason_code": "PP_BASELINE_DELTA_WATCH"
-        }
-      ],
-      "send_to_risk_model": [
-        {
-          "condition": "heart_rate >= baseline_heart_rate + 15 for >= 10 minutes",
-          "reason_code": "HR_BASELINE_DELTA_SEND"
-        },
-        {
-          "condition": "resp_rate >= baseline_resp_rate + 4 for >= 10 minutes",
-          "reason_code": "RR_BASELINE_DELTA_SEND"
-        },
-        {
-          "condition": "body_temp >= baseline_body_temp + 1.0 within 24 hours",
-          "reason_code": "TEMP_BASELINE_DELTA_SEND"
-        },
-        {
-          "condition": "spo2 <= baseline_spo2 - 3 in >= 2 consecutive readings",
-          "reason_code": "SPO2_BASELINE_DROP_SEND"
-        },
-        {
-          "condition": "map_val <= baseline_map_val - 15 in >= 2 consecutive readings",
-          "reason_code": "MAP_BASELINE_DROP_SEND"
-        },
-        {
-          "condition": "hrv <= baseline_hrv * 0.8 in >= 2 windows",
-          "reason_code": "HRV_BASELINE_DROP_SEND"
-        },
-        {
-          "condition": "hrv <= baseline_hrv_14d * 0.7 in >= 2 windows",
-          "reason_code": "HRV_LONG_BASELINE_DROP_SEND"
-        }
-      ]
-    },
     "rapid_change": {
       "send_to_risk_model": [
         {
