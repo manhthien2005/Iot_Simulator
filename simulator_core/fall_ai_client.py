@@ -58,6 +58,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -272,6 +273,17 @@ class FallAIClient:
         self.timeout = timeout
         self._available: bool | None = None
         self._last_recheck_at: float = 0.0
+        self._internal_secret: str | None = os.getenv("INTERNAL_SERVICE_SECRET")
+
+    def _build_headers(self) -> dict[str, str]:
+        """Build request headers with internal service auth per ADR-005."""
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "X-Internal-Service": "iot-simulator",
+        }
+        if self._internal_secret:
+            headers["X-Internal-Secret"] = self._internal_secret
+        return headers
 
     # ------------------------------------------------------------------
     # Availability
@@ -289,7 +301,11 @@ class FallAIClient:
         on every cold-start so all subsequent predict() calls short-
         circuited with modelStatus=offline.
         """
-        request = Request(f"{self.base_url}/api/v1/fall/model-info", method="GET")
+        request = Request(
+            f"{self.base_url}/api/v1/fall/model-info",
+            method="GET",
+            headers=self._build_headers(),
+        )
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 code = int(response.getcode() or 200)
@@ -375,7 +391,7 @@ class FallAIClient:
             f"{self.base_url}/api/v1/fall/predict",
             data=payload,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=self._build_headers(),
         )
         try:
             with urlopen(request, timeout=self.timeout) as response:
