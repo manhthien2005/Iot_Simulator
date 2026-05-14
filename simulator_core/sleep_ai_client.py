@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -27,10 +28,25 @@ class SleepAIClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._available: bool | None = None
+        self._internal_secret: str | None = os.getenv("INTERNAL_SERVICE_SECRET")
+
+    def _build_headers(self) -> dict[str, str]:
+        """Build request headers with internal service auth per ADR-005."""
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "X-Internal-Service": "iot-simulator",
+        }
+        if self._internal_secret:
+            headers["X-Internal-Secret"] = self._internal_secret
+        return headers
 
     def check_availability(self) -> bool:
-        """Probe the health endpoint and update availability state."""
-        request = Request(f"{self.base_url}/health", method="GET")
+        """Probe the model-info endpoint and update availability state."""
+        request = Request(
+            f"{self.base_url}/api/v1/sleep/model-info",
+            method="GET",
+            headers=self._build_headers(),
+        )
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 if int(response.getcode() or 200) >= 400:
@@ -50,15 +66,15 @@ class SleepAIClient:
 
         payload = json.dumps({"backend": "onnx", "records": [sleep_record]}).encode("utf-8")
         request = Request(
-            f"{self.base_url}/predict",
+            f"{self.base_url}/api/v1/sleep/predict",
             data=payload,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=self._build_headers(),
         )
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
-                prediction = body["predictions"][0]
+                prediction = body["results"][0]
                 self._available = True
                 return prediction
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, Exception) as exc:

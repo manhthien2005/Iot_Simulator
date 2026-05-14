@@ -802,6 +802,7 @@ class SimulatorRuntime:
             http_sender=self._http_sender,
             publish_device_log_fn=self._publish_device_log,
             require_device_fn=self.device_service._require_device,
+            internal_secret=os.getenv("INTERNAL_SERVICE_SECRET"),
             # MEDIUM #9: pass pre-loaded scenario data to avoid double load
             sleep_scenario_phases=SLEEP_SCENARIO_PHASES,
             sleep_scenario_profiles=SLEEP_SCENARIO_PROFILES,

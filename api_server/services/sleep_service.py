@@ -57,10 +57,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# MEDIUM #9: Module-level references — populated once from dependencies.py
-# via SleepService.__init__ to avoid calling load_sleep_scenarios() twice.
-SLEEP_SCENARIO_PHASES: dict[str, Any] = {}
-SLEEP_SCENARIO_PROFILES: dict[str, Any] = {}
+# IS-004: Scenario data moved to instance attributes (self._scenario_phases, self._scenario_profiles).
+# Module-level dicts removed to prevent state leak across instances.
 
 
 class SleepService:
@@ -80,10 +78,10 @@ class SleepService:
         http_sender: Any,
         publish_device_log_fn: Any,
         require_device_fn: Any,
+        internal_secret: str | None = None,
         sleep_scenario_phases: dict[str, Any] | None = None,
         sleep_scenario_profiles: dict[str, Any] | None = None,
     ) -> None:
-        global SLEEP_SCENARIO_PHASES, SLEEP_SCENARIO_PROFILES
         self.devices = devices
         self.sessions = sessions
         self.device_scenarios = device_scenarios
@@ -96,17 +94,25 @@ class SleepService:
         self._http_sender = http_sender
         self._publish_device_log = publish_device_log_fn
         self._require_device = require_device_fn
+        self._internal_secret = internal_secret
 
-        # MEDIUM #9: accept pre-loaded scenario data from caller (dependencies.py)
-        # instead of calling load_sleep_scenarios() a second time.
-        if sleep_scenario_phases is not None:
-            SLEEP_SCENARIO_PHASES.update(sleep_scenario_phases)
-        if sleep_scenario_profiles is not None:
-            SLEEP_SCENARIO_PROFILES.update(sleep_scenario_profiles)
+        # IS-004 fix: scenario data as instance attributes (not module globals).
+        self._scenario_phases: dict[str, Any] = dict(sleep_scenario_phases or {})
+        self._scenario_profiles: dict[str, Any] = dict(sleep_scenario_profiles or {})
 
         # CRITICAL #2 fix: shared httpx.Client for sleep push requests
         # instead of creating a new TCP connection each call via httpx.post().
         self._http_client: httpx.Client | None = None
+
+    def _build_internal_headers(self) -> dict[str, str]:
+        """Build request headers with internal service auth per ADR-005."""
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "X-Internal-Service": "iot-simulator",
+        }
+        if self._internal_secret:
+            headers["X-Internal-Secret"] = self._internal_secret
+        return headers
 
     # ------------------------------------------------------------------
     # Sleep window computation
@@ -585,7 +591,7 @@ class SleepService:
             resp = client.post(
                 endpoint,
                 content=_json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers=self._build_internal_headers(),
             )
             code = resp.status_code
             self._publish_device_log(
@@ -609,29 +615,30 @@ class SleepService:
         user_id: int,
         target_date: date,
     ) -> bool:
-        try:
-            with session_scope() as db:
-                result = db.execute(
-                    text(
-                        """
-                        SELECT EXISTS (
-                            SELECT 1
-                            FROM sleep_sessions
-                            WHERE user_id = :user_id
-                              AND device_id = :device_id
-                              AND sleep_date = CAST(:sleep_date AS DATE)
-                        )
-                        """
-                    ),
-                    {
-                        "user_id": user_id,
-                        "device_id": db_device_id,
-                        "sleep_date": target_date.isoformat(),
-                    },
-                ).scalar()
-        except Exception:
-            logger.warning("DB check for existing sleep session failed (db_device_id=%s, user_id=%s, target_date=%s)", db_device_id, user_id, target_date, exc_info=True)
-            return False
+        """Check if a sleep session already exists for the given date.
+
+        Raises SQLAlchemyError on DB failure instead of silently returning False
+        (IS-003 fix — prevent double-write on transient DB error).
+        """
+        with session_scope() as db:
+            result = db.execute(
+                text(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM sleep_sessions
+                        WHERE user_id = :user_id
+                          AND device_id = :device_id
+                          AND sleep_date = CAST(:sleep_date AS DATE)
+                    )
+                    """
+                ),
+                {
+                    "user_id": user_id,
+                    "device_id": db_device_id,
+                    "sleep_date": target_date.isoformat(),
+                },
+            ).scalar()
         return bool(result)
 
     def _post_sleep_payload(self, *, payload: dict[str, Any], device_id: str) -> tuple[bool, int]:
@@ -641,7 +648,7 @@ class SleepService:
         resp = client.post(
             endpoint,
             content=_json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=self._build_internal_headers(),
         )
         code = resp.status_code
         raw_body = resp.text.strip()
@@ -846,7 +853,7 @@ class SleepService:
         return segments
 
     def _select_session_for_scenario(self, scenario_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-        profile = SLEEP_SCENARIO_PROFILES.get(scenario_id, SLEEP_SCENARIO_PROFILES["good_sleep_night"])
+        profile = self._scenario_profiles.get(scenario_id, self._scenario_profiles.get("good_sleep_night", {}))
         pool = list(getattr(self.registry, "_sleep_sessions", []) or [])
         if not pool:
             return {}, {
@@ -1262,7 +1269,7 @@ class SleepService:
 
     def _advance_sleep_phase_if_due(self, device_id: str) -> None:
         scenario_id = self.device_scenarios.get(device_id)
-        if scenario_id not in SLEEP_SCENARIO_PHASES:
+        if scenario_id not in self._scenario_phases:
             self._sleep_phase_tracker.pop(device_id, None)
             return
 
@@ -1271,7 +1278,7 @@ class SleepService:
             self._sleep_phase_tracker.pop(device_id, None)
             return
 
-        schedule = SLEEP_SCENARIO_PHASES[scenario_id]
+        schedule = self._scenario_phases[scenario_id]
         now = monotonic()
 
         if device_id not in self._sleep_phase_tracker:
