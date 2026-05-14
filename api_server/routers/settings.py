@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from api_server.middleware.auth import require_admin_key
 
 from api_server.dependencies import (
     DAYTIME_THRESHOLDS,
@@ -25,7 +26,7 @@ from api_server.schemas import (
     TriggerModeValue,
 )
 
-router = APIRouter(tags=["settings"])
+router = APIRouter(dependencies=[Depends(require_admin_key)], tags=["settings"])
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RULES_CONFIG_PATH = _PROJECT_ROOT / "pre_model_trigger" / "health_rules" / "rules_config.json"

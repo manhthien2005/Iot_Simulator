@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from api_server.middleware.auth import require_admin_key
 
 from api_server.dependencies import SimulatorRuntime, get_runtime
 from api_server.schemas import (
@@ -10,7 +11,7 @@ from api_server.schemas import (
     SessionInfo,
 )
 
-router = APIRouter(tags=["sessions"])
+router = APIRouter(dependencies=[Depends(require_admin_key)], tags=["sessions"])
 
 
 @router.get("/sessions", response_model=list[SessionInfo])

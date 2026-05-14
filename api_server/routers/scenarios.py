@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from api_server.middleware.auth import require_admin_key
 from pydantic import BaseModel, Field
 from typing import Literal
 
@@ -19,7 +20,7 @@ from api_server.schemas import (
 
 _logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["scenarios"])
+router = APIRouter(dependencies=[Depends(require_admin_key)], tags=["scenarios"])
 
 
 # ---------------------------------------------------------------------------
