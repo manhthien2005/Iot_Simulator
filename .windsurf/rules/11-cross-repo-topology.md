@@ -42,14 +42,19 @@ Hệ thống VSmartwatch là **distributed** — 4 repo runtime + 1 repo docs. K
 
 ## Boundary contracts
 
+> Reality verified 2026-05-14 (XR-001 fix). Bảng cũ claim sai prefix.
+
 | From | To | Protocol | Auth | Spec location |
 |---|---|---|---|---|
-| Mobile → Backend (health_system) | REST `/api/mobile/*` | JWT user | `health_system/backend/app/routers/` |
-| Backend → Model API | REST `/api/v1/{fall,sleep,health}` | Internal secret header | `healthguard-model-api/app/routers/` |
-| IoT sim → Backend | REST `/api/internal/*` | Internal auth header | `Iot_Simulator_clean/transport/http_publisher.py` |
-| Admin Web → Admin Backend | REST `/api/admin/*` | JWT admin | `HealthGuard/backend/src/` |
+| Mobile → Backend (health_system) | REST `/api/v1/mobile/*` | JWT user (`iss=healthguard-mobile`) | `health_system/backend/app/api/routes/` |
+| Backend → Model API | REST `/api/v1/{fall,sleep,health}/*` | `X-Internal-Secret` header | `healthguard-model-api/app/routers/` |
+| IoT sim → Backend | REST `/api/v1/mobile/telemetry/*` + `/api/v1/mobile/admin/*` | `X-Internal-Service` + `X-Internal-Secret` | `Iot_Simulator_clean/api_server/` + `transport/http_publisher.py` |
+| Admin Web → Admin Backend | REST `/api/v1/admin/*` | JWT admin (`iss=healthguard-admin`) | `HealthGuard/backend/src/` |
 | Admin Backend → Mobile Backend | (when shared DB) shared Postgres | — | `PM_REVIEW/SQL SCRIPTS/` |
 | All → Postgres | `prisma` (admin) / SQLAlchemy or raw (mobile BE) | DB credentials | `PM_REVIEW/SQL SCRIPTS/init_full_setup.sql` |
+
+> ADR-004 chuẩn `/api/v1/{domain}/*`. Internal-caller endpoints không dùng `/api/internal/*` —
+> internal-ness enforce bằng `X-Internal-Secret` header, không phải URL path. (ADR-004 + ADR-005)
 
 ## Risk hot-spots khi sửa code
 
