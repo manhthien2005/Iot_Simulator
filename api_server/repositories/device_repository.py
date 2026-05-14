@@ -94,6 +94,42 @@ _ADMIN_LIST_SQL = """
     LIMIT 200
 """
 
+# IS-008: dedicated SQL for active-only listing — single JOIN query, eliminates
+# N+1 pattern in SimAdminService.list_active_devices.
+_ADMIN_LIST_ACTIVE_SQL = """
+    SELECT
+        d.id,
+        d.uuid,
+        d.user_id,
+        u.email AS user_email,
+        u.full_name AS user_full_name,
+        u.height_cm,
+        u.weight_kg,
+        u.date_of_birth,
+        u.gender,
+        d.device_name,
+        d.device_type,
+        d.model,
+        d.firmware_version,
+        d.serial_number,
+        d.mac_address,
+        d.mqtt_client_id,
+        d.is_active,
+        d.battery_level,
+        d.signal_strength,
+        d.last_seen_at,
+        d.last_sync_at,
+        d.registered_at,
+        d.updated_at,
+        d.deleted_at
+    FROM devices d
+    LEFT JOIN users u ON u.id = d.user_id
+    WHERE d.deleted_at IS NULL
+      AND d.is_active = TRUE
+    ORDER BY d.registered_at DESC
+    LIMIT 200
+"""
+
 _CREATE_DEVICE_SQL = """
     INSERT INTO devices (
         user_id,
@@ -162,9 +198,17 @@ class DeviceRepository:
         return AdminDeviceResponse.model_validate(dict(row))
 
     @staticmethod
-    def list_admin_devices(db: Session) -> list[AdminDeviceResponse]:
-        """Return all non-deleted devices (up to 200), typed."""
-        rows = db.execute(text(_ADMIN_LIST_SQL)).mappings().all()
+    def list_admin_devices(db: Session, *, active_only: bool = False) -> list[AdminDeviceResponse]:
+        """Return non-deleted devices (up to 200), typed.
+
+        Parameters
+        ----------
+        active_only:
+            When True, filter ``is_active = TRUE`` (single-query, no N+1).
+            Used by ``SimAdminService.list_active_devices`` (IS-008 fix).
+        """
+        sql = _ADMIN_LIST_ACTIVE_SQL if active_only else _ADMIN_LIST_SQL
+        rows = db.execute(text(sql)).mappings().all()
         return [AdminDeviceResponse.model_validate(dict(r)) for r in rows]
 
     # ------------------------------------------------------------------

@@ -75,3 +75,18 @@ class TriggerActionItem:
     source: str | None = None  # e.g. "rule_engine", "fall_pre_trigger"
     metadata: dict[str, str] = field(default_factory=dict)
     reason_codes: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# SEVERITY_RANK — single source of truth for severity ordering
+# ---------------------------------------------------------------------------
+# Higher rank = more severe. Consumed by both `rule_engine` (for sorting
+# evaluate() output) and `response_handler` (for dedup keep-highest logic).
+# IS-005c cleanup: previously duplicated as `_SEVERITY_ORDER` in rule_engine
+# and `_SEVERITY_RANK` in response_handler — drift risk if levels change.
+SEVERITY_RANK: dict[str, int] = {
+    "NORMAL": 0,
+    "WATCH": 1,
+    "SEND_TO_RISK_MODEL": 2,
+    "URGENT": 3,
+}

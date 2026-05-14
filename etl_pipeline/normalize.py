@@ -17,7 +17,6 @@ from dataset_adapters import (
     VitalDBAdapter,
     WESADAdapter,
 )
-from dataset_adapters.vitaldb_adapter import BP_DIA_TRACK, BP_SYS_TRACK, SPO2_TRACK
 from dataset_adapters.sleep_edf_adapter import SleepEdfAdapter
 from simulator_core.dataset_registry import normalize_stress_state
 
@@ -28,6 +27,18 @@ from .window_builder import build_motion_windows
 logger = logging.getLogger(__name__)
 DEFAULT_VITALDB_SESSION_START = "2026-03-22T10:00:00+07:00"
 DEFAULT_VITALDB_CASE_LIMIT = 5
+
+# IS-012: ETL data-quality thresholds. Pipeline raises ETLPipelineError when
+# (a) all subjects in a stream fail or (b) global failure ratio exceeds threshold.
+ETL_FAILURE_RATIO_THRESHOLD = 0.5
+
+
+class ETLPipelineError(RuntimeError):
+    """Raised when the ETL pipeline detects unacceptable data loss.
+
+    IS-012: replaces previous silent skip pattern (logger.warning + continue
+    with no aggregate signal) for cases where pipeline cannot proceed safely.
+    """
 
 
 def normalize_sleep(output_dir: Path, max_subjects: int = 10) -> dict[str, Any]:
@@ -45,14 +56,19 @@ def normalize_sleep(output_dir: Path, max_subjects: int = 10) -> dict[str, Any]:
 
     subjects = adapter.list_subjects()[:max_subjects]
     sessions: list[dict[str, Any]] = []
+    sleep_stats = {"attempted": 0, "failed": 0}
     for subject_id in subjects:
+        sleep_stats["attempted"] += 1
         try:
             record = adapter.load_subject(subject_id)
             valid = adapter.validate(record)
             if valid.get("stages_valid") and valid.get("plausible_total_duration"):
                 sessions.append(record.to_dict())
+            else:
+                sleep_stats["failed"] += 1
         except Exception as exc:  # pragma: no cover - defensive ETL guard
             logger.warning("Skip sleep subject %s: %s", subject_id, exc)
+            sleep_stats["failed"] += 1
 
     output_path: str | None = None
     if sessions:
@@ -64,6 +80,7 @@ def normalize_sleep(output_dir: Path, max_subjects: int = 10) -> dict[str, Any]:
         "session_count": len(sessions),
         "subjects_tried": len(subjects),
         "output_path": output_path,
+        "stats": sleep_stats,
     }
 
 
@@ -83,8 +100,20 @@ class NormalizedArtifactPipeline:
             return frame
         return frame.to_dict()
 
+    def _track_subject(self, stream: str, *, success: bool) -> None:
+        """IS-012: increment per-stream counter for ETL data-quality gating."""
+        bucket = self._stream_stats.setdefault(stream, {"attempted": 0, "failed": 0})
+        bucket["attempted"] += 1
+        if not success:
+            bucket["failed"] += 1
+
     def run(self, config: dict[str, Any] | None = None) -> dict[str, str]:
         config = config or self.default_config()
+        # IS-012: tracking dict cho subject-level success/failure counts.
+        # Mỗi _load_* method sẽ self._track_subject(stream_name, success/failed).
+        # Caller `run()` aggregate cuối cùng + raise nếu vượt threshold.
+        self._stream_stats: dict[str, dict[str, int]] = {}
+
         pif_rows = self._load_pif_rows(config)
         motion_rows = self._load_motion_rows(config, pif_rows=pif_rows)
         vitals_rows, vitaldb_cases_loaded = self._load_vitals_rows(config, pif_rows=pif_rows)
@@ -95,6 +124,29 @@ class NormalizedArtifactPipeline:
             output_dir=self.output_dir,
             max_subjects=int(config.get("sleep", {}).get("max_subjects", 10)),
         )
+        # IS-012: merge sleep stream stats into aggregate.
+        if isinstance(sleep_stats.get("stats"), dict):
+            self._stream_stats["sleep"] = dict(sleep_stats["stats"])
+
+        # IS-012: aggregate failure check before writing artifacts.
+        # Khi total > 0 + ratio failed/total > threshold -> data loss too high.
+        # Khi total > 0 + 0 success across all streams -> pipeline broken.
+        total_attempted = sum(s["attempted"] for s in self._stream_stats.values())
+        total_failed = sum(s["failed"] for s in self._stream_stats.values())
+        total_success = total_attempted - total_failed
+        if total_attempted > 0:
+            failure_ratio = total_failed / total_attempted
+            if total_success == 0:
+                raise ETLPipelineError(
+                    f"ETL produced 0 successful subjects across {total_attempted} attempts. "
+                    f"Stats: {self._stream_stats}"
+                )
+            if failure_ratio > ETL_FAILURE_RATIO_THRESHOLD:
+                raise ETLPipelineError(
+                    f"ETL failure ratio {failure_ratio:.2f} exceeded threshold "
+                    f"{ETL_FAILURE_RATIO_THRESHOLD:.2f} ({total_failed}/{total_attempted}). "
+                    f"Stats: {self._stream_stats}"
+                )
 
         motion_windows = build_motion_windows(motion_rows)
         output_paths = {
@@ -171,14 +223,11 @@ class NormalizedArtifactPipeline:
         except (FileNotFoundError, ValueError):
             return []
 
+        # IS-013: use public has_required_tracks instead of reaching into
+        # adapter's private _resolve_track method.
         selected_cases: list[dict[str, str]] = []
         for caseid in vitaldb.list_subjects():
-            has_required_tracks = (
-                vitaldb._resolve_track(caseid, SPO2_TRACK) is not None
-                and vitaldb._resolve_track(caseid, BP_SYS_TRACK) is not None
-                and vitaldb._resolve_track(caseid, BP_DIA_TRACK) is not None
-            )
-            if not has_required_tracks:
+            if not vitaldb.has_required_tracks(caseid):
                 continue
             selected_cases.append({"caseid": str(caseid), "session_start": session_start})
             if len(selected_cases) >= limit:
@@ -219,10 +268,13 @@ class NormalizedArtifactPipeline:
                 for subject in up_subjects:
                     try:
                         rows.extend(self._rows_from_frame(up.load_subject(subject)))
+                        self._track_subject("up_fall", success=True)
                     except FileNotFoundError:
                         logger.debug("UP-Fall subject %s not found — skipping", subject)
+                        self._track_subject("up_fall", success=False)
                     except Exception as exc:  # pragma: no cover — defensive ETL guard
                         logger.warning("Skip UP-Fall subject %s: %s", subject, exc)
+                        self._track_subject("up_fall", success=False)
 
         pamap2_config = config.get("pamap2", {})
         pamap2_subjects = list(pamap2_config.get("subjects", []))
@@ -338,10 +390,13 @@ class NormalizedArtifactPipeline:
                 )
             except FileNotFoundError as exc:
                 logger.warning("Skip BIDMC subject %s: %s", subject, exc)
+                self._track_subject("bidmc", success=False)
                 continue
             except Exception as exc:  # pragma: no cover - defensive ETL guard
                 logger.warning("Skip BIDMC subject %s: %s", subject, exc)
+                self._track_subject("bidmc", success=False)
                 continue
+            self._track_subject("bidmc", success=True)
 
             for row in subject_rows:
                 respiration_rate = row.get("respiration_rate")

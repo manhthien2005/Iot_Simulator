@@ -17,17 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from pre_model_trigger.settings_provider import SystemSettingsProvider
-from pre_model_trigger.types import PersonaProfile, TriggerActionItem
+from pre_model_trigger.types import PersonaProfile, SEVERITY_RANK, TriggerActionItem
 
 logger = logging.getLogger(__name__)
 
-# Severity ordering (higher = more severe)
-_SEVERITY_ORDER: dict[str, int] = {
-    "NORMAL": 0,
-    "WATCH": 1,
-    "SEND_TO_RISK_MODEL": 2,
-    "URGENT": 3,
-}
+# IS-005c: alias to centralized SEVERITY_RANK in types module (single source of truth).
+_SEVERITY_ORDER = SEVERITY_RANK
 
 _CONFIG_PATH = Path(__file__).parent / "health_rules" / "rules_config.json"
 
