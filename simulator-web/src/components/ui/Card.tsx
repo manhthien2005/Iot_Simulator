@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 interface CardProps {
   children: ReactNode;
@@ -16,21 +16,10 @@ const paddingMap = {
 };
 
 export function Card({ children, header, footer, padding = "md", hoverable = false }: CardProps) {
-  const [hovered, setHovered] = useState(false);
-
   return (
     <section
-      className="surface-card"
-      style={{
-        padding: paddingMap[padding],
-        transition:
-          "border-color var(--duration-fast) var(--ease-default), box-shadow var(--duration-fast) var(--ease-default), transform var(--duration-fast) var(--ease-default)",
-        transform: hoverable && hovered ? "translateY(-1px)" : hoverable ? "translateY(0)" : "none",
-        borderColor: hoverable && hovered ? "var(--border-subtle)" : undefined,
-        boxShadow: hoverable && hovered ? "var(--shadow-md)" : undefined,
-      }}
-      onMouseEnter={hoverable ? () => setHovered(true) : undefined}
-      onMouseLeave={hoverable ? () => setHovered(false) : undefined}
+      className={`surface-card${hoverable ? " surface-card--hoverable" : ""}`}
+      style={{ padding: paddingMap[padding] }}
     >
       {header ? <header style={{ marginBottom: "12px" }}>{header}</header> : null}
       <div>{children}</div>

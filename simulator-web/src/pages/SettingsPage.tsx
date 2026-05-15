@@ -1,12 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, RotateCcw, Save } from "lucide-react";
-import { Link } from "react-router-dom";
+import { RotateCcw, Save } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
+import { PageHeader } from "../components/ui/PageHeader";
 import { Skeleton } from "../components/ui/Skeleton";
 import { ErrorCard } from "../components/ui/ErrorCard";
+import { PersistenceIndicator } from "../components/domain/settings/PersistenceIndicator";
+import { ReadOnlyFlagRow } from "../components/domain/settings/ReadOnlyFlagRow";
+import { DiagnosticsPointer } from "../components/domain/settings/DiagnosticsPointer";
 import {
   fetchSettings,
   restoreRuntimeDefaults,
@@ -20,6 +23,7 @@ import type {
   TriggerMode,
 } from "../types/settings";
 import { notify } from "../utils/toast";
+import { formatSavedAt } from "../utils/format";
 import { useConfirm } from "../hooks/useConfirm";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
 
@@ -185,20 +189,20 @@ function RuntimeSection({
     <Card header={<strong>Simulator Runtime</strong>}>
       <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
         <PersistenceIndicator persistence={persistence} pending={saveMutation.isPending} />
-        <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Tick Interval (giây)</span>
+        <label className="form-field">
+          <span className="form-label">Tick Interval (giây)</span>
           <Input type="number" step="0.1" min="0.1" max="60" value={tickInterval} onChange={(e) => setTickInterval(e.target.value)} />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Push Interval (giây)</span>
+        <label className="form-field">
+          <span className="form-label">Push Interval (giây)</span>
           <Input type="number" step="1" min="1" max="300" value={pushInterval} onChange={(e) => setPushInterval(e.target.value)} />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Sleep Speed Factor</span>
+        <label className="form-field">
+          <span className="form-label">Sleep Speed Factor</span>
           <Input type="number" step="1" min="1" max="3600" value={sleepSpeed} onChange={(e) => setSleepSpeed(e.target.value)} />
         </label>
-        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Health Backend URL (read-only)</span>
+        <div className="form-field">
+          <span className="form-label">Health Backend URL (read-only)</span>
           <Input value={data.runtime.health_backend_url} readOnly style={{ opacity: 0.6 }} />
         </div>
         <div style={{ display: "flex", gap: "8px", marginTop: "4px", flexWrap: "wrap" }}>
@@ -217,115 +221,6 @@ function RuntimeSection({
   );
 }
 
-/* ── Persistence indicator (Module F.5) ──────────────────────────────── */
-
-function PersistenceIndicator({
-  persistence,
-  pending,
-}: {
-  persistence: RuntimePersistenceBlock;
-  pending: boolean;
-}) {
-  const isFile = persistence.source === "file";
-  const tone = pending
-    ? { fg: "var(--accent-cyan)", bg: "rgba(6,182,212,0.12)", border: "rgba(6,182,212,0.35)" }
-    : isFile
-      ? { fg: "var(--severity-normal)", bg: "rgba(34,197,94,0.10)", border: "rgba(34,197,94,0.30)" }
-      : { fg: "var(--severity-warning)", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.30)" };
-
-  let title: string;
-  let body: string;
-  if (pending) {
-    title = "Đang lưu vào runtime.json…";
-    body = "Đang ghi cấu hình mới ra đĩa, sẽ áp dụng ngay sau khi xong.";
-  } else if (isFile) {
-    title = `Đã lưu lúc ${formatSavedAt(persistence.last_saved_at)}`;
-    body = "Cấu hình hiện tại đến từ runtime.json — vẫn giữ nguyên sau khi khởi động lại.";
-  } else {
-    title = "Đang dùng cấu hình mặc định";
-    body = "Cấu hình đến từ runtime_defaults.json. Bấm Lưu để tạo runtime.json riêng cho máy này.";
-  }
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: "10px",
-        padding: "10px 12px",
-        borderRadius: "var(--radius-md)",
-        border: `1px solid ${tone.border}`,
-        background: tone.bg,
-        color: "var(--text-primary)",
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          width: "8px",
-          height: "8px",
-          marginTop: "6px",
-          borderRadius: "50%",
-          background: tone.fg,
-          flexShrink: 0,
-        }}
-      />
-      <div style={{ display: "grid", gap: "2px" }}>
-        <strong style={{ fontSize: "13px", color: tone.fg }}>{title}</strong>
-        <small style={{ color: "var(--text-secondary)", fontSize: "12px" }}>{body}</small>
-        {persistence.last_error ? (
-          <small style={{ color: "var(--severity-warning)", fontSize: "12px" }}>
-            Cảnh báo: {persistence.last_error}
-          </small>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function formatSavedAt(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const ss = String(d.getSeconds()).padStart(2, "0");
-  return `${hh}:${mm}:${ss}`;
-}
-
-/* ── Pointer to Diagnostics for read-only inspectors (Module D) ─────── */
-
-function DiagnosticsPointer() {
-  return (
-    <Card>
-      <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: "240px" }}>
-          <strong style={{ fontSize: "13px" }}>Tìm ngưỡng vitals + cấu hình rule?</strong>
-          <p style={{ margin: "2px 0 0 0", fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
-            Bảng so sánh DB vs fallback và viewer JSON cho rules/fall đã chuyển sang trang Diagnostics
-            để Settings tập trung vào cấu hình mutable.
-          </p>
-        </div>
-        <Link
-          to="/diagnostics#thresholds"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "6px 12px",
-            fontSize: "13px",
-            color: "var(--accent-cyan)",
-            border: "1px solid var(--accent-cyan)",
-            borderRadius: "var(--radius-md)",
-            textDecoration: "none",
-          }}
-        >
-          <ExternalLink size={14} />
-          Mở Diagnostics
-        </Link>
-      </div>
-    </Card>
-  );
-}
 
 /* ── Section: Feature Flags (truthful copy, read-only badges) ────────── */
 
@@ -340,19 +235,19 @@ const TRIGGER_MODE_META: Record<TriggerMode, TriggerModeMeta> = {
     label: "Tắt",
     description:
       "Pre-trigger không chạy. Mô phỏng phát vitals bình thường nhưng không đánh giá rule local hay gọi model.",
-    tone: { fg: "var(--text-secondary)", bg: "rgba(107,114,128,0.12)", border: "rgba(107,114,128,0.30)" },
+    tone: { fg: "var(--text-secondary)", bg: "var(--severity-offline-bg)", border: "var(--severity-offline-border)" },
   },
   shadow: {
     label: "Shadow",
     description:
       "Pre-trigger chạy nhưng KHÔNG gọi model AI. Rule + fall detection chỉ chạy local — phù hợp để quan sát trigger hoạt động trước khi bật model.",
-    tone: { fg: "var(--severity-info)", bg: "rgba(59,130,246,0.12)", border: "rgba(59,130,246,0.30)" },
+    tone: { fg: "var(--severity-info)", bg: "var(--severity-info-bg)", border: "var(--severity-info-border)" },
   },
   active: {
     label: "Active",
     description:
       "Pre-trigger chạy + escalate sang model AI khi rule bắn. Đây là chế độ đầy đủ — yêu cầu healthguard-model-api online.",
-    tone: { fg: "var(--severity-normal)", bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.30)" },
+    tone: { fg: "var(--severity-normal)", bg: "var(--severity-normal-bg)", border: "var(--severity-normal-border)" },
   },
 };
 
@@ -396,7 +291,7 @@ function FeatureFlagsSection({ data }: { data: SimulatorSettingsResponse }) {
                 borderRadius: "var(--radius-full)",
                 color: meta.tone.fg,
                 border: `1px solid ${meta.tone.border}`,
-                background: "rgba(0,0,0,0.15)",
+                background: "var(--bg-glass)",
                 textTransform: "uppercase",
                 letterSpacing: "0.05em",
               }}
@@ -435,51 +330,6 @@ function FeatureFlagsSection({ data }: { data: SimulatorSettingsResponse }) {
   );
 }
 
-function ReadOnlyFlagRow({
-  envVar,
-  checked,
-  hint,
-}: {
-  envVar: string;
-  checked: boolean;
-  hint: string;
-}) {
-  return (
-    <div
-      style={{
-        display: "grid",
-        gap: "4px",
-        padding: "8px 12px",
-        borderRadius: "var(--radius-md)",
-        border: "1px solid var(--border-default)",
-        background: "var(--bg-elevated)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-        <span
-          style={{
-            fontSize: "11px",
-            fontWeight: 700,
-            padding: "2px 8px",
-            borderRadius: "var(--radius-full)",
-            color: checked ? "var(--severity-normal)" : "var(--text-secondary)",
-            border: `1px solid ${checked ? "rgba(34,197,94,0.35)" : "var(--border-default)"}`,
-            background: checked ? "rgba(34,197,94,0.10)" : "transparent",
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-          }}
-        >
-          {checked ? "ON" : "OFF"}
-        </span>
-        <code style={{ fontSize: "12px", fontFamily: "var(--font-mono)", color: "var(--text-primary)" }}>{envVar}</code>
-      </div>
-      <small style={{ color: "var(--text-secondary)", fontSize: "12px", lineHeight: 1.5 }}>
-        {hint}
-      </small>
-    </div>
-  );
-}
-
 function thresholdSourceLabel(source: string): string {
   switch (source) {
     case "db":
@@ -509,33 +359,32 @@ export function SettingsPage() {
 
   if (isLoading) {
     return (
-      <div style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "16px" }}>
-        <h1 className="page-title">Cấu hình runtime</h1>
+      <section className="page-section" style={{ maxWidth: "900px" }}>
+        <PageHeader title="Cấu hình runtime" />
         <Skeleton style={{ height: "200px" }} />
         <Skeleton style={{ height: "300px" }} />
-      </div>
+      </section>
     );
   }
 
   if (isError || !data) {
     return (
-      <div style={{ padding: "1.5rem" }}>
-        <h1 className="page-title">Cấu hình runtime</h1>
+      <section className="page-section" style={{ maxWidth: "900px" }}>
+        <PageHeader title="Cấu hình runtime" />
         <ErrorCard message={error instanceof Error ? error.message : "Không thể tải cấu hình runtime."} />
-      </div>
+      </section>
     );
   }
 
   return (
-    <div style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "16px", maxWidth: "900px" }}>
-      <h1 className="page-title">Cấu hình runtime</h1>
-      <p className="page-subtitle">
-        Các giá trị mutable của IoT Simulator. Tham khảo Diagnostics cho ngưỡng vitals (chỉ đọc) và rule/fall config.
-      </p>
-
+    <section className="page-section" style={{ maxWidth: "900px" }}>
+      <PageHeader
+        title="Cấu hình runtime"
+        subtitle="Các giá trị mutable của IoT Simulator. Tham khảo Diagnostics cho ngưỡng vitals (chỉ đọc) và rule/fall config."
+      />
       <RuntimeSection data={data} onMutated={handleRuntimeMutated} />
       <FeatureFlagsSection data={data} />
       <DiagnosticsPointer />
-    </div>
+    </section>
   );
 }

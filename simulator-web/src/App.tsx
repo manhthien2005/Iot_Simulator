@@ -5,7 +5,6 @@ import { AppShell } from "./components/layout/AppShell";
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const DevicesPage = lazy(() => import("./pages/DevicesPage").then((module) => ({ default: module.DevicesPage })));
-const ScenariosPage = lazy(() => import("./pages/ScenariosPage").then((module) => ({ default: module.ScenariosPage })));
 const SessionRunnerPage = lazy(() => import("./pages/SessionRunnerPage").then((module) => ({ default: module.SessionRunnerPage })));
 const FallLabPage = lazy(() => import("./pages/FallLabPage").then((module) => ({ default: module.FallLabPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
@@ -33,7 +32,6 @@ export default function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={withBoundary(<DashboardPage />)} />
         <Route path="devices" element={withBoundary(<DevicesPage />)} />
-        <Route path="scenarios" element={withBoundary(<ScenariosPage />)} />
         <Route path="session" element={withBoundary(<SessionRunnerPage />)} />
         <Route path="fall-lab" element={withBoundary(<FallLabPage />)} />
         <Route path="analytics" element={withBoundary(<AnalyticsPage />)} />

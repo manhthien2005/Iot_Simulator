@@ -131,6 +131,70 @@ class SimAdminService:
         return dict(row) if row is not None else None
 
     @staticmethod
+    def get_user_profile(user_id: int, db: Session) -> dict[str, Any] | None:
+        """Aggregate the full user profile for the simulator-web Session page.
+
+        Joins `users` (demographics + medical info) with `emergency_contacts`
+        in a single service call so the FE renders the profile card without
+        chaining requests.  Returns ``None`` when the user is missing or
+        soft-deleted.
+
+        The shape matches ``AdminUserProfileResponse`` — array columns that
+        are NULL in Postgres are coerced to empty lists, ``date_of_birth``
+        is serialised to an ISO date string, and ``weight_kg`` is normalised
+        to a Python ``float`` (the column is ``DECIMAL`` which SQLAlchemy
+        returns as ``Decimal``).
+        """
+        user_row = db.execute(
+            text(
+                """
+                SELECT id, email, full_name, phone, avatar_url,
+                       date_of_birth, gender, height_cm, weight_kg,
+                       blood_type, medical_conditions, medications, allergies
+                FROM users
+                WHERE id = :user_id
+                  AND deleted_at IS NULL
+                LIMIT 1
+                """
+            ),
+            {"user_id": user_id},
+        ).mappings().first()
+
+        if user_row is None:
+            return None
+
+        contact_rows = db.execute(
+            text(
+                """
+                SELECT id, name, phone, relationship, priority
+                FROM emergency_contacts
+                WHERE user_id = :user_id
+                ORDER BY priority ASC, id ASC
+                """
+            ),
+            {"user_id": user_id},
+        ).mappings().all()
+
+        profile: dict[str, Any] = dict(user_row)
+
+        # Normalise scalar types so Pydantic + JSON serialise cleanly.
+        dob = profile.get("date_of_birth")
+        if dob is not None:
+            profile["date_of_birth"] = dob.isoformat() if hasattr(dob, "isoformat") else str(dob)
+        weight = profile.get("weight_kg")
+        if weight is not None:
+            profile["weight_kg"] = float(weight)
+
+        # Postgres TEXT[] columns return None when never written.  The FE
+        # contract is "always an array, possibly empty" so coerce here.
+        for array_field in ("medical_conditions", "medications", "allergies"):
+            if profile.get(array_field) is None:
+                profile[array_field] = []
+
+        profile["emergency_contacts"] = [dict(row) for row in contact_rows]
+        return profile
+
+    @staticmethod
     def create_device(
         db: Session,
         *,

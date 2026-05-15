@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { VerificationTable } from "../components/domain/VerificationTable";
 import { LogViewer } from "../components/domain/LogViewer";
 import { LastGoodPublishCard } from "../components/domain/LastGoodPublishCard";
+import { PageHeader } from "../components/ui/PageHeader";
 import { useSessions } from "../hooks/useSessions";
 import { useAllVerifications } from "../hooks/useVerification";
 import { useLogStream } from "../hooks/useLogStream";
@@ -74,13 +75,12 @@ export function VerificationPage() {
   }, [runningSessions]);
 
   return (
-    <section style={{ display: "grid", gap: "14px" }}>
+    <section className="page-section">
       <div>
-        <h1 className="page-title">Trung tâm Bằng chứng</h1>
-        <p className="page-subtitle">
-          Tiến trình pipeline theo từng phiên, lý do lỗi, lần publish thành công gần nhất và log thời gian thực — đủ
-          bằng chứng để báo cáo phiên mô phỏng. Trạng thái hệ thống tổng quan đã chuyển sang trang Bảng điều khiển.
-        </p>
+        <PageHeader
+          title="Trung tâm Bằng chứng"
+          subtitle="Tiến trình pipeline theo từng phiên, lý do lỗi, lần publish thành công gần nhất và log thời gian thực — đủ bằng chứng để báo cáo phiên mô phỏng. Trạng thái hệ thống tổng quan đã chuyển sang trang Bảng điều khiển."
+        />
         <p style={activeSessionStyle}>{headerLine}</p>
       </div>
 
