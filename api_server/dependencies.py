@@ -1000,13 +1000,133 @@ class SimulatorRuntime:
             logger.warning("Failed to update device heartbeat for db_device_id=%s", db_device_id, exc_info=True)
             return
 
-    def _execute_pending_tick_publish(self, pending_publish: PendingTickPublish | None) -> None:
-        if pending_publish is None:
-            return
+    # ADR-020 part 1 / Phase 7 S6: feature flag controlling whether
+    # vitals tick batches go via HTTP POST to
+    # ``/api/v1/mobile/telemetry/ingest`` or through the legacy
+    # ``session_scope`` DB-direct INSERT path. HTTP default; DB direct
+    # is kept as the transitional fallback so an operator can toggle off
+    # HTTP without redeploying the simulator. S7 will dispose the DB
+    # path after the HTTP path is proven stable in dev topology.
+    @staticmethod
+    def _use_http_vitals_publish() -> bool:
+        raw = os.environ.get("USE_HTTP_VITALS_PUBLISH")
+        if raw is None:
+            return True
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
 
-        publish_started = monotonic()
+    def _publish_vitals_http(
+        self, pending_publish: PendingTickPublish
+    ) -> tuple[int, set[int], str | None]:
+        """ADR-020 S6 — push vitals batch over HTTP to the mobile BE.
+
+        Returns ``(ack_count, synced_device_ids, error_detail)``:
+
+        * ``ack_count`` mirrors ``response.ingested`` so the existing
+          ``publish_ok`` / ``last_publish_ack_count`` tracking semantics
+          stay intact (publish_ok = ack==count).
+        * ``synced_device_ids`` is ``response.risk_evaluated_devices``
+          so the dashboard can surface which devices the BE
+          auto-trigger fanned out for (OQ5 visibility).
+        * ``error_detail`` is a short tag suitable for the dashboard
+          error column on the non-2xx / exception path.
+
+        Payload matches the S5 ``VitalIngestRequest`` schema
+        (``extra="forbid"`` rejects unknown keys), so only the 9
+        canonical vital fields are forwarded — motion + metadata stay
+        sim-local.
+        """
+        canonical_vital_keys = (
+            "heart_rate",
+            "spo2",
+            "temperature",
+            "hrv",
+            "respiratory_rate",
+            "blood_pressure_sys",
+            "blood_pressure_dia",
+            "signal_quality",
+            "motion_artifact",
+        )
+
+        messages: list[dict[str, Any]] = []
+        for msg in pending_publish.messages:
+            db_device_id = msg.get("db_device_id")
+            if db_device_id is None:
+                continue
+            emitted_at = msg.get("emitted_at") or _utc_now_iso()
+            vitals_raw = msg.get("vitals") or {}
+            vitals_payload: dict[str, Any] = {}
+            for key in canonical_vital_keys:
+                value = vitals_raw.get(key)
+                if value is None:
+                    continue
+                vitals_payload[key] = value
+            messages.append(
+                {
+                    "db_device_id": int(db_device_id),
+                    "emitted_at": emitted_at,
+                    "vitals": vitals_payload,
+                }
+            )
+
+        if not messages:
+            return 0, set(), "no_valid_messages"
+
+        payload_json = _json.dumps({"messages": messages})
+        endpoint = self._telemetry_ingest_endpoint(self._health_backend_url)
+        request_headers = {
+            "Content-Type": "application/json",
+            "X-Internal-Service": "iot-simulator",
+        }
+        secret = os.environ.get("INTERNAL_SERVICE_SECRET")
+        if secret:
+            request_headers["X-Internal-Secret"] = secret
+
+        try:
+            response = httpx.post(
+                endpoint,
+                content=payload_json.encode("utf-8"),
+                headers=request_headers,
+                timeout=10,
+            )
+        except Exception as exc:
+            logger.warning("HTTP vitals publish failed", exc_info=True)
+            return 0, set(), f"http_error:{type(exc).__name__}"
+
+        status_code = int(response.status_code)
+        if not (200 <= status_code < 300):
+            return 0, set(), f"http_status_{status_code}"
+
+        try:
+            body = response.json()
+        except Exception:
+            logger.warning("HTTP vitals publish returned invalid JSON body")
+            return 0, set(), "invalid_response_body"
+
+        try:
+            ingested = int(body.get("ingested") or 0)
+        except (TypeError, ValueError):
+            ingested = 0
+
+        synced_device_ids: set[int] = set()
+        for raw_device in body.get("risk_evaluated_devices") or []:
+            try:
+                synced_device_ids.add(int(raw_device))
+            except (TypeError, ValueError):
+                continue
+
+        return ingested, synced_device_ids, None
+
+    def _publish_vitals_db_direct(
+        self, pending_publish: PendingTickPublish
+    ) -> tuple[int, set[int], str | None]:
+        """Legacy DB-direct path — kept as ADR-020 transitional fallback.
+
+        Returns the same ``(ack_count, synced_device_ids, error_detail)``
+        shape as :meth:`_publish_vitals_http` so the caller branch logic
+        stays trivial. Scheduled for dispose in S7 after the HTTP path
+        is proven stable in the dev topology (single-replica uvicorn).
+        """
         ack_count = 0
-        message_count = len(pending_publish.messages)
         synced_device_ids: set[int] = set()
         try:
             with session_scope() as db:
@@ -1052,8 +1172,32 @@ class SimulatorRuntime:
                     )
                 db.commit()
         except Exception:
-            ack_count = 0
             logger.warning("Direct DB write failed for tick publish", exc_info=True)
+            return 0, set(), "db_direct_failed"
+        return ack_count, synced_device_ids, None
+
+    def _execute_pending_tick_publish(self, pending_publish: PendingTickPublish | None) -> None:
+        # ADR-020 part 1 / Phase 7 S6: branch on feature flag. HTTP path
+        # is the new default (matches production smartwatch flow + lets
+        # the BE auto-trigger pipeline at ``/telemetry/ingest`` fire).
+        # The DB-direct branch stays as a transitional fallback so an
+        # operator can toggle off HTTP without redeploying the sim;
+        # dispose tracked in S7 cleanup slice.
+        if pending_publish is None:
+            return
+
+        publish_started = monotonic()
+        message_count = len(pending_publish.messages)
+
+        if self._use_http_vitals_publish():
+            ack_count, synced_device_ids, publish_error_detail = (
+                self._publish_vitals_http(pending_publish)
+            )
+        else:
+            ack_count, synced_device_ids, publish_error_detail = (
+                self._publish_vitals_db_direct(pending_publish)
+            )
+
         publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
 
         publish_ok = ack_count == message_count if message_count > 0 else False
@@ -1062,8 +1206,11 @@ class SimulatorRuntime:
         if message_count == 0:
             publish_error = "Không có message nào để publish"
         elif not publish_ok:
-            publish_error = (
+            base_msg = (
                 f"Backend ack {ack_count}/{message_count} message — kiểm tra MQTT/HTTP downstream"
+            )
+            publish_error = (
+                f"{base_msg} ({publish_error_detail})" if publish_error_detail else base_msg
             )
 
         with self._lock:

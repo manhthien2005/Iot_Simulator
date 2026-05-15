@@ -129,72 +129,86 @@ class TestRuntimeBinding(unittest.TestCase):
         )
 
     def test_tick_active_releases_runtime_lock_before_db_persist(self) -> None:
-        runtime = SimulatorRuntime()
-        created = runtime.create_device(CreateDeviceRequest(name="Lock Watch", type="smartwatch"))
-        runtime.bind_device(created.id, 321)
-        session = runtime.create_session([created.id], speed=1)
-        record = runtime.sessions[session["id"]]
-        record.status = "running"
-
-        def fake_tick_session(_record: object, *, force: bool) -> SessionSideEffects:
-            return SessionSideEffects(
-                pending_publish=PendingTickPublish(
-                    messages=[
-                        {
-                            "device_id": created.id,
-                            "db_device_id": 321,
-                            "emitted_at": "2026-01-01T00:00:00Z",
-                            "vitals": {"heart_rate": 72.0, "spo2": 98.0},
-                        }
-                    ],
-                    clear_count=1,
-                )
-            )
-
-        runtime._tick_session_locked = fake_tick_session  # type: ignore[method-assign]
-
-        entered_persist = Event()
-        allow_persist = Event()
-        sessions_read = Event()
-        read_result: dict[str, object] = {}
-
-        class BlockingSession:
-            def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
-                entered_persist.set()
-                allow_persist.wait(timeout=2.0)
-                return None
-
-            def commit(self) -> None:
-                return None
-
-        @contextmanager
-        def fake_scope():
-            yield BlockingSession()
-
-        original_scope = dependencies_module.session_scope
-        dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
-
+        # ADR-020 S6: this concurrency regression test pins behaviour of
+        # the legacy DB-direct publish path (the only path that does
+        # long-running I/O while holding ``session_scope``). The HTTP
+        # publish path uses ``httpx.post`` with its own internal locking
+        # so the runtime-lock release contract is not relevant there.
+        # Force the fallback so the BlockingSession mock is actually hit.
+        original_flag = os.environ.get("USE_HTTP_VITALS_PUBLISH")
+        os.environ["USE_HTTP_VITALS_PUBLISH"] = "false"
         try:
-            tick_thread = Thread(target=runtime.tick_active, daemon=True)
-            tick_thread.start()
-            self.assertTrue(entered_persist.wait(1.0))
+            runtime = SimulatorRuntime()
+            created = runtime.create_device(CreateDeviceRequest(name="Lock Watch", type="smartwatch"))
+            runtime.bind_device(created.id, 321)
+            session = runtime.create_session([created.id], speed=1)
+            record = runtime.sessions[session["id"]]
+            record.status = "running"
 
-            def read_sessions() -> None:
-                read_result["sessions"] = runtime.list_sessions()
-                sessions_read.set()
+            def fake_tick_session(_record: object, *, force: bool) -> SessionSideEffects:
+                return SessionSideEffects(
+                    pending_publish=PendingTickPublish(
+                        messages=[
+                            {
+                                "device_id": created.id,
+                                "db_device_id": 321,
+                                "emitted_at": "2026-01-01T00:00:00Z",
+                                "vitals": {"heart_rate": 72.0, "spo2": 98.0},
+                            }
+                        ],
+                        clear_count=1,
+                    )
+                )
 
-            read_thread = Thread(target=read_sessions, daemon=True)
-            read_thread.start()
-            self.assertTrue(sessions_read.wait(0.5))
+            runtime._tick_session_locked = fake_tick_session  # type: ignore[method-assign]
 
-            allow_persist.set()
-            tick_thread.join(1.0)
-            read_thread.join(1.0)
+            entered_persist = Event()
+            allow_persist = Event()
+            sessions_read = Event()
+            read_result: dict[str, object] = {}
+
+            class BlockingSession:
+                def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
+                    entered_persist.set()
+                    allow_persist.wait(timeout=2.0)
+                    return None
+
+                def commit(self) -> None:
+                    return None
+
+            @contextmanager
+            def fake_scope():
+                yield BlockingSession()
+
+            original_scope = dependencies_module.session_scope
+            dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
+
+            try:
+                tick_thread = Thread(target=runtime.tick_active, daemon=True)
+                tick_thread.start()
+                self.assertTrue(entered_persist.wait(1.0))
+
+                def read_sessions() -> None:
+                    read_result["sessions"] = runtime.list_sessions()
+                    sessions_read.set()
+
+                read_thread = Thread(target=read_sessions, daemon=True)
+                read_thread.start()
+                self.assertTrue(sessions_read.wait(0.5))
+
+                allow_persist.set()
+                tick_thread.join(1.0)
+                read_thread.join(1.0)
+            finally:
+                dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+
+            self.assertFalse(tick_thread.is_alive())
+            self.assertIn("sessions", read_result)
         finally:
-            dependencies_module.session_scope = original_scope  # type: ignore[assignment]
-
-        self.assertFalse(tick_thread.is_alive())
-        self.assertIn("sessions", read_result)
+            if original_flag is None:
+                os.environ.pop("USE_HTTP_VITALS_PUBLISH", None)
+            else:
+                os.environ["USE_HTTP_VITALS_PUBLISH"] = original_flag
 
     def test_push_alert_to_backend_posts_bound_device_payload_once_per_signature(self) -> None:
         runtime = SimulatorRuntime()
@@ -402,65 +416,78 @@ class TestRuntimeBinding(unittest.TestCase):
         self.assertFalse(runtime.devices[unbound.id].has_pending_sync)
 
     def test_tick_publish_commits_vitals_without_motion_table(self) -> None:
-        runtime = SimulatorRuntime()
-        created = runtime.create_device(CreateDeviceRequest(name="Persist Watch", type="smartwatch"))
-        runtime.bind_device(created.id, 303)
-        session = runtime.create_session([created.id], speed=1)
-        record = runtime.sessions[session["id"]]
-        record.status = "running"
-
-        class RecordingSession:
-            def __init__(self) -> None:
-                self.statements: list[str] = []
-                self.commits = 0
-
-            def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
-                self.statements.append(str(statement))
-                return None
-
-            def commit(self) -> None:
-                self.commits += 1
-
-        fake_session = RecordingSession()
-
-        @contextmanager
-        def fake_scope():
-            yield fake_session
-
-        pending_publish = PendingTickPublish(
-            messages=[
-                {
-                    "db_device_id": 303,
-                    "emitted_at": "2026-01-01T00:00:00Z",
-                    "vitals": {
-                        "heart_rate": 72.0,
-                        "spo2": 98.0,
-                        "temperature": 36.7,
-                        "blood_pressure_sys": 118.0,
-                        "blood_pressure_dia": 76.0,
-                        "respiratory_rate": 16.0,
-                    },
-                    "motion": {"accel_x": [0.1, 0.2, 0.3]},
-                }
-            ],
-            clear_count=1,
-        )
-
-        original_scope = dependencies_module.session_scope
-        dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
+        # ADR-020 S6: HTTP vitals publish is now the default path.
+        # This regression test pins the legacy DB-direct fallback so an
+        # operator toggling ``USE_HTTP_VITALS_PUBLISH=false`` (e.g. when
+        # the mobile BE is offline mid-demo) still gets a working
+        # ``INSERT INTO vitals``. S7 will dispose this path entirely.
+        original_flag = os.environ.get("USE_HTTP_VITALS_PUBLISH")
+        os.environ["USE_HTTP_VITALS_PUBLISH"] = "false"
         try:
-            runtime._execute_pending_tick_publish(pending_publish)
-        finally:
-            dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+            runtime = SimulatorRuntime()
+            created = runtime.create_device(CreateDeviceRequest(name="Persist Watch", type="smartwatch"))
+            runtime.bind_device(created.id, 303)
+            session = runtime.create_session([created.id], speed=1)
+            record = runtime.sessions[session["id"]]
+            record.status = "running"
 
-        self.assertEqual(fake_session.commits, 1)
-        self.assertTrue(any("INSERT INTO vitals" in stmt for stmt in fake_session.statements))
-        self.assertTrue(any("UPDATE devices SET last_sync_at = NOW()" in stmt for stmt in fake_session.statements))
-        self.assertFalse(any("motion_data" in stmt for stmt in fake_session.statements))
-        self.assertTrue(record.last_publish_ok)
-        self.assertEqual(record.last_publish_ack_count, 1)
-        self.assertEqual(record.last_publish_count, 1)
-        self.assertIsNotNone(record.last_publish_latency_ms)
+            class RecordingSession:
+                def __init__(self) -> None:
+                    self.statements: list[str] = []
+                    self.commits = 0
+
+                def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
+                    self.statements.append(str(statement))
+                    return None
+
+                def commit(self) -> None:
+                    self.commits += 1
+
+            fake_session = RecordingSession()
+
+            @contextmanager
+            def fake_scope():
+                yield fake_session
+
+            pending_publish = PendingTickPublish(
+                messages=[
+                    {
+                        "db_device_id": 303,
+                        "emitted_at": "2026-01-01T00:00:00Z",
+                        "vitals": {
+                            "heart_rate": 72.0,
+                            "spo2": 98.0,
+                            "temperature": 36.7,
+                            "blood_pressure_sys": 118.0,
+                            "blood_pressure_dia": 76.0,
+                            "respiratory_rate": 16.0,
+                        },
+                        "motion": {"accel_x": [0.1, 0.2, 0.3]},
+                    }
+                ],
+                clear_count=1,
+            )
+
+            original_scope = dependencies_module.session_scope
+            dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
+            try:
+                runtime._execute_pending_tick_publish(pending_publish)
+            finally:
+                dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+
+            self.assertEqual(fake_session.commits, 1)
+            self.assertTrue(any("INSERT INTO vitals" in stmt for stmt in fake_session.statements))
+            self.assertTrue(any("UPDATE devices SET last_sync_at = NOW()" in stmt for stmt in fake_session.statements))
+            self.assertFalse(any("motion_data" in stmt for stmt in fake_session.statements))
+            self.assertTrue(record.last_publish_ok)
+            self.assertEqual(record.last_publish_ack_count, 1)
+            self.assertEqual(record.last_publish_count, 1)
+            self.assertIsNotNone(record.last_publish_latency_ms)
+        finally:
+            if original_flag is None:
+                os.environ.pop("USE_HTTP_VITALS_PUBLISH", None)
+            else:
+                os.environ["USE_HTTP_VITALS_PUBLISH"] = original_flag
 
     def test_health_payload_marks_db_down_when_session_scope_fails(self) -> None:
         runtime = SimulatorRuntime()
@@ -484,45 +511,56 @@ class TestRuntimeBinding(unittest.TestCase):
         self.assertEqual(payload["db"], "down")
 
     def test_tick_publish_failure_does_not_report_ack(self) -> None:
-        runtime = SimulatorRuntime()
-        created = runtime.create_device(CreateDeviceRequest(name="Fail Watch", type="smartwatch"))
-        runtime.bind_device(created.id, 404)
-        session = runtime.create_session([created.id], speed=1)
-        record = runtime.sessions[session["id"]]
-        record.status = "running"
-
-        class FailingSession:
-            def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
-                raise RuntimeError("insert failed")
-
-            def commit(self) -> None:
-                raise AssertionError("commit should not be reached when insert fails")
-
-        @contextmanager
-        def fake_scope():
-            yield FailingSession()
-
-        pending_publish = PendingTickPublish(
-            messages=[
-                {
-                    "db_device_id": 404,
-                    "emitted_at": "2026-01-01T00:00:00Z",
-                    "vitals": {"heart_rate": 65.0, "spo2": 97.0},
-                }
-            ],
-            clear_count=1,
-        )
-
-        original_scope = dependencies_module.session_scope
-        dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
+        # ADR-020 S6: pin legacy DB-direct fallback failure semantics.
+        # HTTP-path failure modes are covered by
+        # ``test_iot_http_vitals_publisher.py``.
+        original_flag = os.environ.get("USE_HTTP_VITALS_PUBLISH")
+        os.environ["USE_HTTP_VITALS_PUBLISH"] = "false"
         try:
-            runtime._execute_pending_tick_publish(pending_publish)
-        finally:
-            dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+            runtime = SimulatorRuntime()
+            created = runtime.create_device(CreateDeviceRequest(name="Fail Watch", type="smartwatch"))
+            runtime.bind_device(created.id, 404)
+            session = runtime.create_session([created.id], speed=1)
+            record = runtime.sessions[session["id"]]
+            record.status = "running"
 
-        self.assertFalse(record.last_publish_ok)
-        self.assertEqual(record.last_publish_ack_count, 0)
-        self.assertEqual(record.last_publish_count, 1)
+            class FailingSession:
+                def execute(self, statement, params=None):  # type: ignore[no-untyped-def]
+                    raise RuntimeError("insert failed")
+
+                def commit(self) -> None:
+                    raise AssertionError("commit should not be reached when insert fails")
+
+            @contextmanager
+            def fake_scope():
+                yield FailingSession()
+
+            pending_publish = PendingTickPublish(
+                messages=[
+                    {
+                        "db_device_id": 404,
+                        "emitted_at": "2026-01-01T00:00:00Z",
+                        "vitals": {"heart_rate": 65.0, "spo2": 97.0},
+                    }
+                ],
+                clear_count=1,
+            )
+
+            original_scope = dependencies_module.session_scope
+            dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
+            try:
+                runtime._execute_pending_tick_publish(pending_publish)
+            finally:
+                dependencies_module.session_scope = original_scope  # type: ignore[assignment]
+
+            self.assertFalse(record.last_publish_ok)
+            self.assertEqual(record.last_publish_ack_count, 0)
+            self.assertEqual(record.last_publish_count, 1)
+        finally:
+            if original_flag is None:
+                os.environ.pop("USE_HTTP_VITALS_PUBLISH", None)
+            else:
+                os.environ["USE_HTTP_VITALS_PUBLISH"] = original_flag
 
     def test_create_device_with_data_binding(self) -> None:
         runtime = SimulatorRuntime()
