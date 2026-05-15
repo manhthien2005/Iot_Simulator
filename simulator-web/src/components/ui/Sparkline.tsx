@@ -18,6 +18,9 @@ interface SparklineProps {
   yDomain?: [number, number];
   /** Optional label rendered above the trace for accessibility. */
   ariaLabel?: string;
+  /** When true, the SVG stretches to 100% of its parent width via viewBox.
+   *  `width` is still used as the internal coordinate space. */
+  fluid?: boolean;
 }
 
 function SparklineInner({
@@ -28,6 +31,7 @@ function SparklineInner({
   fill = "none",
   yDomain,
   ariaLabel,
+  fluid = false,
 }: SparklineProps) {
   const path = useMemo(() => {
     if (values.length === 0) return "";
@@ -43,14 +47,17 @@ function SparklineInner({
       .join(" ");
   }, [values, width, height, yDomain]);
 
+  const svgSizeProps = fluid
+    ? ({ width: "100%", height, viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none" } as const)
+    : ({ width, height } as const);
+
   if (values.length === 0) {
     return (
       <svg
-        width={width}
-        height={height}
+        {...svgSizeProps}
         role="img"
         aria-label={ariaLabel ?? "no data"}
-        style={{ opacity: 0.4 }}
+        style={{ opacity: 0.4, display: "block" }}
       >
         <line
           x1={0}
@@ -65,8 +72,13 @@ function SparklineInner({
   }
 
   return (
-    <svg width={width} height={height} role="img" aria-label={ariaLabel}>
-      <path d={path} fill={fill} stroke={stroke} strokeWidth={1.5} />
+    <svg
+      {...svgSizeProps}
+      role="img"
+      aria-label={ariaLabel}
+      style={{ display: "block" }}
+    >
+      <path d={path} fill={fill} stroke={stroke} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }

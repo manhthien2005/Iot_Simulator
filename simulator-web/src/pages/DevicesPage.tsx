@@ -1,13 +1,18 @@
-import { Plus, Watch } from "lucide-react";
+import type { CSSProperties } from "react";
+import { Plus, RefreshCw, Watch } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CreateDbDeviceModal } from "../components/domain/CreateDbDeviceModal";
 import { DbDeviceTable } from "../components/domain/DbDeviceTable";
+import {
+  DeviceFilterBar,
+  type DeviceFilter,
+} from "../components/domain/devices/DeviceFilterBar";
+import { DeviceSummaryStrip } from "../components/domain/devices/DeviceSummaryStrip";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorCard } from "../components/ui/ErrorCard";
 import { Skeleton } from "../components/ui/Skeleton";
 import { Button } from "../components/ui/Button";
-import { Input } from "../components/ui/Input";
 import { useDbDevices } from "../hooks/useDevices";
 import {
   batchActivateDbDevices,
@@ -25,28 +30,49 @@ const EMPTY_DB_DEVICES: DbDevice[] = [];
 
 export function DevicesPage() {
   const queryClient = useQueryClient();
-  const { data: dbDevices = EMPTY_DB_DEVICES, isLoading, error, refetch } = useDbDevices();
+  const { data: dbDevices = EMPTY_DB_DEVICES, isLoading, error, refetch, isFetching } = useDbDevices();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
+  const [filter, setFilter] = useState<DeviceFilter>("all");
   const [openCreate, setOpenCreate] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [batchActivating, setBatchActivating] = useState(false);
+  const [batchOp, setBatchOp] = useState<null | "activate" | "deactivate" | "delete">(null);
+  const batchActivating = batchOp === "activate";
+  const batchBusy = batchOp !== null;
   // Module G.18 — confirm before destructive deletes + unified toasts
   // for the rest of the page's mutations.
   const [confirm, confirmDialog] = useConfirm();
 
-  const filtered = useMemo(
-    () => {
-      const term = deferredSearch.toLowerCase();
-      return dbDevices.filter(
-        (device) =>
-          device.device_name.toLowerCase().includes(term) ||
-          (device.serial_number ?? "").toLowerCase().includes(term) ||
-          (device.user_email ?? "").toLowerCase().includes(term)
+  const filtered = useMemo(() => {
+    const term = deferredSearch.toLowerCase();
+    return dbDevices.filter((device) => {
+      // 1. Filter chip predicate.
+      switch (filter) {
+        case "active":
+          if (!device.is_active) return false;
+          break;
+        case "idle":
+          if (device.is_active) return false;
+          break;
+        case "unassigned":
+          if (device.user_id != null) return false;
+          break;
+        case "sim":
+          if (!device.is_sim_running) return false;
+          break;
+        case "all":
+        default:
+          break;
+      }
+      // 2. Free-text search.
+      if (term.length === 0) return true;
+      return (
+        device.device_name.toLowerCase().includes(term) ||
+        (device.serial_number ?? "").toLowerCase().includes(term) ||
+        (device.user_email ?? "").toLowerCase().includes(term)
       );
-    },
-    [dbDevices, deferredSearch]
-  );
+    });
+  }, [dbDevices, deferredSearch, filter]);
 
   useEffect(() => {
     const visibleIds = new Set(filtered.map((device) => device.id));
@@ -221,7 +247,7 @@ export function DevicesPage() {
       return;
     }
 
-    setBatchActivating(true);
+    setBatchOp("activate");
     try {
       const results = await batchActivateDbDevices(eligibleDevices.map((device) => device.id));
       const activatedCount = results.filter((item) => item.status === "activated").length;
@@ -247,29 +273,110 @@ export function DevicesPage() {
     } catch {
       notify.error("Không kích hoạt được các thiết bị đã chọn.");
     } finally {
-      setBatchActivating(false);
+      setBatchOp(null);
     }
   }, [filtered, invalidate]);
 
+  const handleBatchDeactivate = useCallback(
+    async (deviceIds: number[]) => {
+      const targets = dbDevices.filter((d) => deviceIds.includes(d.id) && d.is_sim_running);
+      if (targets.length === 0) {
+        notify.warning("Không có thiết bị đang SIM để tắt.");
+        return;
+      }
+      const ok = await confirm({
+        severity: "warning",
+        title: "Tắt SIM hàng loạt?",
+        description: `Thao tác này tắt simulator runtime cho ${targets.length} thiết bị. Mobile app của các user liên quan sẽ mất luồng vitals trong vài giây.`,
+        confirmLabel: "Tắt SIM",
+      });
+      if (!ok) return;
+
+      setBatchOp("deactivate");
+      try {
+        const results = await Promise.allSettled(targets.map((d) => deactivateDbDevice(d.id)));
+        const failed = results.filter((r) => r.status === "rejected").length;
+        const succeeded = results.length - failed;
+        if (succeeded > 0) notify.success(`Đã tắt SIM cho ${succeeded} thiết bị.`);
+        if (failed > 0) notify.warning(`${failed} thiết bị tắt SIM lỗi.`);
+        setSelectedIds([]);
+        await invalidate();
+      } catch {
+        notify.error("Không tắt được SIM hàng loạt.");
+      } finally {
+        setBatchOp(null);
+      }
+    },
+    [confirm, dbDevices, invalidate]
+  );
+
+  const handleBatchDelete = useCallback(
+    async (deviceIds: number[]) => {
+      if (deviceIds.length === 0) return;
+      const ok = await confirm({
+        severity: "critical",
+        title: `Xoá ${deviceIds.length} thiết bị?`,
+        description: `Thao tác này xoá ${deviceIds.length} thiết bị khỏi production DB và không thể hoàn tác. Mọi sample/event đã ghi vẫn còn nhưng thiết bị sẽ biến mất khỏi danh sách.`,
+        confirmLabel: "Xoá thiết bị",
+      });
+      if (!ok) return;
+
+      setBatchOp("delete");
+      try {
+        const results = await Promise.allSettled(deviceIds.map((id) => deleteDbDevice(id)));
+        const failed = results.filter((r) => r.status === "rejected").length;
+        const succeeded = results.length - failed;
+        if (succeeded > 0) notify.success(`Đã xoá ${succeeded} thiết bị.`);
+        if (failed > 0) notify.warning(`${failed} thiết bị xoá lỗi.`);
+        setSelectedIds([]);
+        await invalidate();
+      } catch {
+        notify.error("Không xoá được hàng loạt.");
+      } finally {
+        setBatchOp(null);
+      }
+    },
+    [confirm, invalidate]
+  );
+
   return (
-    <section style={{ display: "grid", gap: "14px" }}>
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: "12px" }}>
-        <div>
-          <h1 className="page-title">Thiết bị</h1>
-          <p className="page-subtitle">
-            Quản lý toàn bộ thiết bị trong hệ thống, trạng thái kết nối mobile và chế độ mô phỏng.
-          </p>
+    <section className="page-section" style={{ gap: "16px" }}>
+      {/* 1. Header bar — title + refresh + primary CTA */}
+      <header style={headerStyle}>
+        <h1 className="page-title" style={{ fontSize: "30px", letterSpacing: "-0.02em" }}>
+          Thiết bị
+        </h1>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              void refetch();
+            }}
+            loading={isFetching}
+            leftIcon={<RefreshCw size={14} />}
+          >
+            Làm mới
+          </Button>
+          <Button variant="primary" leftIcon={<Plus size={14} />} onClick={() => setOpenCreate(true)}>
+            Tạo thiết bị
+          </Button>
         </div>
-        <Button variant="primary" leftIcon={<Plus size={14} />} onClick={() => setOpenCreate(true)}>
-          Tạo thiết bị
-        </Button>
-      </div>
-      <Input
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        placeholder="Tìm theo tên hoặc email..."
+      </header>
+
+      {/* 2. Summary strip — 4 stat tiles */}
+      <DeviceSummaryStrip devices={dbDevices} />
+
+      {/* 3. Filter bar — chips + search inline */}
+      <DeviceFilterBar
+        devices={dbDevices}
+        filter={filter}
+        onFilterChange={setFilter}
+        search={search}
+        onSearchChange={setSearch}
       />
 
+      {/* 4. Table / empty / loading / error */}
       {isLoading ? (
         <Skeleton style={{ height: "220px" }} />
       ) : error ? (
@@ -278,7 +385,11 @@ export function DevicesPage() {
         <EmptyState
           icon={Watch}
           title="Không tìm thấy thiết bị"
-          description="Tạo thiết bị mới hoặc thay đổi từ khóa tìm kiếm."
+          description={
+            filter !== "all" || search.length > 0
+              ? "Thử bỏ bộ lọc hoặc thay đổi từ khóa tìm kiếm."
+              : "Tạo thiết bị mới để bắt đầu."
+          }
           action={{ label: "Tạo thiết bị", onClick: () => setOpenCreate(true) }}
         />
       ) : (
@@ -291,7 +402,10 @@ export function DevicesPage() {
           onDeactivateSim={handleDeactivateSim}
           onDelete={handleDelete}
           onBatchActivate={handleBatchActivate}
+          onBatchDeactivate={handleBatchDeactivate}
+          onBatchDelete={handleBatchDelete}
           batchActivating={batchActivating}
+          batchBusy={batchBusy}
         />
       )}
 
@@ -300,3 +414,13 @@ export function DevicesPage() {
     </section>
   );
 }
+
+// ── Styles ──────────────────────────────────────────────────────────────
+
+const headerStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  flexWrap: "wrap",
+  gap: "12px",
+};

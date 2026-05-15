@@ -639,6 +639,52 @@ class AdminUserResponse(BaseModel):
     is_active: bool = True
 
 
+class AdminEmergencyContact(BaseModel):
+    """One row from `emergency_contacts` for a user."""
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    name: str
+    phone: str
+    relationship: str | None = None
+    priority: int = 1
+
+
+class AdminUserProfileResponse(BaseModel):
+    """Full user profile consumed by the simulator-web Session page.
+
+    Aggregates demographics + medical info from `users` and the list of
+    `emergency_contacts` so the FE can render a single profile card without
+    chaining multiple admin requests.  Array fields default to `[]` so the
+    FE can render unconditionally.
+    """
+
+    model_config = {"from_attributes": True}
+
+    # Identity
+    id: int
+    email: str
+    full_name: str | None = None
+    phone: str | None = None
+    avatar_url: str | None = None
+
+    # Demographics
+    date_of_birth: str | None = None  # ISO date string YYYY-MM-DD
+    gender: str | None = None
+    height_cm: int | None = None
+    weight_kg: float | None = None
+
+    # Medical
+    blood_type: str | None = None
+    medical_conditions: list[str] = []
+    medications: list[str] = []
+    allergies: list[str] = []
+
+    # Emergency
+    emergency_contacts: list[AdminEmergencyContact] = []
+
+
 # ---------------------------------------------------------------------------
 # Health payload v2 — single source of truth consumed by the dashboard hero,
 # settings, and verification surfaces.  See Phase 0 of the UX refactor plan.
