@@ -8,7 +8,6 @@ from api_server.schemas import (
     DbSleepHistoryRow,
     RiskInjectRequest,
     RiskScoreResponse,
-    RiskTriggerRequest,
     SleepSessionResponse,
 )
 
@@ -72,13 +71,9 @@ def inject_risk(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/analytics/risk/trigger", status_code=status.HTTP_204_NO_CONTENT)
-def trigger_risk(
-    request: RiskTriggerRequest,
-    runtime: SimulatorRuntime = Depends(get_runtime),
-) -> Response:
-    try:
-        runtime.trigger_risk_calculation(request)
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+# ADR-020 Phase 7 S7: ``POST /analytics/risk/trigger`` disposed. The mobile
+# BE auto-calls ``calculate_device_risk`` after every successful
+# ``/telemetry/ingest`` (cooldown ``RISK_COOLDOWN_SECONDS``, default 60s)
+# so an explicit on-demand trigger from the simulator is no longer needed.
+# The runtime helpers ``trigger_risk_calculation`` + ``_trigger_risk_inference``
+# were removed in the same slice.

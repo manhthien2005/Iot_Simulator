@@ -56,15 +56,24 @@ class TestApiAnalytics(unittest.TestCase):
         self.assertEqual(payload["deviceId"], self.device_id)
         push_mock.assert_called_once()
 
-    def test_risk_trigger_and_fetch(self) -> None:
-        trigger = self.client.post("/api/v1/sim/analytics/risk/trigger", json={"device_id": self.device_id})
-        self.assertEqual(trigger.status_code, 204)
+    def test_risk_trigger_endpoint_disposed(self) -> None:
+        # ADR-020 Phase 7 S7: ``POST /analytics/risk/trigger`` was removed.
+        # The mobile BE now auto-calls ``calculate_device_risk`` after
+        # every successful ``/telemetry/ingest`` (cooldown
+        # ``RISK_COOLDOWN_SECONDS``, default 60s) so the simulator no
+        # longer needs an on-demand trigger. ``GET /analytics/risk``
+        # remains so the dashboard can still read the latest score.
+        trigger = self.client.post(
+            "/api/v1/sim/analytics/risk/trigger",
+            json={"device_id": self.device_id},
+        )
+        self.assertEqual(trigger.status_code, 404)
+
         score = self.client.get(f"/api/v1/sim/analytics/risk?deviceId={self.device_id}")
         self.assertEqual(score.status_code, 200)
         payload = score.json()
         self.assertGreaterEqual(payload["score"], 0.0)
         self.assertLessEqual(payload["score"], 1.0)
-        self.assertGreater(len(payload["history"]), 0)
 
     def test_risk_inject(self) -> None:
         injected = self.client.post(

@@ -58,7 +58,6 @@ try:
         RiskHistoryPoint,
         RiskInjectRequest,
         RiskScoreResponse,
-        RiskTriggerRequest,
         SimulatedDevice,
         SleepHistoryRow,
         SleepSessionResponse,
@@ -125,7 +124,6 @@ except ModuleNotFoundError:
         RiskHistoryPoint,
         RiskInjectRequest,
         RiskScoreResponse,
-        RiskTriggerRequest,
         SimulatedDevice,
         SleepHistoryRow,
         SleepSessionResponse,
@@ -695,10 +693,12 @@ class SimulatorRuntime:
             self._orch_enable_model_calls: bool = os.environ.get(
                 "PRE_MODEL_TRIGGER_ENABLE_MODEL_CALLS", ""
             ).lower() in ("1", "true", "yes")
-            # enable_model_calls=False intentionally (architecture Option A):
-            # The orchestrator only decides action severity; the runtime handles
-            # the actual model call via _trigger_risk_inference (correct endpoint
-            # + auth header).  _orch_enable_model_calls gates that runtime path.
+            # ADR-020 Phase 7 S7: deprecated read-only flag retained for
+            # status-reporting backward compat. The original gating
+            # behaviour (firing ``_trigger_risk_inference`` from the tick
+            # loop on URGENT actions) was disposed in S7 — the mobile BE
+            # now auto-calls ``calculate_device_risk`` after every
+            # ``/telemetry/ingest``. Slated for full removal in S18 cleanup.
             self._trigger_orchestrator = TriggerOrchestrator(
                 settings_provider=_settings_provider,
                 rule_engine=_rule_engine,
@@ -918,9 +918,11 @@ class SimulatorRuntime:
         # Mirrors the ingest endpoint path strategy: direct local calls hit /api/v1/mobile/...
         return f"{base_url.rstrip('/')}/api/v1/mobile/telemetry/alert"
 
-    @staticmethod
-    def _risk_calculate_endpoint(base_url: str) -> str:
-        return f"{base_url.rstrip('/')}/api/v1/mobile/risk/calculate"
+    # ADR-020 Phase 7 S7: ``_risk_calculate_endpoint`` + ``_trigger_risk_inference``
+    # disposed. The BE now auto-calls ``calculate_device_risk`` after every
+    # successful ``/telemetry/ingest`` (cooldown ``RISK_COOLDOWN_SECONDS``,
+    # default 60s) so the simulator never has to request a re-evaluation.
+    # Removing the helper drops a stale duplication of the BE risk policy.
 
     @staticmethod
     def _http_sender(endpoint: str, payload: str, headers: dict[str, str] | None = None) -> int:
@@ -1350,38 +1352,12 @@ class SimulatorRuntime:
     def sleep_db_history(self, device_id: str, days: int = 30) -> list[DbSleepHistoryRow]:
         return self.sleep_service.sleep_db_history(device_id, days)
 
-    def _trigger_risk_inference(self, sim_device_id: str) -> int | None:
-        with self._lock:
-            device = self.devices.get(sim_device_id)
-            bound_db_device_id = device.bound_db_device_id if device is not None else None
-        if bound_db_device_id is None:
-            return None
-
-        payload = {"device_id": bound_db_device_id}
-        endpoint = self._risk_calculate_endpoint(self._health_backend_url)
-        try:
-            status_code = self._http_sender(
-                endpoint,
-                _json.dumps(payload),
-                headers={"X-Internal-Service": "iot-simulator"},
-            )
-        except Exception as exc:
-            self._publish_device_log(
-                sim_device_id,
-                level="WARN",
-                message=f"Risk trigger skipped: {exc}",
-                timestamp=_utc_now_iso(),
-            )
-            return None
-
-        level = "INFO" if 200 <= status_code < 300 else "WARN"
-        self._publish_device_log(
-            sim_device_id,
-            level=level,
-            message=f"Risk inference triggered, HTTP {status_code}",
-            timestamp=_utc_now_iso(),
-        )
-        return status_code
+    # ADR-020 Phase 7 S7: ``_trigger_risk_inference`` disposed. With the
+    # HTTP vitals path active (S6) and the BE auto-trigger live at
+    # ``/telemetry/ingest`` (S5 — ``calculate_device_risk`` with 60s
+    # cooldown), the simulator no longer requests risk re-evaluation. The
+    # legacy public surface ``trigger_risk_calculation`` + the router
+    # endpoint ``/analytics/risk/trigger`` were also removed in S7.
 
     # ── Device CRUD — delegated to DeviceService (Task 3.1) ──────────────
 
@@ -2290,30 +2266,11 @@ class SimulatorRuntime:
                 metadata={"score": f"{score:.2f}", "risk_level": request.risk_level, "risk_type": request.risk_type},
             )
 
-    def trigger_risk_calculation(self, request: RiskTriggerRequest) -> None:
-        with self._lock:
-            self._require_device(request.device_id)
-
-        status_code = self._trigger_risk_inference(request.device_id)
-        metadata: dict[str, str] = {}
-        if status_code is not None:
-            metadata["http_status"] = str(status_code)
-
-        if status_code is not None and 200 <= status_code < 300:
-            severity = "normal"
-            message = "Backend risk inference requested"
-        else:
-            severity = "warning"
-            message = "Backend risk inference request failed"
-
-        with self._lock:
-            self._record_event(
-                device_id=request.device_id,
-                event_type="risk_inference_triggered",
-                severity=severity,
-                message=message,
-                metadata=metadata,
-            )
+    # ADR-020 Phase 7 S7: ``trigger_risk_calculation`` disposed alongside
+    # ``_trigger_risk_inference``. The router endpoint
+    # ``POST /api/v1/sim/analytics/risk/trigger`` was removed in the same
+    # slice. Callers should rely on the BE auto-trigger that fires after
+    # ``/telemetry/ingest`` (cooldown ``RISK_COOLDOWN_SECONDS``, default 60s).
 
     def latest_vitals(self, device_id: str) -> VitalsSample:
         return self.vitals_service.latest_vitals(device_id)
@@ -2949,10 +2906,12 @@ class SimulatorRuntime:
         # Runs only when PRE_MODEL_TRIGGER_ENABLED=1 and the orchestrator was
         # successfully wired at startup.  Results are logged only (shadow mode):
         # they do NOT modify ``effects.pending_alerts`` so the existing alert
-        # flow is untouched.  When ``enable_model_calls=True`` and the
-        # orchestrator decides to escalate, we use ``_trigger_risk_inference``
-        # (correct endpoint + header) instead of the broken HealthGuardAPIClient
-        # path (Fix R3 alternative).
+        # flow is untouched. ADR-020 Phase 7 S7 disposed the active R3 wire —
+        # the BE now auto-calls ``calculate_device_risk`` after every
+        # ``/telemetry/ingest`` (S5 + S6), so the orchestrator never needs to
+        # request risk inference from the simulator. ``_orch_enable_model_calls``
+        # is retained as a deprecated read-only flag for status reporting; it
+        # no longer gates any behaviour and will be removed in the S18 cleanup.
         if _PRE_MODEL_TRIGGER_ENABLED and self._trigger_orchestrator is not None:
             for payload in outputs:
                 _orch_device_id = str(payload.get("device_id") or "")
@@ -2972,11 +2931,6 @@ class SimulatorRuntime:
                             _orch_device_id,
                             [(a.action_type, a.severity) for a in _orch_actions],
                         )
-                        if getattr(self, "_orch_enable_model_calls", False) and any(
-                            a.severity in {"SEND_TO_RISK_MODEL", "URGENT"}
-                            for a in _orch_actions
-                        ):
-                            self._trigger_risk_inference(_orch_device_id)
                 except Exception:
                     logger.exception(
                         "Orchestrator evaluation failed for device %s (non-fatal)",

@@ -420,8 +420,10 @@ class RiskInjectRequest(BaseModel):
     score: float = Field(ge=0.0, le=1.0)
 
 
-class RiskTriggerRequest(BaseModel):
-    device_id: str
+# ADR-020 Phase 7 S7: ``RiskTriggerRequest`` disposed alongside the
+# ``POST /analytics/risk/trigger`` router endpoint. The mobile BE now
+# auto-calls ``calculate_device_risk`` after every successful
+# ``/telemetry/ingest`` so an explicit risk-trigger payload is unused.
 
 
 class ApplyScenarioRequest(BaseModel):
