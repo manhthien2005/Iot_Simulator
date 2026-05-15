@@ -1,4 +1,4 @@
-import { AlertTriangle, BarChart3, Clapperboard, LayoutDashboard, Play, Settings, ShieldCheck, Watch, Wrench, ChevronLeft, ChevronRight, Menu } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, LayoutDashboard, Play, Settings, ShieldCheck, Watch, Wrench, ChevronLeft, ChevronRight, Menu } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import type { QueryKey } from "@tanstack/react-query";
@@ -6,7 +6,6 @@ import { useUiStore } from "../../stores/uiStore";
 import { useHoverPrefetch } from "../../hooks/useHoverPrefetch";
 import { fetchDashboardSummary } from "../../services/dashboardApi";
 import { fetchDbDevices } from "../../services/deviceApi";
-import { fetchScenarios } from "../../services/scenarioApi";
 import { fetchSessions } from "../../services/sessionApi";
 
 // ---------------------------------------------------------------------------
@@ -37,7 +36,7 @@ interface NavLinkSpec {
   prefetch?: NavLinkPrefetch;
 }
 
-const links: NavLinkSpec[] = [
+const mainLinks: NavLinkSpec[] = [
   {
     to: "/dashboard",
     label: "Bảng điều khiển",
@@ -51,24 +50,14 @@ const links: NavLinkSpec[] = [
     prefetch: { queryKey: ["db-devices"], queryFn: fetchDbDevices },
   },
   {
-    to: "/scenarios",
-    label: "Kịch bản",
-    icon: Clapperboard,
-    prefetch: { queryKey: ["scenarios"], queryFn: fetchScenarios },
-  },
-  {
     to: "/session",
-    label: "Mô phỏng tín hiệu sinh tồn",
+    label: "Mô phỏng sinh tồn",
     icon: Play,
     prefetch: { queryKey: ["sessions"], queryFn: fetchSessions },
   },
   {
-    // Module FA — dedicated full-page Fall Lab for AI verdict + variant policy
-    // testing.  Reuses ["sessions"] for prefetch since the page is empty
-    // until an active session exists; the cooldown in `useHoverPrefetch`
-    // dedupes against the /session entry above.
     to: "/fall-lab",
-    label: "Phòng thí nghiệm té ngã",
+    label: "Phòng lab té ngã",
     icon: AlertTriangle,
     prefetch: { queryKey: ["sessions"], queryFn: fetchSessions },
   },
@@ -78,12 +67,11 @@ const links: NavLinkSpec[] = [
     to: "/verification",
     label: "Trung tâm Bằng chứng",
     icon: ShieldCheck,
-    // Verification page first reads `useSessions` to find the active
-    // session, then derives `useVerification(sessionId)` from there.
-    // Warming sessions covers the first half; the cooldown in
-    // `useHoverPrefetch` dedupes against the /session prefetch.
     prefetch: { queryKey: ["sessions"], queryFn: fetchSessions },
   },
+];
+
+const utilityLinks: NavLinkSpec[] = [
   { to: "/settings", label: "Cấu hình runtime", icon: Settings },
 ];
 
@@ -157,53 +145,44 @@ export function Sidebar() {
         <aside
           className={`sidebar ${mobileOpen ? "sidebar--open" : ""}`}
           style={{
-            borderRight: "1px solid var(--border-default)",
+            borderRight: "1px solid rgba(255,255,255,0.06)",
             background: "var(--bg-surface)",
-            padding: "10px",
+            padding: "12px 10px",
             display: "flex",
             flexDirection: "column",
-            gap: "8px",
+            gap: "4px",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <strong style={{ fontSize: "14px" }}>Điều hướng</strong>
+          {/* Logo */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 6px 14px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{ width: "30px", height: "30px", borderRadius: "var(--radius-md)", background: "var(--accent-cyan-bg-active)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <Activity size={16} color="var(--accent-cyan)" />
+              </div>
+              <span style={{ fontWeight: 700, fontSize: "14px", letterSpacing: "-0.01em" }}>IoT Simulator</span>
+            </div>
             <button
               onClick={() => setMobileOpen(false)}
-              style={{
-                border: "1px solid var(--border-default)",
-                background: "var(--bg-elevated)",
-                color: "var(--text-secondary)",
-                borderRadius: "var(--radius-md)",
-                width: "28px",
-                height: "28px",
-                display: "grid",
-                placeItems: "center",
-              }}
+              style={{ border: "none", background: "transparent", color: "var(--text-secondary)", padding: "4px", borderRadius: "var(--radius-md)" }}
             >
-              <ChevronLeft size={14} />
+              <ChevronLeft size={16} />
             </button>
           </div>
 
-          <nav style={{ display: "flex", flexDirection: "column", gap: "6px", flex: 1 }}>
-            {links.map((link) => (
-              <SidebarLink
-                key={link.to}
-                link={link}
-                collapsed={false}
-                onNavigate={() => setMobileOpen(false)}
-              />
+          <nav style={{ display: "flex", flexDirection: "column", gap: "2px", flex: 1 }}>
+            {mainLinks.map((link) => (
+              <SidebarLink key={link.to} link={link} collapsed={false} onNavigate={() => setMobileOpen(false)} />
             ))}
           </nav>
 
-          <small
-            style={{
-              color: "var(--text-muted)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "11px",
-            }}
-          >
-            simulator-web v0.3
-          </small>
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "8px", marginTop: "4px", display: "flex", flexDirection: "column", gap: "2px" }}>
+            {utilityLinks.map((link) => (
+              <SidebarLink key={link.to} link={link} collapsed={false} onNavigate={() => setMobileOpen(false)} />
+            ))}
+            <div style={{ padding: "6px 10px" }}>
+              <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>v0.3</span>
+            </div>
+          </div>
         </aside>
       </>
     );
@@ -213,60 +192,100 @@ export function Sidebar() {
     <aside
       style={{
         width: `${width}px`,
-        transition: "width var(--duration-fast) var(--ease-default)",
-        borderRight: "1px solid var(--border-default)",
+        transition: "width var(--duration-normal) var(--ease-default)",
+        borderRight: "1px solid rgba(255,255,255,0.06)",
         background: "var(--bg-surface)",
-        padding: "10px",
+        padding: "12px 10px",
         display: "flex",
         flexDirection: "column",
-        gap: "8px",
-        // Module H — bug 5 fix: pin desktop sidebar to viewport so the
-        // navigation stays visible while the main content scrolls.  The
-        // grid layout in `<AppShell/>` lets the sidebar be its own
-        // scrolling container (auto on Y), preserving access to all nav
-        // links on short viewports.
+        gap: "4px",
         position: "sticky",
         top: 0,
         height: "100vh",
         alignSelf: "start",
         overflowY: "auto",
+        overflowX: "hidden",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: sidebarCollapsed ? "center" : "space-between", marginBottom: "8px" }}>
-        {!sidebarCollapsed ? <strong style={{ fontSize: "14px" }}>Điều hướng</strong> : null}
-        <button
-          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          style={{
-            border: "1px solid var(--border-default)",
-            background: "var(--bg-elevated)",
-            color: "var(--text-secondary)",
-            borderRadius: "var(--radius-md)",
-            width: "28px",
-            height: "28px",
-            display: "grid",
-            placeItems: "center",
-          }}
-        >
-          {sidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-        </button>
+      {/* Logo / Brand */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: sidebarCollapsed ? "center" : "space-between",
+          padding: "4px 4px 16px",
+          gap: "8px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+          <div
+            style={{
+              width: "32px",
+              height: "32px",
+              borderRadius: "var(--radius-md)",
+              background: "var(--accent-cyan-bg-active)",
+              display: "grid",
+              placeItems: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Activity size={17} color="var(--accent-cyan)" />
+          </div>
+          {!sidebarCollapsed && (
+            <span style={{ fontWeight: 700, fontSize: "14px", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              IoT Simulator
+            </span>
+          )}
+        </div>
+        {!sidebarCollapsed && (
+          <button
+            onClick={() => setSidebarCollapsed(true)}
+            aria-label="Thu gọn sidebar"
+            style={{ border: "none", background: "transparent", color: "var(--text-muted)", padding: "4px", borderRadius: "var(--radius-md)", flexShrink: 0 }}
+          >
+            <ChevronLeft size={15} />
+          </button>
+        )}
+        {sidebarCollapsed && (
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            aria-label="Mở rộng sidebar"
+            style={{ border: "none", background: "transparent", color: "var(--text-muted)", padding: "4px", borderRadius: "var(--radius-md)" }}
+          >
+            <ChevronRight size={15} />
+          </button>
+        )}
       </div>
 
-      <nav style={{ display: "flex", flexDirection: "column", gap: "6px", flex: 1 }}>
-        {links.map((link) => (
+      {/* Main navigation */}
+      <nav style={{ display: "flex", flexDirection: "column", gap: "2px", flex: 1 }}>
+        {mainLinks.map((link) => (
           <SidebarLink key={link.to} link={link} collapsed={sidebarCollapsed} />
         ))}
       </nav>
 
-      <small
+      {/* Utility / Settings section */}
+      <div
         style={{
-          color: "var(--text-muted)",
-          textAlign: sidebarCollapsed ? "center" : "left",
-          fontFamily: "var(--font-mono)",
-          fontSize: "11px",
+          borderTop: "1px solid rgba(255,255,255,0.06)",
+          paddingTop: "8px",
+          marginTop: "4px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "2px",
         }}
       >
-        {sidebarCollapsed ? "v0.3" : "simulator-web v0.3"}
-      </small>
+        {utilityLinks.map((link) => (
+          <SidebarLink key={link.to} link={link} collapsed={sidebarCollapsed} />
+        ))}
+        {!sidebarCollapsed && (
+          <div style={{ padding: "6px 10px" }}>
+            <span style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+              simulator-web v0.3
+            </span>
+          </div>
+        )}
+      </div>
     </aside>
   );
 }
@@ -296,22 +315,25 @@ function SidebarLink({ link, collapsed, onNavigate }: SidebarLinkProps) {
       onClick={onNavigate}
       onMouseEnter={prefetchHandlers.onMouseEnter}
       onFocus={prefetchHandlers.onFocus}
+      title={collapsed ? link.label : undefined}
       style={({ isActive }) => ({
         display: "flex",
         alignItems: "center",
         gap: "10px",
-        padding: collapsed ? "8px" : "8px 10px",
+        padding: collapsed ? "9px" : "9px 12px",
         borderRadius: "var(--radius-md)",
-        border: `1px solid ${isActive ? "var(--accent-cyan)" : "transparent"}`,
-        background: isActive ? "rgba(6,182,212,0.12)" : "transparent",
-        color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-        transition:
-          "color var(--duration-fast) var(--ease-default), background-color var(--duration-fast) var(--ease-default), border-color var(--duration-fast) var(--ease-default)",
+        border: "none",
+        background: isActive ? "var(--accent-cyan-bg-active)" : "transparent",
+        color: isActive ? "var(--accent-cyan)" : "var(--text-secondary)",
+        fontWeight: isActive ? 600 : 400,
+        fontSize: "13.5px",
+        transition: "color var(--duration-fast) var(--ease-default), background-color var(--duration-fast) var(--ease-default)",
         justifyContent: collapsed ? "center" : "flex-start",
+        textDecoration: "none",
       })}
     >
-      <link.icon size={16} strokeWidth={1.5} />
-      {!collapsed ? <span>{link.label}</span> : null}
+      <link.icon size={17} strokeWidth={1.8} style={{ flexShrink: 0 }} />
+      {!collapsed ? <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{link.label}</span> : null}
     </NavLink>
   );
 }

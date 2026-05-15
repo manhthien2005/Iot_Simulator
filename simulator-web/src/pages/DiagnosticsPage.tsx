@@ -4,6 +4,7 @@ import { FileJson, Gauge, ListChecks, Watch } from "lucide-react";
 import { Card } from "../components/ui/Card";
 import { EmptyState } from "../components/ui/EmptyState";
 import { ErrorCard } from "../components/ui/ErrorCard";
+import { PageHeader } from "../components/ui/PageHeader";
 import { Select } from "../components/ui/Select";
 import { Skeleton } from "../components/ui/Skeleton";
 import { Tabs } from "../components/ui/Tabs";
@@ -82,14 +83,11 @@ export function DiagnosticsPage() {
   );
 
   return (
-    <section style={{ display: "grid", gap: "14px" }}>
-      <div>
-        <h1 className="page-title">Diagnostics</h1>
-        <p className="page-subtitle">
-          Công cụ vận hành cho operator: chạy tính toán theo yêu cầu, tiêm dữ liệu thử nghiệm, kiểm tra ngưỡng
-          + cấu hình rule mà mô phỏng đang dùng. Trang Phân tích vẫn ở chế độ chỉ đọc.
-        </p>
-      </div>
+    <section className="page-section">
+      <PageHeader
+        title="Diagnostics"
+        subtitle="Công cụ vận hành cho operator: chạy tính toán theo yêu cầu, tiêm dữ liệu thử nghiệm, kiểm tra ngưỡng + cấu hình rule mà mô phỏng đang dùng. Trang Phân tích vẫn ở chế độ chỉ đọc."
+      />
 
       <Tabs items={TAB_ITEMS} activeKey={tab} onChange={(key) => setTab(key as DiagnosticsTab)} />
 

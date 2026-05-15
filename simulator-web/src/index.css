@@ -5,6 +5,7 @@
   --bg-hover: #1e2d4a;
   --bg-active: #253555;
   --bg-overlay: rgba(0, 0, 0, 0.65);
+  --bg-glass: rgba(0, 0, 0, 0.15);
 
   --text-primary: #e2e8f0;
   --text-secondary: #94a3b8;
@@ -13,14 +14,27 @@
 
   --accent-cyan: #06b6d4;
   --accent-cyan-glow: rgba(6, 182, 212, 0.25);
+  --accent-cyan-bg: rgba(6, 182, 212, 0.08);
+  --accent-cyan-bg-active: rgba(6, 182, 212, 0.16);
+  --accent-cyan-border: rgba(6, 182, 212, 0.30);
   --accent-blue: #3b82f6;
   --accent-indigo: #6366f1;
 
   --severity-normal: #22c55e;
+  --severity-normal-bg: rgba(34, 197, 94, 0.10);
+  --severity-normal-border: rgba(34, 197, 94, 0.30);
   --severity-warning: #f59e0b;
+  --severity-warning-bg: rgba(245, 158, 11, 0.10);
+  --severity-warning-border: rgba(245, 158, 11, 0.30);
   --severity-critical: #ef4444;
+  --severity-critical-bg: rgba(239, 68, 68, 0.10);
+  --severity-critical-border: rgba(239, 68, 68, 0.30);
   --severity-offline: #6b7280;
+  --severity-offline-bg: rgba(107, 114, 128, 0.12);
+  --severity-offline-border: rgba(107, 114, 128, 0.35);
   --severity-info: #3b82f6;
+  --severity-info-bg: rgba(59, 130, 246, 0.12);
+  --severity-info-border: rgba(59, 130, 246, 0.30);
 
   --border-default: #1e2d4a;
   --border-subtle: #253555;
@@ -32,10 +46,11 @@
   --radius-xl: 16px;
   --radius-full: 9999px;
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
-  --shadow-glow-cyan: 0 0 12px rgba(6, 182, 212, 0.3);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6), 0 6px 16px rgba(0, 0, 0, 0.35);
+  --shadow-glow: 0 0 20px rgba(6, 182, 212, 0.3);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
   --shadow-glow-red: 0 0 12px rgba(239, 68, 68, 0.35);
   --shadow-glow-green: 0 0 10px rgba(34, 197, 94, 0.3);
 
@@ -71,7 +86,10 @@ body,
 body {
   font-family: var(--font-ui);
   color: var(--text-primary);
-  background: radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 46%), var(--bg-base);
+  background:
+    radial-gradient(ellipse at 10% 90%, rgba(6, 182, 212, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 90% 5%,  rgba(99, 102, 241, 0.08) 0%, transparent 50%),
+    var(--bg-base);
 }
 
 a {
@@ -90,24 +108,31 @@ button:disabled {
 
 .page-title {
   margin: 0;
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.01em;
 }
 
 .page-subtitle {
-  margin-top: 8px;
+  margin-top: 6px;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
 .surface-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  background: var(--bg-elevated);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--duration-fast) var(--ease-default), box-shadow var(--duration-fast) var(--ease-default), transform var(--duration-fast) var(--ease-default);
+}
+
+.surface-card--hoverable:hover {
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 .live-dot {
@@ -247,6 +272,27 @@ button:disabled {
   transform: translateY(-2px);
 }
 
+/* ── Layout utility classes ──────────────────────────────────────── */
+
+/* Standard page content grid */
+.page-section {
+  display: grid;
+  gap: 14px;
+}
+
+/* Form field: label + input column stack */
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Small descriptive label above an input */
+.form-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 /* ── Responsive utility classes ──────────────────────────────────── */
 
 /* KPI grid: 4 → 2 → 1 columns */
@@ -254,6 +300,67 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(4, minmax(180px, 1fr));
   gap: 10px;
+}
+
+/* Cockpit dashboard: 2x2 metric tiles on the left + live feed column on the
+ * right. Falls back to a single column on tablets and below. */
+.dashboard-cockpit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 460px);
+  gap: 14px;
+  align-items: start;
+}
+
+.dashboard-cockpit-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* System status block grid: 5 service cards.  Collapses to 3 → 2 → 1 on
+ * narrower viewports so tiles always fit without truncation. */
+.dashboard-status-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1280px) {
+  .dashboard-status-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard-status-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Devices summary strip: 4 stat tiles in a row. Collapses to 2 → 1 on
+ * narrower viewports. */
+.devices-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1024px) {
+  .devices-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .devices-summary-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Section header with flex wrap */
@@ -268,6 +375,10 @@ button:disabled {
 @media (max-width: 1024px) {
   .kpi-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-cockpit-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -301,6 +412,10 @@ button:disabled {
   }
 
   .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-cockpit-metrics {
     grid-template-columns: 1fr;
   }
 

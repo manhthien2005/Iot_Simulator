@@ -15,6 +15,7 @@ try:
         AdminDeviceActionResponse,
         AdminDeviceAssignResponse,
         AdminDeviceResponse,
+        AdminUserProfileResponse,
         AdminUserResponse,
         BatchActivateRequest,
         AdminCreateDeviceSimRequest,
@@ -34,6 +35,7 @@ except ModuleNotFoundError:
         AdminDeviceActionResponse,
         AdminDeviceAssignResponse,
         AdminDeviceResponse,
+        AdminUserProfileResponse,
         AdminUserResponse,
         BatchActivateRequest,
         AdminCreateDeviceSimRequest,
@@ -239,6 +241,19 @@ def search_user(email: str, db: Session = Depends(get_db)) -> AdminUserResponse:
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User not found: {email}")
     return AdminUserResponse.model_validate(user)
+
+
+@_admin_router.get("/admin/users/{user_id}/profile", response_model=AdminUserProfileResponse)
+def get_user_profile(user_id: int, db: Session = Depends(get_db)) -> AdminUserProfileResponse:
+    """Return a user's full profile (demographics + medical info + emergency contacts).
+
+    Consumed by the simulator-web Session page profile card.  Returns 404
+    when the user is missing or soft-deleted.
+    """
+    profile = SimAdminService.get_user_profile(user_id, db)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found")
+    return AdminUserProfileResponse.model_validate(profile)
 
 
 # Merge admin sub-router into main router so all routes are exposed together

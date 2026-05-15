@@ -1,114 +1,53 @@
-import { Square, Zap } from "lucide-react";
-import { useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useSessions } from "../../hooks/useSessions";
-import { stopSession } from "../../services/sessionApi";
-import { useSessionStore } from "../../stores/sessionStore";
-import { notify } from "../../utils/toast";
-import { Button } from "../ui/Button";
-import { Badge } from "../ui/Badge";
-import type { SessionInfo } from "../../types/session";
+import { Clock } from "lucide-react";
+import { useState, useEffect } from "react";
+
+function useCurrentTime() {
+  const [time, setTime] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return time;
+}
 
 export function Topbar() {
-  const { activeSessionId, setActiveSession } = useSessionStore();
-  const { data: sessions } = useSessions();
-  const queryClient = useQueryClient();
-  const [stopping, setStopping] = useState(false);
-
-  const runningSessions = useMemo(() => {
-    if (!sessions) return [];
-    if (activeSessionId) {
-      const active = sessions.find((session) => session.id === activeSessionId);
-      return active ? [active] : [];
-    }
-    return sessions.filter((session) => session.status === "running");
-  }, [activeSessionId, sessions]);
-
-  const activeDeviceCount = useMemo(() => {
-    return runningSessions.reduce((total, s) => total + s.deviceIds.length, 0);
-  }, [runningSessions]);
-
-  // Module G.10 — optimistic stop.
-  //
-  // The "Dừng tất cả" button used to wait the BE round-trip + the next
-  // sessions poll (`POLL_INTERVALS.sessions`) before the badge
-  // collapsed.  Now we flip the targeted sessions to `status: "stopped"`
-  // in the cache before firing `stopSession()`, so the Topbar updates
-  // immediately.  The post-mutation `invalidateQueries` reconciles back
-  // to BE truth (and corrects partial failures), so a session that
-  // refused to stop will reappear within one poll cycle.
-  const stopAll = async () => {
-    if (runningSessions.length === 0) return;
-
-    await queryClient.cancelQueries({ queryKey: ["sessions"] });
-    const previous = queryClient.getQueryData<SessionInfo[]>(["sessions"]);
-    const targetIds = new Set(runningSessions.map((s) => s.id));
-    queryClient.setQueryData<SessionInfo[]>(["sessions"], (old) =>
-      old?.map((s) => (targetIds.has(s.id) ? { ...s, status: "stopped" as const } : s)) ?? old
-    );
-
-    setStopping(true);
-    try {
-      const results = await Promise.allSettled(
-        runningSessions.map((session) => stopSession(session.id))
-      );
-      const failed = results.filter((r) => r.status === "rejected").length;
-      if (failed === 0) {
-        notify.success("Đã dừng tất cả phiên mô phỏng.");
-      } else if (failed < results.length) {
-        notify.warning(`Dừng được ${results.length - failed}/${results.length} phiên. ${failed} phiên lỗi.`);
-      } else {
-        notify.error("Không dừng được phiên nào. Kiểm tra kết nối.");
-        // Whole batch failed — roll back the optimistic patch eagerly
-        // so the operator sees the correct "Đang chạy" state without
-        // waiting for the next poll.
-        if (previous) queryClient.setQueryData(["sessions"], previous);
-      }
-      setActiveSession(null);
-    } catch {
-      notify.error("Lỗi khi dừng phiên mô phỏng.");
-      if (previous) queryClient.setQueryData(["sessions"], previous);
-    } finally {
-      setStopping(false);
-      // Always reconcile with BE truth — covers partial failures where
-      // some sessions stopped and others didn't.
-      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-    }
-  };
+  const now = useCurrentTime();
+  const timeStr = now.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const dateStr = now.toLocaleDateString("vi-VN", { weekday: "short", day: "2-digit", month: "2-digit" });
 
   return (
     <header
       style={{
-        height: "56px",
-        borderBottom: "1px solid var(--border-default)",
+        height: "54px",
+        borderBottom: "1px solid rgba(255,255,255,0.06)",
         background: "var(--bg-surface)",
         position: "sticky",
         top: 0,
         zIndex: 20,
         display: "flex",
         alignItems: "center",
-        justifyContent: "space-between",
-        padding: "0 16px",
+        justifyContent: "flex-end",
+        padding: "0 20px",
+        gap: "12px",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-        <Zap size={18} color="var(--accent-cyan)" />
-        <span style={{ fontWeight: 600, letterSpacing: "0.02em" }}>Trung tâm điều khiển IoT Simulator</span>
+      {/* Right: clock — only content remaining after sessions UI was removed */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          color: "var(--text-secondary)",
+          fontSize: "13px",
+          fontFamily: "var(--font-mono)",
+          flexShrink: 0,
+        }}
+      >
+        <Clock size={14} />
+        <span>{timeStr}</span>
+        <span style={{ color: "var(--text-muted)" }}>·</span>
+        <span style={{ color: "var(--text-muted)" }}>{dateStr}</span>
       </div>
-      {runningSessions.length > 0 ? (
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <Badge severity="normal" dot pulse>
-            Đang chạy {activeDeviceCount} thiết bị ({runningSessions.length} phiên)
-          </Badge>
-          <Button variant="danger" size="sm" leftIcon={<Square size={14} />} onClick={stopAll} disabled={stopping}>
-            {stopping ? "Đang dừng…" : "Dừng tất cả"}
-          </Button>
-        </div>
-      ) : (
-        <Badge severity="offline" dot>
-          Chưa có phiên chạy
-        </Badge>
-      )}
     </header>
   );
 }

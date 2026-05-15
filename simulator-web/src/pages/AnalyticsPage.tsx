@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Moon, ShieldAlert, Watch, X, Wrench } from "lucide-react";
+import { Moon, ShieldAlert, Watch, Wrench } from "lucide-react";
 import { Link } from "react-router-dom";
+import { DismissibleBanner } from "../components/ui/DismissibleBanner";
 import { EmptyState } from "../components/ui/EmptyState";
+import { PageHeader } from "../components/ui/PageHeader";
 import { Select } from "../components/ui/Select";
 import { Skeleton } from "../components/ui/Skeleton";
 import { Tabs } from "../components/ui/Tabs";
@@ -100,8 +102,8 @@ export function AnalyticsPage() {
 
   if (devicesLoading) {
     return (
-      <section style={{ display: "grid", gap: "12px" }}>
-        <h1 className="page-title">Phân tích</h1>
+      <section className="page-section">
+        <PageHeader title="Phân tích" />
         <Skeleton style={{ height: "220px" }} />
       </section>
     );
@@ -109,36 +111,41 @@ export function AnalyticsPage() {
 
   if (!devices.length) {
     return (
-      <section style={{ display: "grid", gap: "12px" }}>
-        <h1 className="page-title">Phân tích</h1>
+      <section className="page-section">
+        <PageHeader title="Phân tích" />
         <EmptyState icon={Watch} title="Chưa có thiết bị" description="Tạo thiết bị để kích hoạt phân tích giấc ngủ và rủi ro." />
       </section>
     );
   }
 
   return (
-    <section style={{ display: "grid", gap: "14px" }}>
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
-        <div>
-          <h1 className="page-title">Phân tích</h1>
-          <p className="page-subtitle">
-            Chế độ chỉ đọc cho người xem lâm sàng — phát lại giấc ngủ và phân tích rủi ro với fallback cho Sleep-EDF.
-          </p>
-        </div>
-        <Select
-          value={deviceId}
-          onChange={(event) => setDeviceId(event.target.value)}
-          aria-label="Chọn thiết bị để phân tích"
-        >
-          {devices.map((device) => (
-            <option key={device.id} value={device.id}>
-              {device.name}
-            </option>
-          ))}
-        </Select>
-      </div>
+    <section className="page-section">
+      <PageHeader
+        title="Phân tích"
+        subtitle="Chế độ chỉ đọc cho người xem lâm sàng — phát lại giấc ngủ và phân tích rủi ro với fallback cho Sleep-EDF."
+        action={
+          <Select
+            value={deviceId}
+            onChange={(event) => setDeviceId(event.target.value)}
+            aria-label="Chọn thiết bị để phân tích"
+          >
+            {devices.map((device) => (
+              <option key={device.id} value={device.id}>
+                {device.name}
+              </option>
+            ))}
+          </Select>
+        }
+      />
 
-      <DiagnosticsMovedNotice />
+      <DismissibleBanner storageKey={DIAGNOSTICS_NOTICE_KEY} icon={<Wrench size={16} />}>
+        <strong style={{ color: "var(--text-primary)" }}>Operator tools đã chuyển sang Diagnostics.</strong>{" "}
+        Chạy tính toán theo yêu cầu, tiêm rủi ro nhân tạo và trình kiểm tra ngưỡng đều nằm trong{" "}
+        <Link to="/diagnostics#risk-tools" style={{ color: "var(--accent-cyan)", textDecoration: "underline" }}>
+          Diagnostics
+        </Link>
+        . Trang Phân tích giữ nguyên dữ liệu chỉ đọc cho clinical viewers.
+      </DismissibleBanner>
 
       <Tabs
         items={[
@@ -169,67 +176,3 @@ export function AnalyticsPage() {
   );
 }
 
-// ── Diagnostics moved notice ────────────────────────────────────────────
-
-function DiagnosticsMovedNotice() {
-  const [dismissed, setDismissed] = useState<boolean>(() => readDismissed());
-
-  if (dismissed) return null;
-
-  function handleDismiss() {
-    setDismissed(true);
-    try {
-      sessionStorage.setItem(DIAGNOSTICS_NOTICE_KEY, "1");
-    } catch {
-      // sessionStorage unavailable (private mode etc.) — non-fatal.
-    }
-  }
-
-  return (
-    <aside
-      role="status"
-      style={{
-        display: "flex",
-        alignItems: "flex-start",
-        gap: "12px",
-        padding: "12px 14px",
-        borderRadius: "var(--radius-md)",
-        border: "1px solid rgba(6, 182, 212, 0.30)",
-        background: "rgba(6, 182, 212, 0.08)",
-      }}
-    >
-      <Wrench size={16} style={{ marginTop: "2px", color: "var(--accent-cyan)", flexShrink: 0 }} />
-      <div style={{ flex: 1, fontSize: "13px", lineHeight: 1.5, color: "var(--text-secondary)" }}>
-        <strong style={{ color: "var(--text-primary)" }}>Operator tools đã chuyển sang Diagnostics.</strong>{" "}
-        Chạy tính toán theo yêu cầu, tiêm rủi ro nhân tạo và trình kiểm tra ngưỡng đều nằm trong{" "}
-        <Link to="/diagnostics#risk-tools" style={{ color: "var(--accent-cyan)", textDecoration: "underline" }}>
-          Diagnostics
-        </Link>
-        . Trang Phân tích giữ nguyên dữ liệu chỉ đọc cho clinical viewers.
-      </div>
-      <button
-        onClick={handleDismiss}
-        aria-label="Đóng thông báo"
-        style={{
-          background: "transparent",
-          border: "none",
-          color: "var(--text-secondary)",
-          cursor: "pointer",
-          padding: "2px",
-          flexShrink: 0,
-        }}
-      >
-        <X size={14} />
-      </button>
-    </aside>
-  );
-}
-
-function readDismissed(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return sessionStorage.getItem(DIAGNOSTICS_NOTICE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
