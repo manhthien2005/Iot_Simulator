@@ -162,8 +162,11 @@ class TriggerOrchestrator:
     ) -> list[TriggerActionItem]:
         """Bypass rule evaluation and directly request ML prediction.
 
-        Used by ``trigger_risk_calculation`` for on-demand risk inference.
-        Always calls the API regardless of ``enable_model_calls`` setting.
+        Originally invoked by ``trigger_risk_calculation`` (disposed in
+        ADR-020 Phase 7 S7). Currently retained for ad-hoc shadow-mode
+        diagnostics — the production risk path now lives on the mobile
+        BE auto-trigger after ``/telemetry/ingest``. Always calls the API
+        regardless of ``enable_model_calls`` setting.
         """
         model_actions = self._request_model_prediction(
             device_id=device_id,
