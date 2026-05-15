@@ -58,8 +58,8 @@ export interface SimulatorSettingsResponse {
 }
 
 /**
- * Response shape for `PUT /api/sim/settings/runtime` and
- * `POST /api/sim/settings/runtime/reset` — carries the live config plus
+ * Response shape for `PUT /api/v1/sim/settings/runtime` and
+ * `POST /api/v1/sim/settings/runtime/reset` — carries the live config plus
  * the persistence echo so the FE can show "Đã lưu lúc HH:MM" immediately.
  */
 export interface RuntimeConfigSaveResponse {

@@ -89,19 +89,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(devices_router, prefix="/api/sim")
-app.include_router(dashboard_router, prefix="/api/sim")
-app.include_router(registry_router, prefix="/api/sim")
-app.include_router(scenarios_router, prefix="/api/sim")
-app.include_router(sessions_router, prefix="/api/sim")
-app.include_router(vitals_router, prefix="/api/sim")
-app.include_router(events_router, prefix="/api/sim")
-app.include_router(verification_router, prefix="/api/sim")
-app.include_router(analytics_router, prefix="/api/sim")
-app.include_router(settings_router, prefix="/api/sim")
+app.include_router(devices_router, prefix="/api/v1/sim")
+app.include_router(dashboard_router, prefix="/api/v1/sim")
+app.include_router(registry_router, prefix="/api/v1/sim")
+app.include_router(scenarios_router, prefix="/api/v1/sim")
+app.include_router(sessions_router, prefix="/api/v1/sim")
+app.include_router(vitals_router, prefix="/api/v1/sim")
+app.include_router(events_router, prefix="/api/v1/sim")
+app.include_router(verification_router, prefix="/api/v1/sim")
+app.include_router(analytics_router, prefix="/api/v1/sim")
+app.include_router(settings_router, prefix="/api/v1/sim")
 
 
-@app.get("/api/sim/health", response_model=HealthPayloadV2)
+@app.get("/api/v1/sim/health", response_model=HealthPayloadV2)
 def health() -> HealthPayloadV2:
     runtime = get_runtime()
     # Pydantic ignores extra keys not declared on HealthPayloadV2 (the

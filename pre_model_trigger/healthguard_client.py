@@ -43,7 +43,7 @@ class HealthGuardAPIClient:
         )
     """
 
-    _PREDICT_PATH = "/mobile/risk/calculate"
+    _PREDICT_PATH = "/api/v1/mobile/risk/calculate"
     _HEALTH_CHECK_PATH = "/api/health"
 
     def __init__(

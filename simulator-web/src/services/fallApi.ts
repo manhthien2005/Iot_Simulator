@@ -13,7 +13,7 @@ export async function fetchFallState(
   deviceId: string,
 ): Promise<FallState> {
   const response = await apiClient.get<FallState>(
-    `/api/sim/sessions/${encodeURIComponent(sessionId)}/fall-state`,
+    `/api/v1/sim/sessions/${encodeURIComponent(sessionId)}/fall-state`,
     { params: { deviceId } },
   );
   return response.data;

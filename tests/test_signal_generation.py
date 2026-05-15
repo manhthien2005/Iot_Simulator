@@ -32,19 +32,19 @@ class TestActivityLabel(unittest.TestCase):
         self.assertIn("motionTag", VitalsSample.model_fields)
 
     def test_api_returns_activity_label(self):
-        d = self.client.post("/api/sim/devices", json={"name": "T", "type": "smartwatch"}).json()
-        s = self.client.post("/api/sim/sessions", json={"device_ids": [d["id"]], "speed": 1}).json()
-        self.client.post(f"/api/sim/sessions/{s['id']}/start")
-        r = self.client.get("/api/sim/vitals/latest", params={"deviceId": d["id"]}).json()
+        d = self.client.post("/api/v1/sim/devices", json={"name": "T", "type": "smartwatch"}).json()
+        s = self.client.post("/api/v1/sim/sessions", json={"device_ids": [d["id"]], "speed": 1}).json()
+        self.client.post(f"/api/v1/sim/sessions/{s['id']}/start")
+        r = self.client.get("/api/v1/sim/vitals/latest", params={"deviceId": d["id"]}).json()
         self.assertIn("activityLabel", r)
         self.assertEqual(r["activityLabel"], r["motionTag"])
 
     def test_fall_event_sets_activity_label_falling(self):
-        d = self.client.post("/api/sim/devices", json={"name": "F", "type": "smartwatch"}).json()
-        s = self.client.post("/api/sim/sessions", json={"device_ids": [d["id"]], "speed": 1}).json()
-        self.client.post(f"/api/sim/sessions/{s['id']}/start")
-        self.client.post("/api/sim/scenarios/apply", json={"device_id": d["id"], "scenario_id": "fall_high_confidence"})
-        r = self.client.get("/api/sim/vitals/latest", params={"deviceId": d["id"]}).json()
+        d = self.client.post("/api/v1/sim/devices", json={"name": "F", "type": "smartwatch"}).json()
+        s = self.client.post("/api/v1/sim/sessions", json={"device_ids": [d["id"]], "speed": 1}).json()
+        self.client.post(f"/api/v1/sim/sessions/{s['id']}/start")
+        self.client.post("/api/v1/sim/scenarios/apply", json={"device_id": d["id"], "scenario_id": "fall_high_confidence"})
+        r = self.client.get("/api/v1/sim/vitals/latest", params={"deviceId": d["id"]}).json()
         self.assertEqual(r["activityLabel"], "falling")
 
 

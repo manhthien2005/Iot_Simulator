@@ -11,7 +11,7 @@ families the simulator integrates with.
 Architecture context
 --------------------
 - Port 8001 → AI inference (this client)    : POST /api/v1/fall/predict
-- Port 8000 → HealthGuard backend (alerts) : POST /mobile/telemetry/alert
+- Port 8000 → HealthGuard backend (alerts) : POST /api/v1/mobile/telemetry/alert
 
 The fall AI verdict is consumed by ``api_server.dependencies.SimulatorRuntime``
 during :meth:`SimulatorRuntime.inject_event` so the UI can render an AI

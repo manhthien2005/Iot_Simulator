@@ -10,7 +10,7 @@ from pathlib import Path
 import requests
 
 
-BASE = "http://127.0.0.1:8799/api/sim"
+BASE = "http://127.0.0.1:8799/api/v1/sim"
 REPORT = Path(__file__).resolve().parents[2] / "validation_report.md"
 
 PERSONAS = [

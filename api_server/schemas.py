@@ -500,7 +500,7 @@ PersistenceSourceValue = Literal["file", "defaults"]
 
 
 class FeatureFlags(BaseModel):
-    """Feature-flag block exposed by ``/api/sim/settings``.
+    """Feature-flag block exposed by ``/api/v1/sim/settings``.
 
     ``triggerMode`` is the canonical, server-derived view of how the pre-model
     trigger pipeline is running.  Module F requires the FE to consume it
@@ -548,11 +548,11 @@ class SimulatorSettingsResponse(BaseModel):
 
 
 class RuntimeConfigSaveResponse(BaseModel):
-    """Response shape for ``PUT /api/sim/settings/runtime`` (Module F.2).
+    """Response shape for ``PUT /api/v1/sim/settings/runtime`` (Module F.2).
 
     Carries the live config plus the persistence echo so the FE can render
     "Đã lưu lúc HH:MM — vẫn áp dụng sau khi restart" right after the call
-    completes, without waiting for the next ``/api/sim/settings`` poll.
+    completes, without waiting for the next ``/api/v1/sim/settings`` poll.
     """
 
     runtime: RuntimeConfig
@@ -740,7 +740,7 @@ class HealthTelemetryBlock(BaseModel):
 
 
 class HealthPayloadV2(BaseModel):
-    """Structured health payload returned by ``/api/sim/health`` (v2).
+    """Structured health payload returned by ``/api/v1/sim/health`` (v2).
 
     The legacy flat keys (``status``/``api``/``backend``/``mqtt``/``db``/``version``)
     are still emitted on the same response object during the deprecation window

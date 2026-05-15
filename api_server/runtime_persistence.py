@@ -1,6 +1,6 @@
 """Persistence layer for the IoT Simulator's mutable runtime config.
 
-The simulator exposes three knobs over `/api/sim/settings/runtime`:
+The simulator exposes three knobs over `/api/v1/sim/settings/runtime`:
 ``tickIntervalSeconds``, ``pushIntervalSeconds`` and ``sleepSpeedFactor``.
 Until Phase F these were stored only on the live ``SimulatorRuntime``
 instance and in ``os.environ`` — every restart silently reset them to

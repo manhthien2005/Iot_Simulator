@@ -5,7 +5,7 @@ import { isHealthPayloadV2 } from "../types/health";
 export type { HealthPayload, HealthPayloadV2 } from "../types/health";
 
 /**
- * Fetch the v2-compatible health payload from `/api/sim/health`.
+ * Fetch the v2-compatible health payload from `/api/v1/sim/health`.
  *
  * The response object contains the structured v2 blocks (`runtime`,
  * `database`, `backend`, `modelApi`, `preTrigger`, `telemetry`,
@@ -13,7 +13,7 @@ export type { HealthPayload, HealthPayloadV2 } from "../types/health";
  * backwards compatibility but are no longer surfaced on the FE type.
  */
 export async function fetchHealth(): Promise<HealthPayload> {
-  const response = await apiClient.get<HealthPayload>("/api/sim/health");
+  const response = await apiClient.get<HealthPayload>("/api/v1/sim/health");
   return response.data;
 }
 
@@ -28,7 +28,7 @@ export async function fetchHealthV2(): Promise<HealthPayloadV2> {
   const data = await fetchHealth();
   if (!isHealthPayloadV2(data)) {
     throw new Error(
-      "Simulator API returned a legacy /api/sim/health payload (schemaVersion missing).",
+      "Simulator API returned a legacy /api/v1/sim/health payload (schemaVersion missing).",
     );
   }
   return data;

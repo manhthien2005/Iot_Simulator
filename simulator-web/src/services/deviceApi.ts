@@ -42,7 +42,7 @@ function normalizeSimDevice(raw: RawSimulatedDevice): SimulatedDevice {
 // ── Device APIs ───────────────────────────────────────────────────────────────
 
 export async function fetchDevices(): Promise<SimulatedDevice[]> {
-  const response = await apiClient.get<RawSimulatedDevice[]>("/api/sim/devices");
+  const response = await apiClient.get<RawSimulatedDevice[]>("/api/v1/sim/devices");
   return response.data.map(normalizeSimDevice);
 }
 
@@ -51,7 +51,7 @@ export async function fetchDevices(): Promise<SimulatedDevice[]> {
 // Không liên quan đến SimulatedDevice (RAM runtime).
 
 export async function fetchDbDevices(): Promise<DbDevice[]> {
-  const { data } = await apiClient.get<DbDevice[]>("/api/sim/admin/db-devices");
+  const { data } = await apiClient.get<DbDevice[]>("/api/v1/sim/admin/db-devices");
   return data;
 }
 
@@ -60,34 +60,34 @@ export async function createDbDevice(payload: {
   device_type: string;
   user_email?: string;
 }): Promise<DbDevice> {
-  const { data } = await apiClient.post<DbDevice>("/api/sim/admin/db-devices", payload);
+  const { data } = await apiClient.post<DbDevice>("/api/v1/sim/admin/db-devices", payload);
   return data;
 }
 
 export async function assignDbDevice(deviceId: number, userEmail: string): Promise<DbDevice> {
-  const { data } = await apiClient.post<DbDevice>(`/api/sim/admin/db-devices/${deviceId}/assign`, {
+  const { data } = await apiClient.post<DbDevice>(`/api/v1/sim/admin/db-devices/${deviceId}/assign`, {
     user_email: userEmail,
   });
   return data;
 }
 
 export async function activateDbDevice(deviceId: number): Promise<DbDevice> {
-  const { data } = await apiClient.post<DbDevice>(`/api/sim/admin/db-devices/${deviceId}/activate`);
+  const { data } = await apiClient.post<DbDevice>(`/api/v1/sim/admin/db-devices/${deviceId}/activate`);
   return data;
 }
 
 export async function deactivateDbDevice(deviceId: number): Promise<DbDevice> {
-  const { data } = await apiClient.post<DbDevice>(`/api/sim/admin/db-devices/${deviceId}/deactivate`);
+  const { data } = await apiClient.post<DbDevice>(`/api/v1/sim/admin/db-devices/${deviceId}/deactivate`);
   return data;
 }
 
 export async function deleteDbDevice(deviceId: number): Promise<void> {
-  await apiClient.delete(`/api/sim/admin/db-devices/${deviceId}`);
+  await apiClient.delete(`/api/v1/sim/admin/db-devices/${deviceId}`);
 }
 
 export async function batchActivateDbDevices(deviceIds: number[]): Promise<BatchActivateResult[]> {
   const { data } = await apiClient.post<BatchActivateResult[]>(
-    "/api/sim/admin/db-devices/batch-activate",
+    "/api/v1/sim/admin/db-devices/batch-activate",
     { device_ids: deviceIds },
     { timeout: 30000 }
   );
