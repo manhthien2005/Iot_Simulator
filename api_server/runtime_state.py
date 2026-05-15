@@ -1,6 +1,6 @@
 """Runtime state container for SimulatorRuntime health observability.
 
-Holds the cross-cutting state that powers the v2 ``/api/sim/health`` payload:
+Holds the cross-cutting state that powers the v2 ``/api/v1/sim/health`` payload:
 
 - ``startup_time`` — wall-clock instant the runtime came up; used for ``uptimeSeconds``.
 - ``backend_probe`` / ``model_api_probe`` — TTL-cached results of upstream probes.

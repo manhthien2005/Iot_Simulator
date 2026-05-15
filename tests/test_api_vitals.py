@@ -34,16 +34,16 @@ class TestApiVitals(unittest.TestCase):
         reset_runtime_for_tests()
         self.client = TestClient(app)
         device = self.client.post(
-            "/api/sim/devices",
+            "/api/v1/sim/devices",
             json={"name": "Watch D", "type": "smartwatch", "persona_config": {"age": 38, "weight_kg": 78, "height_cm": 174, "seed": 2}},
         ).json()
-        session = self.client.post("/api/sim/sessions", json={"device_ids": [device["id"]], "speed": 1}).json()
+        session = self.client.post("/api/v1/sim/sessions", json={"device_ids": [device["id"]], "speed": 1}).json()
         self.device_id = device["id"]
         self.session_id = session["id"]
-        self.client.post(f"/api/sim/sessions/{self.session_id}/start")
+        self.client.post(f"/api/v1/sim/sessions/{self.session_id}/start")
 
     def test_latest_vitals_after_start(self) -> None:
-        response = self.client.get(f"/api/sim/vitals/latest?deviceId={self.device_id}")
+        response = self.client.get(f"/api/v1/sim/vitals/latest?deviceId={self.device_id}")
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("heartRate", payload)

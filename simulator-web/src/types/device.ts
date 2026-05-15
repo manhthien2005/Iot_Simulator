@@ -56,7 +56,7 @@ export interface BatchActivateResult {
 
 /**
  * Thiết bị từ production DB, enriched với sim runtime status.
- * Source: GET /api/sim/admin/db-devices
+ * Source: GET /api/v1/sim/admin/db-devices
  */
 export interface DbDevice {
   id: number;

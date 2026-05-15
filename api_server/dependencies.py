@@ -604,7 +604,7 @@ class SimulatorRuntime:
         # the simulator always boots.  We also mirror the result into the
         # process env so legacy readers (``sleep_service`` reads
         # ``SIM_SLEEP_SPEED_FACTOR`` on every call) keep seeing the same
-        # truth as ``/api/sim/settings``.
+        # truth as ``/api/v1/sim/settings``.
         self._runtime_persistence: PersistenceState = load_runtime_config()
         self._sync_runtime_env_from_persistence()
         self._sleep_ai_client = SleepAIClient()
@@ -832,7 +832,7 @@ class SimulatorRuntime:
     ) -> PersistenceState:
         """Apply *partial* updates to the runtime config and flush to disk.
 
-        Used by ``PUT /api/sim/settings/runtime``.  Returns the new
+        Used by ``PUT /api/v1/sim/settings/runtime``.  Returns the new
         :class:`PersistenceState` so the router can echo it back to the FE
         (the persistence indicator copy reads from ``last_saved_at``).
 
@@ -909,18 +909,18 @@ class SimulatorRuntime:
 
     @staticmethod
     def _telemetry_ingest_endpoint(base_url: str) -> str:
-        # FastAPI Uvicorn local listens at /mobile/... without /api
+        # FastAPI Uvicorn local listens at /api/v1/mobile/... without /api
         # In production behind proxy, base_url should include the /api (e.g. http://domain/api/v1)
-        return f"{base_url.rstrip('/')}/mobile/telemetry/ingest"
+        return f"{base_url.rstrip('/')}/api/v1/mobile/telemetry/ingest"
 
     @staticmethod
     def _telemetry_alert_endpoint(base_url: str) -> str:
-        # Mirrors the ingest endpoint path strategy: direct local calls hit /mobile/...
-        return f"{base_url.rstrip('/')}/mobile/telemetry/alert"
+        # Mirrors the ingest endpoint path strategy: direct local calls hit /api/v1/mobile/...
+        return f"{base_url.rstrip('/')}/api/v1/mobile/telemetry/alert"
 
     @staticmethod
     def _risk_calculate_endpoint(base_url: str) -> str:
-        return f"{base_url.rstrip('/')}/mobile/risk/calculate"
+        return f"{base_url.rstrip('/')}/api/v1/mobile/risk/calculate"
 
     @staticmethod
     def _http_sender(endpoint: str, payload: str, headers: dict[str, str] | None = None) -> int:
@@ -1104,7 +1104,7 @@ class SimulatorRuntime:
         return ok, latency_ms
 
     def _backend_healthy(self) -> bool:
-        endpoint = f"{self._health_backend_url.rstrip('/')}/mobile/health"
+        endpoint = f"{self._health_backend_url.rstrip('/')}/api/v1/mobile/health"
         try:
             with urlopen(Request(endpoint, method="GET"), timeout=3.0) as response:
                 return int(response.getcode() or 0) == 200
@@ -1113,7 +1113,7 @@ class SimulatorRuntime:
 
     # ── Health probes with TTL caching (Phase 0.4) ───────────────────────
     # Both probes share the same TTL window so the dashboard hero can poll
-    # ``/api/sim/health`` aggressively without hammering upstream services.
+    # ``/api/v1/sim/health`` aggressively without hammering upstream services.
     _HEALTH_PROBE_TTL_SECONDS = 5.0
     _HEALTH_BACKEND_SLOW_LATENCY_MS = 1500
 
@@ -1130,7 +1130,7 @@ class SimulatorRuntime:
         now_mono = self._health_state.now_monotonic()
         if now_mono < probe.next_eligible_at:
             return
-        endpoint = f"{self._health_backend_url.rstrip('/')}/mobile/health"
+        endpoint = f"{self._health_backend_url.rstrip('/')}/api/v1/mobile/health"
         start = monotonic()
         latency_ms: int | None = None
         try:
@@ -2059,7 +2059,7 @@ class SimulatorRuntime:
         # NOTE: the legacy key was previously named "backend" (a flat string
         # like "connected"/"down") which collided with the v2 "backend" field
         # (HealthBackendBlock dict) when the dicts were merged — causing a
-        # ResponseValidationError on the /api/sim/health endpoint.  Renamed
+        # ResponseValidationError on the /api/v1/sim/health endpoint.  Renamed
         # to "backendStatus" to avoid the collision.
         legacy_keys: dict[str, Any] = {
             "status": runtime_state if runtime_state != "idle" else "running",

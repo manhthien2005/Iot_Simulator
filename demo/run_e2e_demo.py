@@ -79,7 +79,7 @@ def run(base_url: str, tick_count: int) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run IoT simulator E2E demo flow")
-    parser.add_argument("--base-url", default="http://localhost:8090/api/sim")
+    parser.add_argument("--base-url", default="http://localhost:8090/api/v1/sim")
     parser.add_argument("--ticks", type=int, default=5)
     return parser
 

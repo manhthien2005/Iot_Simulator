@@ -76,22 +76,22 @@ class TestFallPipelineE2E(unittest.TestCase):
     def setUp(self):
         reset_runtime_for_tests()
         self.client = TestClient(app)
-        dev = self.client.post("/api/sim/devices", json={
+        dev = self.client.post("/api/v1/sim/devices", json={
             "name": "FallAuditDevice", "type": "smartwatch",
             "persona_config": {"age": 70, "weight_kg": 65, "height_cm": 165}
         }).json()
         self.device_id = dev["id"]
-        ses = self.client.post("/api/sim/sessions", json={
+        ses = self.client.post("/api/v1/sim/sessions", json={
             "device_ids": [self.device_id], "speed": 1
         }).json()
         self.session_id = ses["id"]
-        self.client.post(f"/api/sim/sessions/{self.session_id}/start")
+        self.client.post(f"/api/v1/sim/sessions/{self.session_id}/start")
 
     def tearDown(self):
-        self.client.post(f"/api/sim/sessions/{self.session_id}/stop")
+        self.client.post(f"/api/v1/sim/sessions/{self.session_id}/stop")
 
     def _vitals(self):
-        return self.client.get("/api/sim/vitals/latest",
+        return self.client.get("/api/v1/sim/vitals/latest",
                                params={"deviceId": self.device_id}).json()
 
     def test_baseline_normal_rest_has_activity_label(self):
@@ -103,7 +103,7 @@ class TestFallPipelineE2E(unittest.TestCase):
 
     def test_fall_high_confidence_raises_hr_and_drops_spo2(self):
         baseline = self._vitals()
-        self.client.post("/api/sim/scenarios/apply", json={
+        self.client.post("/api/v1/sim/scenarios/apply", json={
             "device_id": self.device_id, "scenario_id": "fall_high_confidence"
         })
         time.sleep(1.5)
@@ -118,12 +118,12 @@ class TestFallPipelineE2E(unittest.TestCase):
         self.assertEqual(after.get("severity"), "critical")
 
     def test_fall_no_response_event_causes_bradycardia_and_hypoxia(self):
-        self.client.post("/api/sim/scenarios/apply", json={
+        self.client.post("/api/v1/sim/scenarios/apply", json={
             "device_id": self.device_id, "scenario_id": "normal_rest"
         })
         time.sleep(1.5)
         baseline = self._vitals()
-        self.client.post("/api/sim/events/inject", json={
+        self.client.post("/api/v1/sim/events/inject", json={
             "device_id": self.device_id,
             "event_type": "fall_detected",
             "variant": "fall_no_response"
@@ -141,12 +141,12 @@ class TestFallPipelineE2E(unittest.TestCase):
         self.assertEqual(after.get("severity"), "critical")
 
     def test_stress_event_raises_hr(self):
-        self.client.post("/api/sim/scenarios/apply", json={
+        self.client.post("/api/v1/sim/scenarios/apply", json={
             "device_id": self.device_id, "scenario_id": "normal_rest"
         })
         time.sleep(1.5)
         before = self._vitals()
-        self.client.post("/api/sim/events/inject", json={
+        self.client.post("/api/v1/sim/events/inject", json={
             "device_id": self.device_id, "event_type": "stress"
         })
         time.sleep(1.5)
@@ -157,7 +157,7 @@ class TestFallPipelineE2E(unittest.TestCase):
 
     def test_activity_label_changes_on_fall_event(self):
         before = self._vitals()
-        self.client.post("/api/sim/events/inject", json={
+        self.client.post("/api/v1/sim/events/inject", json={
             "device_id": self.device_id,
             "event_type": "fall_detected",
             "variant": "fall_1"

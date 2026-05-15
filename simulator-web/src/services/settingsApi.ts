@@ -6,7 +6,7 @@ import type {
 } from "../types/settings";
 
 export async function fetchSettings(): Promise<SimulatorSettingsResponse> {
-  const response = await apiClient.get<SimulatorSettingsResponse>("/api/sim/settings");
+  const response = await apiClient.get<SimulatorSettingsResponse>("/api/v1/sim/settings");
   return response.data;
 }
 
@@ -20,7 +20,7 @@ export async function updateRuntimeConfig(
   body: RuntimeConfigUpdate,
 ): Promise<RuntimeConfigSaveResponse> {
   const response = await apiClient.put<RuntimeConfigSaveResponse>(
-    "/api/sim/settings/runtime",
+    "/api/v1/sim/settings/runtime",
     body,
   );
   return response.data;
@@ -32,7 +32,7 @@ export async function updateRuntimeConfig(
  */
 export async function restoreRuntimeDefaults(): Promise<RuntimeConfigSaveResponse> {
   const response = await apiClient.post<RuntimeConfigSaveResponse>(
-    "/api/sim/settings/runtime/reset",
+    "/api/v1/sim/settings/runtime/reset",
   );
   return response.data;
 }

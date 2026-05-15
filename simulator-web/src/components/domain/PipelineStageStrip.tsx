@@ -6,7 +6,7 @@ import type { PipelineStage, PipelineStageStatus } from "../../types/verificatio
 // PipelineStageStrip — Module E.4.
 //
 // Horizontal strip that renders the device → publish → downstream evidence
-// trail returned by `GET /api/sim/verification/latest`.  Each stage is one of
+// trail returned by `GET /api/v1/sim/verification/latest`.  Each stage is one of
 // `ok` / `pending` / `failed` / `skipped` so an operator can see exactly
 // where the trail broke.
 //

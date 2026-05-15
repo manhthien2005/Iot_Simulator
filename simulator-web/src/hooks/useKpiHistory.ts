@@ -4,7 +4,7 @@ import type { HealthTelemetryBlock } from "../types/health";
 // ---------------------------------------------------------------------------
 // useKpiHistory — client-side ring buffer for the 4 telemetry KPIs.
 //
-// The backend's /api/sim/health response only carries point-in-time values
+// The backend's /api/v1/sim/health response only carries point-in-time values
 // for `telemetry`.  The dashboard wants a 20-point trend sparkline per KPI
 // so an operator can visually distinguish "spiked once" from "steadily
 // climbing".  Persisting trend history server-side would be over-kill for

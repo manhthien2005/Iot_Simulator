@@ -3,7 +3,7 @@
 This client targets **port 8001** (healthguard-model-api) for AI-based sleep
 stage prediction.  Database persistence of sleep records is handled separately
 by :mod:`api_server.dependencies` which POSTs to the health_system backend on
-**port 8000** via ``/mobile/telemetry/sleep``.
+**port 8000** via ``/api/v1/mobile/telemetry/sleep``.
 
 This dual-endpoint design is intentional:
   - Port 8001 → AI inference (sleep stage classification)

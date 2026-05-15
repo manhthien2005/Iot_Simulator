@@ -2,7 +2,7 @@ import type { ScenarioOption } from "../types/scenario";
 import { apiClient } from "./api";
 
 export async function fetchScenarios(): Promise<ScenarioOption[]> {
-  const response = await apiClient.get<ScenarioOption[]>("/api/sim/scenarios");
+  const response = await apiClient.get<ScenarioOption[]>("/api/v1/sim/scenarios");
   return response.data;
 }
 
@@ -21,7 +21,7 @@ export async function fetchScenarios(): Promise<ScenarioOption[]> {
  * code.  Render the chips from `keySignals` + `followUp` in the UI.
  */
 export async function applyScenarioPreset(deviceId: string, scenarioId: string): Promise<void> {
-  await apiClient.post("/api/sim/scenarios/apply", {
+  await apiClient.post("/api/v1/sim/scenarios/apply", {
     device_id: deviceId,
     scenario_id: scenarioId,
   });

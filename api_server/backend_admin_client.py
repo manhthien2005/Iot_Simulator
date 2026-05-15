@@ -42,7 +42,7 @@ class BackendAdminClient:
 
     def __init__(self, base_url: str | None = None) -> None:
         self._backend_root = self._resolve_backend_base_url(base_url)
-        self._base = f"{self._backend_root}/mobile/admin"
+        self._base = f"{self._backend_root}/api/v1/mobile/admin"
         # Reusable sync client with connection pooling
         self._sync_client = httpx.Client(
             base_url=self._base,

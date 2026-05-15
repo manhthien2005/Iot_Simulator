@@ -13,7 +13,7 @@ export async function fetchLatestMotion(
   deviceId: string,
 ): Promise<MotionLatest> {
   const response = await apiClient.get<MotionLatest>(
-    `/api/sim/sessions/${encodeURIComponent(sessionId)}/motion/latest`,
+    `/api/v1/sim/sessions/${encodeURIComponent(sessionId)}/motion/latest`,
     { params: { deviceId } },
   );
   return response.data;

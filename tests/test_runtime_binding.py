@@ -121,11 +121,11 @@ class TestRuntimeBinding(unittest.TestCase):
         )
         self.assertEqual(
             runtime.transport_router.http_publisher.endpoint,
-            "http://backend.example:9000/mobile/telemetry/ingest",
+            "http://backend.example:9000/api/v1/mobile/telemetry/ingest",
         )
         self.assertEqual(
             runtime._telemetry_alert_endpoint(runtime._health_backend_url),
-            "http://backend.example:9000/mobile/telemetry/alert",
+            "http://backend.example:9000/api/v1/mobile/telemetry/alert",
         )
 
     def test_tick_active_releases_runtime_lock_before_db_persist(self) -> None:
@@ -223,7 +223,7 @@ class TestRuntimeBinding(unittest.TestCase):
 
         self.assertEqual(len(sent), 1)
         endpoint, payload = sent[0]
-        self.assertEqual(endpoint, "http://localhost:8000/mobile/telemetry/alert")
+        self.assertEqual(endpoint, "http://localhost:8000/api/v1/mobile/telemetry/alert")
         self.assertEqual(payload["db_device_id"], 501)
         self.assertEqual(payload["event_type"], "vitals_out_of_range")
         self.assertEqual(payload["severity"], "warning")

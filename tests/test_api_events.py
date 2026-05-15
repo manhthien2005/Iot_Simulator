@@ -19,22 +19,22 @@ class TestApiEvents(unittest.TestCase):
         reset_runtime_for_tests()
         self.client = TestClient(app)
         device = self.client.post(
-            "/api/sim/devices",
+            "/api/v1/sim/devices",
             json={"name": "Watch C", "type": "smartwatch", "persona_config": {"age": 29, "weight_kg": 63, "height_cm": 167, "seed": 4}},
         ).json()
-        session = self.client.post("/api/sim/sessions", json={"device_ids": [device["id"]], "speed": 1}).json()
+        session = self.client.post("/api/v1/sim/sessions", json={"device_ids": [device["id"]], "speed": 1}).json()
         self.device_id = device["id"]
         self.session_id = session["id"]
-        self.client.post(f"/api/sim/sessions/{self.session_id}/start")
+        self.client.post(f"/api/v1/sim/sessions/{self.session_id}/start")
 
     def test_inject_fall_event(self) -> None:
         injected = self.client.post(
-            "/api/sim/events",
+            "/api/v1/sim/events",
             json={"device_id": self.device_id, "event_type": "fall_detected", "variant": "fall_1"},
         )
         self.assertEqual(injected.status_code, 204)
 
-        verification = self.client.get(f"/api/sim/verification/latest?sessionId={self.session_id}")
+        verification = self.client.get(f"/api/v1/sim/verification/latest?sessionId={self.session_id}")
         self.assertEqual(verification.status_code, 200)
         self.assertTrue(verification.json()["alertReceived"])
 

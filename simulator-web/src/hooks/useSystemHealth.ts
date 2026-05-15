@@ -6,7 +6,7 @@ import { POLL_INTERVALS } from "../config/defaults";
  * Single source of truth for the dashboard hero, degraded banner, and
  * telemetry KPI cards.
  *
- * The query polls `/api/sim/health` every {@link POLL_INTERVALS.health} ms
+ * The query polls `/api/v1/sim/health` every {@link POLL_INTERVALS.health} ms
  * (15 s by default — keeps the model-API pill flip detectable within one
  * polling window per the Module A acceptance criterion).
  *

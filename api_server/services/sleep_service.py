@@ -584,7 +584,7 @@ class SleepService:
             "start_time": start_time.isoformat().replace("+00:00", "Z"),
             "end_time": end_time.isoformat().replace("+00:00", "Z"),
         }
-        endpoint = f"{self._health_backend_url}/mobile/telemetry/sleep"
+        endpoint = f"{self._health_backend_url}/api/v1/mobile/telemetry/sleep"
         try:
             # CRITICAL #2 fix: use shared httpx.Client instead of httpx.post()
             client = self._get_http_client()
@@ -642,7 +642,7 @@ class SleepService:
         return bool(result)
 
     def _post_sleep_payload(self, *, payload: dict[str, Any], device_id: str) -> tuple[bool, int]:
-        endpoint = f"{self._health_backend_url}/mobile/telemetry/sleep"
+        endpoint = f"{self._health_backend_url}/api/v1/mobile/telemetry/sleep"
         # CRITICAL #2 fix: use shared httpx.Client instead of httpx.post()
         client = self._get_http_client()
         resp = client.post(

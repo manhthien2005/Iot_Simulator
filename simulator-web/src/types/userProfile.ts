@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// UserProfile — shape returned by GET /api/sim/admin/users/{user_id}/profile.
+// UserProfile — shape returned by GET /api/v1/sim/admin/users/{user_id}/profile.
 //
 // Mirrors the `AdminUserProfileResponse` Pydantic model in
 // `api_server/schemas.py`.  Used by the Session page profile card to render
