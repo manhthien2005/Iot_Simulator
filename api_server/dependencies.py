@@ -82,10 +82,18 @@ try:
         VitalsHistoryBuffer,
     )
     from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
+    # ADR-019 Phase 7 S9: ``FallAIClient`` no longer used by the runtime —
+    # the fall flow now posts the IMU window to the mobile BE which
+    # forwards to the model-api. ``motion_window_to_samples`` +
+    # ``FALL_VARIANT_CONTEXT`` stay because they shape the payload for
+    # the new ``MobileTelemetryClient.submit_imu_window`` call. The
+    # client class file ``simulator_core/fall_ai_client.py`` is retained
+    # as a diagnostic utility until S18 cleanup.
     from Iot_Simulator.simulator_core.fall_ai_client import (
-        FallAIClient,
-        normalise_verdict as _normalise_fall_verdict,
+        FALL_VARIANT_CONTEXT,
+        motion_window_to_samples as _motion_window_to_samples,
     )
+    from Iot_Simulator.pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient
     from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
     from Iot_Simulator.simulator_core.sleep_vitals_enricher import enrich_sleep_record
@@ -148,11 +156,12 @@ except ModuleNotFoundError:
         VitalsHistoryBuffer,
     )
     from simulator_core.dataset_registry import DatasetRegistry
+    # ADR-019 Phase 7 S9: see Iot_Simulator-prefixed import block above.
     from simulator_core.fall_ai_client import (  # noqa: F811
         FALL_VARIANT_CONTEXT,
-        FallAIClient,
-        normalise_verdict as _normalise_fall_verdict,
+        motion_window_to_samples as _motion_window_to_samples,  # noqa: F811
     )
+    from pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient  # noqa: F811
     from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from simulator_core.sleep_ai_client import SleepAIClient
     from simulator_core.sleep_vitals_enricher import enrich_sleep_record
@@ -329,6 +338,144 @@ def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> 
 
 def _safe_float_db(value: Any) -> float | None:
     return _safe_float(value, None)
+
+
+# ADR-019 Phase 7 S9: BE compact response -> simulator AIPrediction.
+# Replaces the model-api raw normaliser (``normalise_verdict``) for the
+# fall path. The compact response carries fewer fields than the
+# model-api response (no SHAP top_features, no Vietnamese explanation
+# string, no separate confidence) so we synthesise a generic Vietnamese
+# explanation from probability + band. The richer XAI surface can be
+# restored later by widening the BE response shape (out of S9 scope).
+
+_BAND_TO_RISK_BAND: dict[str, str] = {
+    "critical": "critical",
+    "critical_fall": "critical",
+    "warning": "warning",
+    "possible_fall": "warning",
+    "likely_fall": "warning",
+    "normal": "normal",
+    "unknown": "normal",
+}
+
+_BAND_TO_LABEL: dict[str, str] = {
+    "critical": "critical_fall",
+    "critical_fall": "critical_fall",
+    "warning": "likely_fall",
+    "likely_fall": "likely_fall",
+    "possible_fall": "possible_fall",
+    "normal": "normal",
+    "unknown": "normal",
+}
+
+
+def _normalise_imu_window_response(
+    response: dict[str, Any] | None,
+    *,
+    predicted_at: str,
+) -> "AIPrediction":
+    """Project ``ImuWindowResponse`` into the simulator's :class:`AIPrediction`.
+
+    Returns an offline-shaped prediction when the response is missing
+    or the backend reported ``status="model_unavailable"`` so the FE
+    always has a deterministic envelope to render.
+    """
+    if not isinstance(response, dict):
+        return AIPrediction(
+            label="normal",
+            probability=0.0,
+            confidence=0.0,
+            riskBand="normal",
+            requiresAttention=False,
+            highPriorityAlert=False,
+            explanationSummary=(
+                "Mobile BE không trả phản hồi — đang dùng ngưỡng pre-trigger."
+            ),
+            topFeatures=[],
+            predictedAt=predicted_at,
+            modelStatus="offline",
+        )
+
+    status = str(response.get("status") or "").strip().lower()
+    if status != "ok":
+        return AIPrediction(
+            label="normal",
+            probability=0.0,
+            confidence=0.0,
+            riskBand="normal",
+            requiresAttention=False,
+            highPriorityAlert=False,
+            explanationSummary=(
+                "AI model offline — đang dùng ngưỡng pre-trigger để quyết định cảnh báo."
+            ),
+            topFeatures=[],
+            predictedAt=predicted_at,
+            modelStatus="offline",
+        )
+
+    probability = _safe_float(response.get("fall_probability"), 0.0) or 0.0
+    probability = max(0.0, min(1.0, probability))
+    band_raw = str(response.get("prediction_band") or "unknown").strip().lower()
+    risk_band = _BAND_TO_RISK_BAND.get(band_raw, "normal")
+    label = _BAND_TO_LABEL.get(band_raw, "normal")
+    requires_attention = bool(response.get("requires_attention"))
+    predicted_fall = bool(response.get("predicted_fall"))
+    # ``highPriorityAlert`` keeps the same semantics as the legacy
+    # model-api flag: critical band + high probability.
+    high_priority_alert = (risk_band == "critical") and (probability >= 0.8 or predicted_fall)
+
+    explanation = _build_synthetic_fall_explanation(
+        risk_band=risk_band,
+        probability=probability,
+        predicted_fall=predicted_fall,
+        model_request_id=response.get("model_request_id"),
+    )
+    return AIPrediction(
+        label=label,  # type: ignore[arg-type]
+        probability=probability,
+        # No separate confidence channel from the BE compact response —
+        # mirror probability so downstream metadata (S2 confidence
+        # bridge) stays meaningful.
+        confidence=probability,
+        riskBand=risk_band,  # type: ignore[arg-type]
+        requiresAttention=requires_attention,
+        highPriorityAlert=high_priority_alert,
+        explanationSummary=explanation,
+        topFeatures=[],
+        predictedAt=predicted_at,
+        modelStatus="ok",
+    )
+
+
+_BAND_PHRASE_VI: dict[str, str] = {
+    "critical": "té ngã nghiêm trọng",
+    "warning": "khả năng té ngã",
+    "normal": "không có dấu hiệu té ngã",
+}
+
+
+def _build_synthetic_fall_explanation(
+    *,
+    risk_band: str,
+    probability: float,
+    predicted_fall: bool,
+    model_request_id: Any,
+) -> str:
+    """Compose a short Vietnamese sentence from the BE compact response.
+
+    Replaces the model-api SHAP-driven Vietnamese sentence with a
+    deterministic synthesis so the operator UI keeps a useful caption
+    even though the rich XAI fields are not on the BE response shape.
+    """
+    phrase = _BAND_PHRASE_VI.get(risk_band, _BAND_PHRASE_VI["normal"])
+    pct = int(round(probability * 100))
+    base = f"AI đánh giá: {phrase} (xác suất {pct}%)."
+    if predicted_fall and risk_band != "critical":
+        base += " Mức xác suất chưa đủ cao để escalate SOS."
+    request_id = str(model_request_id or "").strip()
+    if request_id:
+        base += f" Trace: {request_id[:8]}…"
+    return base
 
 
 def _safe_int(value: Any) -> int | None:
@@ -621,26 +768,14 @@ class SimulatorRuntime:
         except Exception:
             logger.warning("Sleep AI availability check failed", exc_info=True)
 
-        # ── Fall AI client (Module FA — Fall Lab redesign) ──────────────
-        # Targets the same model-api host as SleepAIClient but a different
-        # endpoint (``/api/v1/fall/predict``).  Uses 127.0.0.1 instead of
-        # ``localhost`` to avoid the ~2s IPv6 resolution penalty on Windows
-        # (same fix as ``HEALTH_BACKEND_URL``).
-        self._fall_ai_client = FallAIClient(base_url="http://127.0.0.1:8001")
-        # Per-device caches surfaced via ``/sessions/{id}/fall-state``.
+        # ── Fall AI dispatcher (Module FA — Fall Lab redesign, S9 rewire) ──
+        # ADR-019 Phase 7 S9: per-device caches surfaced via
+        # ``/sessions/{id}/fall-state``. The :class:`MobileTelemetryClient`
+        # itself is wired below — after ``_health_backend_url`` has been
+        # resolved — because its constructor needs the backend base URL.
         self._fall_predictions: dict[str, AIPrediction] = {}
         self._fall_motion_refs: dict[str, MotionWindowRef] = {}
         self._fall_countdown_policies: dict[str, CountdownPolicy] = {}
-        try:
-            if self._fall_ai_client.check_availability():
-                logger.info("Fall AI model available at %s", self._fall_ai_client.base_url)
-            else:
-                logger.warning(
-                    "Fall AI model not available at %s — operator UI will surface 'AI offline' chips",
-                    self._fall_ai_client.base_url,
-                )
-        except Exception:
-            logger.warning("Fall AI availability check failed", exc_info=True)
         self.devices: dict[str, DeviceRecord] = {}
         self.device_scenarios: dict[str, str] = {}
         self.sessions: dict[str, SessionRecord] = {}
@@ -664,6 +799,23 @@ class SimulatorRuntime:
         self._health_backend_url = self._resolve_backend_base_url()
         self.backend_base_url = self._health_backend_url
         self.admin_client = BackendAdminClient(self._health_backend_url)
+        # ADR-019 Phase 7 S9: dispatch IMU windows through the mobile BE
+        # (``POST /api/v1/mobile/telemetry/imu-window``) instead of the
+        # model-api directly. Wired here — after ``_health_backend_url``
+        # is resolved — so the constructor can build the correct base
+        # URL. The compact ``ImuWindowResponse`` is normalised back into
+        # :class:`AIPrediction` by :func:`_normalise_imu_window_response`
+        # so the operator UI keeps the same envelope as the legacy
+        # ``FallAIClient`` path.
+        self._mobile_telemetry_client = MobileTelemetryClient(
+            base_url=self._health_backend_url,
+            http_sender=self._http_sender_with_body,
+            internal_secret=os.environ.get("INTERNAL_SERVICE_SECRET") or None,
+        )
+        logger.info(
+            "Mobile telemetry client wired (fall window path -> %s/api/v1/mobile/telemetry/imu-window)",
+            self._health_backend_url,
+        )
         mqtt = MqttPublisher(topic_prefix="devices/sim", client=lambda topic, payload: True)
         http = HttpPublisher(
             endpoint=self._telemetry_ingest_endpoint(self._health_backend_url),
@@ -941,6 +1093,41 @@ class SimulatorRuntime:
             return exc.response.status_code
         except httpx.HTTPError:
             raise
+
+    @staticmethod
+    def _http_sender_with_body(
+        endpoint: str,
+        payload: str,
+        headers: dict[str, str] | None = None,
+        timeout: float = 10.0,
+    ) -> tuple[int, str]:
+        """ADR-019 Phase 7 S9: body-aware POST for :class:`MobileTelemetryClient`.
+
+        Matches the ``HttpSenderWithBodyFn`` contract — returns
+        ``(status_code, body_text)``. Status ``< 0`` signals a
+        transport-level failure (connection refused / DNS / timeout) so
+        the caller can branch without parsing exception types.
+        """
+        request_headers = {"Content-Type": "application/json"}
+        if headers:
+            request_headers.update(headers)
+        try:
+            response = httpx.post(
+                endpoint,
+                content=payload.encode("utf-8"),
+                headers=request_headers,
+                timeout=timeout,
+            )
+            return response.status_code, response.text
+        except httpx.HTTPStatusError as exc:
+            return exc.response.status_code, exc.response.text
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "Body-aware POST %s transport failure: %s",
+                endpoint,
+                exc,
+            )
+            return -1, ""
 
     def _publish_device_log(self, sim_device_id: str, *, level: str, message: str, timestamp: str | None = None) -> None:
         ts = timestamp or _utc_now_iso()
@@ -1652,11 +1839,19 @@ class SimulatorRuntime:
         device_id: str,
         fe_variant: str,
     ) -> AIPrediction:
-        """Run the fall AI model on the most recent motion window.
+        """Post the most recent IMU window to the mobile BE for fall inference.
+
+        ADR-019 Phase 7 S9: the simulator used to call the model-api
+        directly via :class:`FallAIClient`. It now dispatches through
+        :class:`MobileTelemetryClient` so the backend can persist the
+        raw window (``imu_windows``), the fall event (``fall_events``),
+        auto-trigger risk, and fan FCM out — same trust boundary as a
+        production smartwatch -> phone -> BE -> model-api path.
 
         Returns an ``AIPrediction`` even on failure so the FE always has
-        a deterministic shape to render: ``modelStatus`` distinguishes
-        ``ok`` from ``offline`` from ``no_window``.  No exception escapes.
+        a deterministic shape: ``modelStatus`` distinguishes ``ok`` from
+        ``offline`` from ``no_window`` from ``skipped`` (no bound DB
+        device). No exception escapes.
         """
         predicted_at = _utc_now_iso()
         sample_count = 0
@@ -1688,13 +1883,14 @@ class SimulatorRuntime:
                 predictedAt=predicted_at,
                 modelStatus="no_window",
             )
-        try:
-            fall_context = FALL_VARIANT_CONTEXT.get(fe_variant, {"inject_environment": True})
-            raw = self._fall_ai_client.predict(motion, device_id, fall_context=fall_context)
-        except Exception:  # pragma: no cover — defensive
-            logger.warning("Fall AI predict raised unexpectedly", exc_info=True)
-            raw = None
-        if raw is None:
+
+        # Resolve the backend device PK — the BE rejects ``/imu-window``
+        # without it because the persistence path needs a ``devices.id``
+        # to attach the row to. Unbound simulator devices skip the call
+        # entirely and surface ``modelStatus=skipped``.
+        device = self.devices.get(device_id)
+        bound_db_device_id = device.bound_db_device_id if device is not None else None
+        if bound_db_device_id is None:
             return AIPrediction(
                 label="normal",
                 probability=0.0,
@@ -1703,38 +1899,16 @@ class SimulatorRuntime:
                 requiresAttention=False,
                 highPriorityAlert=False,
                 explanationSummary=(
-                    "AI model offline — đang dùng ngưỡng pre-trigger để quyết định cảnh báo."
+                    "Thiết bị mô phỏng chưa bind backend — bỏ qua dispatch IMU window."
                 ),
                 topFeatures=[],
                 predictedAt=predicted_at,
-                modelStatus="offline",
+                modelStatus="skipped",
             )
-        try:
-            normalised = _normalise_fall_verdict(raw)
-            return AIPrediction(
-                label=normalised["label"],  # type: ignore[arg-type]
-                probability=normalised["probability"],
-                confidence=normalised["confidence"],
-                riskBand=normalised["riskBand"],  # type: ignore[arg-type]
-                requiresAttention=normalised["requiresAttention"],
-                highPriorityAlert=normalised["highPriorityAlert"],
-                explanationSummary=normalised["explanationSummary"],
-                topFeatures=[
-                    AITopFeature(
-                        featureName=feat["featureName"],
-                        contribution=feat["contribution"],
-                        vietnameseExplanation=feat["vietnameseExplanation"],
-                        severity=feat["severity"],  # type: ignore[arg-type]
-                    )
-                    for feat in normalised["topFeatures"]
-                ],
-                predictedAt=predicted_at,
-                modelStatus="ok",
-            )
-        except Exception:  # pragma: no cover — schema mismatch fallback
-            logger.warning(
-                "Fall AI verdict normalisation failed for variant=%s", fe_variant, exc_info=True
-            )
+
+        fall_context = FALL_VARIANT_CONTEXT.get(fe_variant, {"inject_environment": True})
+        samples = _motion_window_to_samples(motion, fall_context=fall_context)
+        if len(samples) < 50:
             return AIPrediction(
                 label="normal",
                 probability=0.0,
@@ -1742,11 +1916,31 @@ class SimulatorRuntime:
                 riskBand="normal",
                 requiresAttention=False,
                 highPriorityAlert=False,
-                explanationSummary="AI trả về dữ liệu không đọc được — đang dùng fallback.",
+                explanationSummary=(
+                    "Không đủ mẫu sau khi chuyển đổi window — pre-trigger fallback."
+                ),
                 topFeatures=[],
                 predictedAt=predicted_at,
-                modelStatus="offline",
+                modelStatus="no_window",
             )
+
+        try:
+            response = self._mobile_telemetry_client.submit_imu_window(
+                device_id=device_id,
+                db_device_id=int(bound_db_device_id),
+                window_data=samples,
+            )
+        except Exception:  # pragma: no cover — defensive
+            logger.warning(
+                "Mobile telemetry IMU window submit raised unexpectedly",
+                exc_info=True,
+            )
+            response = None
+
+        return _normalise_imu_window_response(
+            response,
+            predicted_at=predicted_at,
+        )
 
     def _build_motion_window_ref(
         self,
