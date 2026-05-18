@@ -9,6 +9,8 @@ import { SessionVitalsPanel } from "../components/domain/SessionVitalsPanel";
 import { PageHeader } from "../components/ui/PageHeader";
 import { SequenceDiagramLive } from "../components/sequence_diagram/SequenceDiagramLive";
 import { DemoModeToggle } from "../components/demo_mode/DemoModeToggle";
+import { LinkedCaregiverPanel } from "../components/domain/session/LinkedCaregiverPanel";
+import { useCaregivers } from "../hooks/useCaregivers";
 
 import { useDbDevices, useDevices } from "../hooks/useDevices";
 import { useSessions } from "../hooks/useSessions";
@@ -95,6 +97,11 @@ export function SessionRunnerPage() {
     isFetching: isProfileFetching,
     error: profileError,
   } = useUserProfile(selectedDbDevice?.user_id ?? null);
+
+  const {
+    data: caregiversData,
+    isLoading: isCaregiversLoading,
+  } = useCaregivers(selectedDbDevice?.user_id ?? null);
 
   // Auto-select on first load: URL param if present, otherwise first
   // available device.  Runs only when nothing is selected yet — picking
@@ -255,6 +262,17 @@ export function SessionRunnerPage() {
           ) : (
             <UserProfileCard profile={undefined} isLoading={false} error={null} />
           )}
+        </div>
+      ) : null}
+
+      {/* Section 2b — Linked caregivers (only when device has bound user) */}
+      {selectedDbDevice?.user_id != null ? (
+        <div style={{ display: "grid", gap: "8px" }}>
+          <SectionHeading label="2b. Nguoi than lien ket" />
+          <LinkedCaregiverPanel
+            caregivers={caregiversData?.caregivers ?? []}
+            isLoading={isCaregiversLoading}
+          />
         </div>
       ) : null}
 
