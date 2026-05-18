@@ -863,15 +863,6 @@ class SimulatorRuntime:
                 internal_secret=os.environ.get("INTERNAL_SERVICE_SECRET") or None,
             )
             _vitals_buffer = VitalsHistoryBuffer(max_size=60)
-            self._orch_enable_model_calls: bool = os.environ.get(
-                "PRE_MODEL_TRIGGER_ENABLE_MODEL_CALLS", ""
-            ).lower() in ("1", "true", "yes")
-            # ADR-020 Phase 7 S7: deprecated read-only flag retained for
-            # status-reporting backward compat. The original gating
-            # behaviour (firing ``_trigger_risk_inference`` from the tick
-            # loop on URGENT actions) was disposed in S7 — the mobile BE
-            # now auto-calls ``calculate_device_risk`` after every
-            # ``/telemetry/ingest``. Slated for full removal in S18 cleanup.
             self._trigger_orchestrator = TriggerOrchestrator(
                 settings_provider=_settings_provider,
                 rule_engine=_rule_engine,
@@ -882,9 +873,8 @@ class SimulatorRuntime:
                 enable_model_calls=False,
             )
             logger.info(
-                "TriggerOrchestrator wired (pre_trigger_enabled=%s, enable_model_calls=%s)",
+                "TriggerOrchestrator wired (pre_trigger_enabled=%s)",
                 _PRE_MODEL_TRIGGER_ENABLED,
-                self._orch_enable_model_calls,
             )
         except Exception:
             logger.warning(
@@ -2335,12 +2325,12 @@ class SimulatorRuntime:
             # claim shadow/active capability we cannot actually exercise.
             mode = "off"
         else:
-            mode = "active" if getattr(self, "_orch_enable_model_calls", False) else "shadow"
+            mode = "shadow"  # active mode disposed S7 (ADR-020)
 
         threshold_source = "unavailable"
         enable_model_calls = False
         if self._trigger_orchestrator is not None:
-            enable_model_calls = getattr(self, "_orch_enable_model_calls", False)
+            enable_model_calls = False  # active mode disposed S7 (ADR-020)
             try:
                 provider = self._trigger_orchestrator._settings
                 day = provider.get_vitals_thresholds(is_sleeping=False)
@@ -3203,12 +3193,8 @@ class SimulatorRuntime:
         # Runs only when PRE_MODEL_TRIGGER_ENABLED=1 and the orchestrator was
         # successfully wired at startup.  Results are logged only (shadow mode):
         # they do NOT modify ``effects.pending_alerts`` so the existing alert
-        # flow is untouched. ADR-020 Phase 7 S7 disposed the active R3 wire —
-        # the BE now auto-calls ``calculate_device_risk`` after every
-        # ``/telemetry/ingest`` (S5 + S6), so the orchestrator never needs to
-        # request risk inference from the simulator. ``_orch_enable_model_calls``
-        # is retained as a deprecated read-only flag for status reporting; it
-        # no longer gates any behaviour and will be removed in the S18 cleanup.
+        # flow is untouched. ADR-020 Phase 7 S7 disposed the active R3 wire;
+        # the BE auto-calls ``calculate_device_risk`` after every ingest.
         if _PRE_MODEL_TRIGGER_ENABLED and self._trigger_orchestrator is not None:
             for payload in outputs:
                 _orch_device_id = str(payload.get("device_id") or "")
