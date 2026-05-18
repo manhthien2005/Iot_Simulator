@@ -34,6 +34,7 @@ try:
     from Iot_Simulator.api_server.routers.verification import router as verification_router
     from Iot_Simulator.api_server.routers.vitals import router as vitals_router
     from Iot_Simulator.api_server.ws.log_stream import handle_ws_logs
+    from Iot_Simulator.api_server.ws.flow_stream import handle_ws_flow
 except ModuleNotFoundError:
     from api_server.middleware.rate_limit import RateLimitMiddleware
     from api_server.schemas import HealthPayloadV2
@@ -49,6 +50,7 @@ except ModuleNotFoundError:
     from api_server.routers.verification import router as verification_router
     from api_server.routers.vitals import router as vitals_router
     from api_server.ws.log_stream import handle_ws_logs
+    from api_server.ws.flow_stream import handle_ws_flow
 
 
 logger = logging.getLogger(__name__)
@@ -113,3 +115,8 @@ def health() -> HealthPayloadV2:
 @app.websocket("/ws/logs/{session_id}")
 async def ws_logs(websocket: WebSocket, session_id: str) -> None:
     await handle_ws_logs(websocket, session_id)
+
+
+@app.websocket("/ws/flow/{session_id}")
+async def ws_flow(websocket: WebSocket, session_id: str) -> None:
+    await handle_ws_flow(websocket, session_id)
