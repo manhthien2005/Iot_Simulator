@@ -137,7 +137,6 @@ class MobileTelemetryClient:
             Hz. Defaults to 50 to match the model-api's expected input.
         """
         payload = {
-            "device_id": device_id,
             "db_device_id": int(db_device_id),
             "sampling_rate": int(sampling_rate),
             "window_size": len(window_data),
