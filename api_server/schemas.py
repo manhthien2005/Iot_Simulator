@@ -687,6 +687,27 @@ class AdminUserProfileResponse(BaseModel):
     emergency_contacts: list[AdminEmergencyContact] = []
 
 
+class LinkedCaregiverItem(BaseModel):
+    """One accepted caregiver linked to a patient — ADR-024 Phase 7 S16."""
+
+    model_config = {"from_attributes": True}
+
+    user_id: int
+    full_name: str | None = None
+    email: str
+    avatar_url: str | None = None
+    relationship_type: str = "family"
+    relationship_label: str | None = None
+    has_active_fcm_token: bool = False
+
+
+class LinkedCaregiversResponse(BaseModel):
+    """List of accepted caregivers for a patient user."""
+
+    patient_id: int
+    caregivers: list[LinkedCaregiverItem] = []
+
+
 # ---------------------------------------------------------------------------
 # Health payload v2 — single source of truth consumed by the dashboard hero,
 # settings, and verification surfaces.  See Phase 0 of the UX refactor plan.

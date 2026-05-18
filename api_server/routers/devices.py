@@ -3,6 +3,7 @@ from __future__ import annotations
 import time as _time
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 try:
@@ -22,6 +23,8 @@ try:
         BindDeviceRequest,
         BindDeviceResponse,
         CreateDeviceRequest,
+        LinkedCaregiverItem,
+        LinkedCaregiversResponse,
         SimulatedDevice,
     )
     from Iot_Simulator.api_server.sim_admin_service import SimAdminService
@@ -42,6 +45,8 @@ except ModuleNotFoundError:
         BindDeviceRequest,
         BindDeviceResponse,
         CreateDeviceRequest,
+        LinkedCaregiverItem,
+        LinkedCaregiversResponse,
         SimulatedDevice,
     )
     from api_server.sim_admin_service import SimAdminService
@@ -254,6 +259,40 @@ def get_user_profile(user_id: int, db: Session = Depends(get_db)) -> AdminUserPr
     if profile is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found")
     return AdminUserProfileResponse.model_validate(profile)
+
+
+@_admin_router.get("/admin/users/{user_id}/caregivers", response_model=LinkedCaregiversResponse)
+def get_user_caregivers(user_id: int, db: Session = Depends(get_db)) -> LinkedCaregiversResponse:
+    """Return accepted caregivers linked to *user_id* with FCM token status.
+
+    ADR-024 Phase 7 S16 — consumed by simulator-web LinkedCaregiverPanel.
+    """
+    rows = db.execute(
+        text("""
+            SELECT
+                u.id              AS user_id,
+                u.full_name,
+                u.email,
+                u.avatar_url,
+                ur.relationship_type,
+                ur.primary_relationship_label AS relationship_label,
+                EXISTS(
+                    SELECT 1 FROM user_push_tokens pt
+                    WHERE pt.user_id = u.id AND pt.is_active = true
+                ) AS has_active_fcm_token
+            FROM users u
+            JOIN user_relationships ur ON ur.caregiver_id = u.id
+            WHERE ur.patient_id    = :patient_id
+              AND ur.status        = 'accepted'
+              AND ur.deleted_at    IS NULL
+              AND u.deleted_at     IS NULL
+            ORDER BY ur.is_primary DESC, u.full_name
+        """),
+        {"patient_id": user_id},
+    ).mappings().all()
+
+    caregivers = [LinkedCaregiverItem(**dict(row)) for row in rows]
+    return LinkedCaregiversResponse(patient_id=user_id, caregivers=caregivers)
 
 
 # Merge admin sub-router into main router so all routes are exposed together
