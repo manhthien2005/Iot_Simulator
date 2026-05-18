@@ -8,6 +8,7 @@ import { UserProfileCard } from "../components/domain/session/UserProfileCard";
 import { SessionVitalsPanel } from "../components/domain/SessionVitalsPanel";
 import { PageHeader } from "../components/ui/PageHeader";
 import { SequenceDiagramLive } from "../components/sequence_diagram/SequenceDiagramLive";
+import { DemoModeToggle } from "../components/demo_mode/DemoModeToggle";
 
 import { useDbDevices, useDevices } from "../hooks/useDevices";
 import { useSessions } from "../hooks/useSessions";
@@ -225,6 +226,11 @@ export function SessionRunnerPage() {
         title="Mô phỏng tín hiệu sinh tồn"
         subtitle="Chọn thiết bị, xem hồ sơ người dùng, sau đó áp dụng kịch bản và quan sát sinh hiệu thời gian thực."
       />
+
+      {/* Demo mode toggle — top-right of page */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <DemoModeToggle />
+      </div>
 
       {/* Section 1 — Device picker */}
       <div style={{ display: "grid", gap: "8px" }}>
