@@ -1757,23 +1757,23 @@ class SimulatorRuntime:
             "medium_risk_general",
         }
         effects = SessionSideEffects()
+        _FALL_EVENT_MAP = {
+            "fall_high_confidence": "fall_1",
+            "fall_no_response":     "fall_no_response",
+            "fall_false_alarm":     "fall_brief",
+        }
+        _fall_variant_to_dispatch: str | None = None
         with self._lock:
             self._require_device(device_id)
             if scenario_id not in known:
                 raise KeyError(f"Unknown scenario id: {scenario_id}")
             self.device_scenarios[device_id] = scenario_id
-            # Fall scenarios auto-inject a fall_detected event so PersonaEngine
-            # transitions to activity_state="fall". Vitals are then: base_profile
-            # + fall_surge below. No hardcoded fall profile needed.
-            _FALL_EVENT_MAP = {
-                "fall_high_confidence": "fall_1",
-                "fall_no_response":     "fall_no_response",
-                "fall_false_alarm":     "fall_brief",
-            }
+            # Fall scenarios: record the variant to dispatch AFTER the lock so
+            # SimulatorRuntime.inject_event (full path: fall AI + FCM fanout)
+            # runs instead of the bare InMemorySimulator.inject_event which only
+            # transitions PersonaEngine state without calling _call_fall_ai_locked.
             if scenario_id in _FALL_EVENT_MAP:
-                for _sr in self.sessions.values():
-                    if _sr.status == "running" and device_id in _sr.device_ids:
-                        _sr.simulator.inject_event(device_id, "fall_detected", _FALL_EVENT_MAP[scenario_id])
+                _fall_variant_to_dispatch = _FALL_EVENT_MAP[scenario_id]
             sleep_started = False
             if scenario_id in SLEEP_SCENARIO_PHASES:
                 initial_phase = SLEEP_SCENARIO_PHASES[scenario_id][0][0]
@@ -1818,6 +1818,10 @@ class SimulatorRuntime:
                 metadata={"scenario_id": scenario_id},
             )
         self._run_session_side_effects(effects)
+        # Fall AI dispatch (must run outside the lock — inject_event acquires its own lock
+        # and executes the full pipeline: tick → _call_fall_ai_locked → FCM fanout).
+        if _fall_variant_to_dispatch is not None:
+            self.inject_event(device_id, "fall_detected", _fall_variant_to_dispatch)
 
     def tick_active(self) -> None:
         effects = SessionSideEffects()
@@ -1996,6 +2000,13 @@ class SimulatorRuntime:
                 modelStatus="no_window",
             )
 
+        logger.info(
+            "submit_imu_window → device=%s db_device=%s samples=%d url=%s",
+            device_id,
+            bound_db_device_id,
+            len(samples),
+            getattr(self._mobile_telemetry_client, "_base_url", "?"),
+        )
         try:
             response = self._mobile_telemetry_client.submit_imu_window(
                 device_id=device_id,
@@ -2008,6 +2019,10 @@ class SimulatorRuntime:
                 exc_info=True,
             )
             response = None
+        logger.info(
+            "submit_imu_window ← response=%s",
+            None if response is None else {k: v for k, v in response.items() if k in ("status", "fall_event_id", "fall_probability")},
+        )
 
         return _normalise_imu_window_response(
             response,
