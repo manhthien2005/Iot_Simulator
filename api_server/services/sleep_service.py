@@ -53,6 +53,13 @@ except ModuleNotFoundError:
 
 if TYPE_CHECKING:
     from api_server.dependencies import DeviceRecord, SessionRecord
+    # ADR-019 Phase 7 S10: dispatcher type-only import (no runtime dep
+    # so the legacy ``Iot_Simulator``-prefixed test harness keeps working
+    # without the ``pre_model_trigger`` package on sys.path).
+    try:
+        from Iot_Simulator.pre_model_trigger.sleep_dispatch import SleepRiskDispatcher
+    except ModuleNotFoundError:
+        from pre_model_trigger.sleep_dispatch import SleepRiskDispatcher  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +88,7 @@ class SleepService:
         internal_secret: str | None = None,
         sleep_scenario_phases: dict[str, Any] | None = None,
         sleep_scenario_profiles: dict[str, Any] | None = None,
+        sleep_risk_dispatcher: "SleepRiskDispatcher | None" = None,
     ) -> None:
         self.devices = devices
         self.sessions = sessions
@@ -88,6 +96,11 @@ class SleepService:
         self._lock = lock
         self.registry = registry
         self._sleep_ai_client = sleep_ai_client
+        # ADR-019 Phase 7 S10: prediction now flows through the mobile BE
+        # via :class:`SleepRiskDispatcher`. ``_sleep_ai_client`` is kept
+        # only for the dashboard availability probe (model-api uptime
+        # indicator) — its disposal is tracked at S18.
+        self._sleep_risk_dispatcher = sleep_risk_dispatcher
         self._last_sleep_score_source = "heuristic"
         self._sleep_phase_tracker = sleep_phase_tracker
         self._health_backend_url = health_backend_url
@@ -388,15 +401,49 @@ class SleepService:
         score = 25 + efficiency_ratio * 55 + deep_ratio * 20 + rem_bonus - wake_penalty
         return max(0, min(100, round(score)))
 
-    def _compute_sleep_score_with_ai(self, sleep_ai_record: dict) -> int:
-        client = self._sleep_ai_client
-        if client is not None:
-            result = client.predict(sleep_ai_record)
-            predicted = _safe_float((result or {}).get("predicted_sleep_score"), None) if isinstance(result, dict) else None
+    def _compute_sleep_score_with_ai(
+        self,
+        sleep_ai_record: dict,
+        *,
+        db_device_id: int | None = None,
+        db_user_id: int | None = None,
+    ) -> int:
+        """Score a sleep record via the mobile BE sleep-risk path.
+
+        ADR-019 Phase 7 S10: previously this called ``SleepAIClient.predict``
+        directly against ``http://localhost:8001`` (model-api). The fall
+        flow already moved off direct model-api calls in S9, and the same
+        rationale applies here — every prediction request must traverse the
+        mobile BE so the backend can persist a ``risk_scores`` row (with
+        ``risk_type='sleep'``), trigger downstream alerting, and keep a
+        single audit boundary.
+
+        The dispatcher returns the backend's :class:`SleepRiskResponse`
+        shape (``predicted_sleep_score`` 0–100, high=better). When the
+        dispatcher is unavailable (DI omitted in legacy tests) or the
+        backend reports ``model_unavailable`` / transport failure, the
+        heuristic fallback computed from the sleep-record summary is
+        returned just like the legacy path so the IoT simulator never
+        blocks on a missing prediction.
+        """
+        dispatcher = self._sleep_risk_dispatcher
+        if (
+            dispatcher is not None
+            and db_device_id is not None
+            and db_user_id is not None
+        ):
+            result = dispatcher.dispatch(
+                record=sleep_ai_record,
+                db_device_id=int(db_device_id),
+                db_user_id=int(db_user_id),
+            )
+            predicted: float | None = None
+            if isinstance(result, dict) and result.get("status") == "ok":
+                predicted = _safe_float(result.get("predicted_sleep_score"), None)
             if predicted is not None:
                 score = max(0, min(100, int(round(predicted))))
                 self._last_sleep_score_source = "ai"
-                logger.info("Sleep AI score: %s", score)
+                logger.info("Sleep AI score: %s (via mobile BE)", score)
                 return score
 
         fallback_summary = {
@@ -1185,7 +1232,11 @@ class SleepService:
                 user_id=user_id,
                 persona_config=persona_config,
             )
-            sleep_score = self._compute_sleep_score_with_ai(sleep_ai_record)
+            sleep_score = self._compute_sleep_score_with_ai(
+                sleep_ai_record,
+                db_device_id=bound_db_device_id,
+                db_user_id=user_id,
+            )
         score_source = self._last_sleep_score_source
 
         payload = {
