@@ -398,6 +398,7 @@ def _normalise_imu_window_response(
             topFeatures=[],
             predictedAt=predicted_at,
             modelStatus="offline",
+            failureReason="transport_error",
         )
 
     status = str(response.get("status") or "").strip().lower()
@@ -415,6 +416,9 @@ def _normalise_imu_window_response(
             topFeatures=[],
             predictedAt=predicted_at,
             modelStatus="offline",
+            failureReason=(
+                "model_unavailable" if status == "model_unavailable" else "validation_422"
+            ),
         )
 
     probability = _safe_float(response.get("fall_probability"), 0.0) or 0.0
@@ -1999,6 +2003,7 @@ class SimulatorRuntime:
                 topFeatures=[],
                 predictedAt=predicted_at,
                 modelStatus="skipped",
+                failureReason="device_unbound",
             )
 
         fall_context = FALL_VARIANT_CONTEXT.get(fe_variant, FALL_VARIANT_DEFAULT_CONTEXT)
@@ -2017,6 +2022,7 @@ class SimulatorRuntime:
                 topFeatures=[],
                 predictedAt=predicted_at,
                 modelStatus="no_window",
+                failureReason="insufficient_samples",
             )
 
         logger.info(
