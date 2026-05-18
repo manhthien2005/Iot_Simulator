@@ -192,14 +192,15 @@ class MobileTelemetryClient:
             logger.warning("POST %s raised %r — treating as transport failure", endpoint, exc)
             return None
         if status < 0:
-            logger.warning("POST %s reported transport failure: status=%d", endpoint, status)
+            logger.warning("POST %s transport failure (httpx error, status=%d)", endpoint, status)
             return None
         if not (200 <= status < 300):
             logger.warning(
-                "POST %s returned non-2xx: status=%d body=%s",
+                "POST %s non-2xx: status=%d body=%s",
                 endpoint, status, _summarise(body_text),
             )
             return None
+        logger.debug("POST %s OK: status=%d body=%s", endpoint, status, _summarise(body_text))
         try:
             parsed = json.loads(body_text) if body_text else {}
         except json.JSONDecodeError:
