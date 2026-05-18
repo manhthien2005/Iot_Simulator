@@ -94,6 +94,7 @@ try:
         motion_window_to_samples as _motion_window_to_samples,
     )
     from Iot_Simulator.pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient
+    from Iot_Simulator.pre_model_trigger.sleep_dispatch import SleepRiskDispatcher
     from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
     from Iot_Simulator.simulator_core.sleep_vitals_enricher import enrich_sleep_record
@@ -162,6 +163,7 @@ except ModuleNotFoundError:
         motion_window_to_samples as _motion_window_to_samples,  # noqa: F811
     )
     from pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient  # noqa: F811
+    from pre_model_trigger.sleep_dispatch import SleepRiskDispatcher  # noqa: F811
     from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
     from simulator_core.sleep_ai_client import SleepAIClient
     from simulator_core.sleep_vitals_enricher import enrich_sleep_record
@@ -816,6 +818,18 @@ class SimulatorRuntime:
             "Mobile telemetry client wired (fall window path -> %s/api/v1/mobile/telemetry/imu-window)",
             self._health_backend_url,
         )
+        # ADR-019 Phase 7 S10: route sleep-risk prediction through the
+        # mobile BE (``POST /api/v1/mobile/telemetry/sleep-risk``) instead
+        # of calling ``SleepAIClient.predict`` directly against model-api.
+        # The dispatcher wraps ``MobileTelemetryClient.submit_sleep_record``
+        # with payload validation + structured logging. ``SleepAIClient``
+        # is retained for the dashboard availability probe only
+        # (model-api uptime indicator) — its disposal is tracked at S18.
+        self._sleep_risk_dispatcher = SleepRiskDispatcher(self._mobile_telemetry_client)
+        logger.info(
+            "Sleep risk dispatcher wired (sleep-risk path -> %s/api/v1/mobile/telemetry/sleep-risk)",
+            self._health_backend_url,
+        )
         mqtt = MqttPublisher(topic_prefix="devices/sim", client=lambda topic, payload: True)
         http = HttpPublisher(
             endpoint=self._telemetry_ingest_endpoint(self._health_backend_url),
@@ -949,6 +963,7 @@ class SimulatorRuntime:
             lock=self._lock,
             registry=self.registry,
             sleep_ai_client=self._sleep_ai_client,
+            sleep_risk_dispatcher=self._sleep_risk_dispatcher,
             sleep_phase_tracker=self._sleep_phase_tracker,
             health_backend_url=self._health_backend_url,
             http_sender=self._http_sender,
