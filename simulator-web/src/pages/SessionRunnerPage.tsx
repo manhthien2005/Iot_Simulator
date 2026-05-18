@@ -7,6 +7,7 @@ import { ScenarioSelector } from "../components/domain/session/ScenarioSelector"
 import { UserProfileCard } from "../components/domain/session/UserProfileCard";
 import { SessionVitalsPanel } from "../components/domain/SessionVitalsPanel";
 import { PageHeader } from "../components/ui/PageHeader";
+import { SequenceDiagramLive } from "../components/sequence_diagram/SequenceDiagramLive";
 
 import { useDbDevices, useDevices } from "../hooks/useDevices";
 import { useSessions } from "../hooks/useSessions";
@@ -278,6 +279,14 @@ export function SessionRunnerPage() {
               /* page-level picker owns device selection; vitals dropdown disabled */
             }}
           />
+        </div>
+      ) : null}
+
+      {/* Section 4 — Live sequence diagram (only when session is running) */}
+      {activeSession ? (
+        <div style={{ display: "grid", gap: "8px" }}>
+          <SectionHeading label="4. Flow Events — Sequence Diagram" />
+          <SequenceDiagramLive sessionId={activeSession.id} />
         </div>
       ) : null}
 
