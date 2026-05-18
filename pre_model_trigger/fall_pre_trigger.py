@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,31 @@ _DEFAULT_SOFT_ACCEL_G = 2.5
 _DEFAULT_SOFT_POSTURE_DEG = 45.0
 _DEFAULT_SOFT_LOW_MOTION_S = 1.0
 _DEFAULT_GYRO_DPS = 250.0
+
+# P1-13: regex for extracting "<metric> <op> <value>" tokens out of
+# rule-config conditions. Tolerates surrounding whitespace, optional
+# trailing units (``g``, ``°``, ``s``), and connectors like ``and``.
+_THRESHOLD_RE = re.compile(
+    r"(?P<metric>[A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"(?P<op>>=|<=|>|<|==)\s*"
+    r"(?P<value>-?\d+(?:\.\d+)?)"
+)
+
+
+def _extract_threshold(condition: str, metric: str) -> float | None:
+    """Pull the numeric threshold for ``metric`` out of ``condition``.
+
+    Returns ``None`` if the metric token is absent — caller should keep
+    the built-in default. Robust to formatting drift in the JSON config
+    (no-space ops, trailing units, multi-clause ``and`` expressions).
+    """
+    for match in _THRESHOLD_RE.finditer(condition or ""):
+        if match.group("metric") == metric:
+            try:
+                return float(match.group("value"))
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def _load_fall_config() -> dict[str, Any]:
@@ -100,23 +126,35 @@ class FallPreTrigger:
         self._soft_low_motion_s = _DEFAULT_SOFT_LOW_MOTION_S
         self._gyro_dps = _DEFAULT_GYRO_DPS
 
-        # Parse hard triggers
+        # Parse hard triggers — P1-13: regex-based extraction.
         for trigger in stage1.get("hard_trigger_if_any", []):
             cond = trigger.get("condition", "")
-            if "accel_mag_peak_g >= " in cond:
-                val = _safe_float(cond.split(">= ")[-1].strip())
-                if val is not None:
-                    self._hard_accel_g = val
+            val = _extract_threshold(cond, "accel_mag_peak_g")
+            if val is not None:
+                self._hard_accel_g = val
 
-        # Parse soft triggers for threshold extraction
+        # Parse soft triggers — P1-13: regex-based extraction handles
+        # multi-clause conditions like
+        # ``"accel_mag_peak_g >= 2.5 AND posture_change_angle_deg >= 45"``.
         for trigger in stage1.get("soft_trigger_if_any", []):
             cond = trigger.get("condition", "")
-            if "gyro_mag_peak_dps >= " in cond:
-                parts = cond.split("gyro_mag_peak_dps >= ")
-                if len(parts) > 1:
-                    val = _safe_float(parts[1].split()[0])
-                    if val is not None:
-                        self._gyro_dps = val
+            gyro_val = _extract_threshold(cond, "gyro_mag_peak_dps")
+            if gyro_val is not None:
+                self._gyro_dps = gyro_val
+            posture_val = _extract_threshold(cond, "posture_change_angle_deg")
+            if posture_val is not None:
+                self._soft_posture_deg = posture_val
+            low_motion_val = _extract_threshold(
+                cond, "post_impact_low_motion_duration_s"
+            )
+            if low_motion_val is not None:
+                self._soft_low_motion_s = low_motion_val
+            soft_accel_val = _extract_threshold(cond, "accel_mag_peak_g")
+            if soft_accel_val is not None and soft_accel_val < self._hard_accel_g:
+                # Only treat it as the SOFT threshold when distinct from
+                # hard. Avoids overwriting if the same condition string
+                # was reused for both severity buckets.
+                self._soft_accel_g = soft_accel_val
 
     # ------------------------------------------------------------------
     # Public API
