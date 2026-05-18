@@ -91,6 +91,7 @@ try:
     # as a diagnostic utility until S18 cleanup.
     from Iot_Simulator.simulator_core.fall_ai_client import (
         FALL_VARIANT_CONTEXT,
+        FALL_VARIANT_DEFAULT_CONTEXT,
         motion_window_to_samples as _motion_window_to_samples,
     )
     from Iot_Simulator.pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient
@@ -160,6 +161,7 @@ except ModuleNotFoundError:
     # ADR-019 Phase 7 S9: see Iot_Simulator-prefixed import block above.
     from simulator_core.fall_ai_client import (  # noqa: F811
         FALL_VARIANT_CONTEXT,
+        FALL_VARIANT_DEFAULT_CONTEXT,
         motion_window_to_samples as _motion_window_to_samples,  # noqa: F811
     )
     from pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient  # noqa: F811
@@ -426,11 +428,26 @@ def _normalise_imu_window_response(
     # model-api flag: critical band + high probability.
     high_priority_alert = (risk_band == "critical") and (probability >= 0.8 or predicted_fall)
 
+    # P0-4 (2026-05-18): propagate BE-side IDs so a follow-up
+    # /telemetry/alert can dedup against the existing FallEvent row
+    # instead of inserting a duplicate.
+    raw_fall_event_id = response.get("fall_event_id")
+    fall_event_id: int | None = None
+    if isinstance(raw_fall_event_id, int):
+        fall_event_id = raw_fall_event_id
+    elif isinstance(raw_fall_event_id, str) and raw_fall_event_id.strip().isdigit():
+        fall_event_id = int(raw_fall_event_id.strip())
+
+    raw_request_id = response.get("model_request_id")
+    model_request_id: str | None = None
+    if isinstance(raw_request_id, str) and raw_request_id.strip():
+        model_request_id = raw_request_id.strip()
+
     explanation = _build_synthetic_fall_explanation(
         risk_band=risk_band,
         probability=probability,
         predicted_fall=predicted_fall,
-        model_request_id=response.get("model_request_id"),
+        model_request_id=model_request_id,
     )
     return AIPrediction(
         label=label,  # type: ignore[arg-type]
@@ -446,6 +463,8 @@ def _normalise_imu_window_response(
         topFeatures=[],
         predictedAt=predicted_at,
         modelStatus="ok",
+        fallEventId=fall_event_id,
+        modelRequestId=model_request_id,
     )
 
 
@@ -1982,7 +2001,7 @@ class SimulatorRuntime:
                 modelStatus="skipped",
             )
 
-        fall_context = FALL_VARIANT_CONTEXT.get(fe_variant, {"inject_environment": True})
+        fall_context = FALL_VARIANT_CONTEXT.get(fe_variant, FALL_VARIANT_DEFAULT_CONTEXT)
         samples = _motion_window_to_samples(motion, fall_context=fall_context)
         if len(samples) < 50:
             return AIPrediction(
@@ -2262,6 +2281,19 @@ class SimulatorRuntime:
                                     "confidence": f"{confidence_value:.4f}",
                                     "simulated_confidence": (
                                         f"{policy.simulated_confidence:.4f}"
+                                    ),
+                                    # P0-4: forward BE-side IDs so /telemetry/alert
+                                    # dedups against the row /imu-window already
+                                    # persisted instead of inserting a duplicate.
+                                    **(
+                                        {"fall_event_id": str(ai_verdict.fallEventId)}
+                                        if ai_verdict and ai_verdict.fallEventId is not None
+                                        else {}
+                                    ),
+                                    **(
+                                        {"model_request_id": ai_verdict.modelRequestId}
+                                        if ai_verdict and ai_verdict.modelRequestId
+                                        else {}
                                     ),
                                 },
                             )

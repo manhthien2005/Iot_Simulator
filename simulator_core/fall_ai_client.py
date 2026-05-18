@@ -79,6 +79,7 @@ LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 FALL_VARIANT_CONTEXT: dict[str, dict] = {
+    # Numeric internal variants (legacy fall scenarios)
     "fall_1":           {"inject_environment": True},
     "fall_2":           {"inject_environment": True},
     "fall_3":           {"inject_environment": True},
@@ -87,9 +88,27 @@ FALL_VARIANT_CONTEXT: dict[str, dict] = {
     "fall_6":           {"inject_environment": True},
     "fall_7":           {"inject_environment": True},
     "fall_8":           {"inject_environment": True},
-    "fall_no_response": {"inject_environment": True},
+    # FE-injectable variants (Module FA Fall Lab redesign)
+    # P0-3 (2026-05-18): added so the simulator runtime injects environment
+    # signals (or NOT, for false-alarm cases) consistent with each variant's
+    # clinical intent. Previously these variants fell through to the default
+    # fallback ``{"inject_environment": True}`` which made even ``false_fall``
+    # / ``slip_recovery`` smell like a real impact, biasing the AI toward a
+    # false positive.
+    "false_fall":       {"inject_environment": False},
+    "slip_recovery":    {"inject_environment": False},
     "fall_brief":       {"inject_environment": False},
+    "fall_from_bed":    {"inject_environment": True},
+    "confirmed":        {"inject_environment": True},
+    "fall_no_response": {"inject_environment": True},
 }
+
+#: P0-3: fail-safe default for unknown variants. We previously defaulted to
+#: ``inject_environment=True`` which caused unknown variants to look like
+#: real falls; defaulting to ``False`` keeps unknown injects honest — if the
+#: window genuinely had floor contact the accelerometer signal speaks for
+#: itself, no need to fabricate environment cues.
+FALL_VARIANT_DEFAULT_CONTEXT: dict = {"inject_environment": False}
 
 #: How many samples the model-api requires. Mirrors
 #: ``healthguard-model-api/app/config.py::fall_min_sequence_samples``.
@@ -117,15 +136,22 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _derive_orientation(ax: float, ay: float, az: float) -> tuple[float, float, float]:
-    """Approximate ``(pitch, roll, yaw)`` from the gravity-vector projection.
+    """Approximate ``(pitch, roll, yaw)`` in DEGREES from the gravity vector.
 
     The simulator's IMU has no magnetometer so yaw stays at ``0.0``.
-    Pitch / roll come from the accelerometer's apparent gravity direction
-    — same formulae as ``pre_model_trigger.motion_window_buffer``.
+    Pitch / roll come from the accelerometer's apparent gravity direction.
+
+    P0-2 (2026-05-18): the values returned MUST be in degrees because the
+    model-api ``OrientationData`` schema declares ``pitch/roll: ge=-180,
+    le=180`` and the training distribution was extracted with degree-scale
+    features. ``math.atan2`` returns radians (~-π..π) which validate
+    successfully against the schema bound (3.14 < 180) but compress the
+    feature scale ~57x, biasing ``orientation_dispersion`` toward zero
+    and dragging fall probabilities down systematically.
     """
-    pitch = math.atan2(-ax, math.sqrt(ay * ay + az * az))
-    roll = math.atan2(ay, az)
-    return pitch, roll, 0.0
+    pitch_rad = math.atan2(-ax, math.sqrt(ay * ay + az * az))
+    roll_rad = math.atan2(ay, az)
+    return math.degrees(pitch_rad), math.degrees(roll_rad), 0.0
 
 
 def _derive_env_from_accel_peak(

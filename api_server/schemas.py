@@ -275,6 +275,12 @@ class AIPrediction(BaseModel):
     topFeatures: list[AITopFeature] = Field(default_factory=list)
     predictedAt: str
     modelStatus: Literal["ok", "offline", "no_window", "skipped"] = "ok"
+    # P0-4 (2026-05-18): propagate the BE-side IDs so the simulator can
+    # later POST /telemetry/alert with metadata.fall_event_id and the BE
+    # UPDATEs the existing FallEvent row instead of creating a duplicate.
+    # Both NULL until the model returns and persists a row.
+    fallEventId: int | None = None
+    modelRequestId: str | None = None
 
 
 class MotionWindowRef(BaseModel):
