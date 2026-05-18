@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from threading import Event, RLock, Thread
+from threading import Event, Lock, RLock, Thread
 from time import monotonic
 from typing import Any
 from urllib.request import Request, urlopen
@@ -792,6 +792,13 @@ class SimulatorRuntime:
         self.risk_history: dict[str, list[RiskHistoryPoint]] = {}
         self.logs = LogHub()
         self._lock = RLock()
+        # ADR-024 Phase 7 S14: flow event channel for the sequence diagram.
+        # Keyed by session_id; each subscriber holds an asyncio.Queue that
+        # the WS handler drains.  Threading.Lock (not asyncio.Lock) because
+        # subscribe/unsubscribe may be called from the async WS task while
+        # publish_flow_event is called from the sync tick thread.
+        self._flow_subscribers: dict[str, list[asyncio.Queue]] = {}
+        self._flow_lock = Lock()
         # ``push_interval`` now sourced from the persistence layer; the env
         # var is kept in sync for downstream readers (Module F.1).
         self._push_interval = max(1, int(self._runtime_persistence.values.push_interval_seconds))
@@ -1174,6 +1181,42 @@ class SimulatorRuntime:
             session = self.sessions.get(session_id)
             return session.last_tick_at if session is not None else None
 
+    # ── ADR-024 Phase 7 S14: Flow event WebSocket channel ────────────────
+
+    def subscribe_flow_events(self, session_id: str) -> asyncio.Queue:
+        """Register a new subscriber queue for *session_id* and return it."""
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        with self._flow_lock:
+            self._flow_subscribers.setdefault(session_id, []).append(queue)
+        return queue
+
+    def unsubscribe_flow_events(self, session_id: str, queue: asyncio.Queue) -> None:
+        """Remove *queue* from the subscriber list for *session_id*."""
+        with self._flow_lock:
+            subs = self._flow_subscribers.get(session_id, [])
+            self._flow_subscribers[session_id] = [q for q in subs if q is not queue]
+
+    def publish_flow_event(self, session_id: str, event: dict) -> None:
+        """Emit a flow event to all active subscribers for *session_id*.
+
+        Called synchronously from tick/alert handlers.  Subscribers that
+        are slow consumers have their queue silently dropped when full
+        (maxsize=100 ≈ 500 s buffer at peak 5/s) — flow events are
+        best-effort diagnostic data, not critical path.
+        """
+        event.setdefault("ts", _utc_now_iso())
+        event.setdefault("session_id", session_id)
+        with self._flow_lock:
+            queues = list(self._flow_subscribers.get(session_id, []))
+        for q in queues:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.debug(
+                    "Flow event queue full for session=%s step=%s — dropping",
+                    session_id, event.get("step"),
+                )
+
     # ── Alert push — delegated to AlertService (Task 3.5) ────────────────
 
     def _push_alert_to_backend(
@@ -1190,6 +1233,15 @@ class SimulatorRuntime:
             self.alert_service._push_alert_to_backend,
             sim_device_id, event_type, severity, metadata,
         )
+        # ADR-024 S14: emit alert_push flow event for all running sessions.
+        for sid, s in self.sessions.items():
+            if s.status == "running":
+                self.publish_flow_event(sid, {
+                    "step": "alert_push",
+                    "device_id": sim_device_id,
+                    "status": "running",
+                    "payload": {"event_type": event_type, "severity": severity},
+                })
 
     def _update_device_heartbeat(self, db_device_id: int, battery_level: int) -> None:
         try:
@@ -1437,6 +1489,21 @@ class SimulatorRuntime:
                 del self._tick_buffer[: pending_publish.clear_count]
                 self._last_push_time = monotonic()
                 self._refresh_pending_sync_flags()
+
+        # ADR-024 S14: emit vitals_ingest flow event for every running session.
+        running_session_ids = [
+            sid for sid, s in self.sessions.items() if s.status == "running"
+        ]
+        for sid in running_session_ids:
+            self.publish_flow_event(sid, {
+                "step": "vitals_ingest",
+                "status": "done" if publish_ok else "error",
+                "payload": {
+                    "ack_count": ack_count,
+                    "message_count": message_count,
+                    "latency_ms": publish_latency_ms,
+                },
+            })
 
     @staticmethod
     def _local_database_healthy() -> bool:
@@ -2114,6 +2181,17 @@ class SimulatorRuntime:
                         canonical_fall_event.metadata["ai_status"] = (
                             ai_verdict.modelStatus
                         )
+                    # ADR-024 S14: emit imu_predict flow event.
+                    self.publish_flow_event(record.id, {
+                        "step": "imu_predict",
+                        "device_id": device_id,
+                        "status": "done" if ai_verdict.modelStatus == "ok" else "error",
+                        "payload": {
+                            "label": ai_verdict.label,
+                            "confidence": round(ai_verdict.confidence, 3),
+                            "model_status": ai_verdict.modelStatus,
+                        },
+                    })
 
                 # ---- Non-fall event recording (single source of truth) ----
                 if event_type != "fall_detected":
@@ -2409,7 +2487,17 @@ class SimulatorRuntime:
         return self.sleep_service.sleep_session(device_id)
 
     def push_sleep_session(self, device_id: str) -> SleepSessionResponse:
-        return self.sleep_service.push_sleep_session(device_id)
+        result = self.sleep_service.push_sleep_session(device_id)
+        # ADR-024 S14: emit sleep_predict flow event for all running sessions.
+        for sid, s in self.sessions.items():
+            if s.status == "running":
+                self.publish_flow_event(sid, {
+                    "step": "sleep_predict",
+                    "device_id": device_id,
+                    "status": "done",
+                    "payload": {"score": getattr(result, "score", None)},
+                })
+        return result
 
     def push_sleep_session_for_date(
         self,
