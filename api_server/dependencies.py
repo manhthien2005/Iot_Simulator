@@ -2157,6 +2157,58 @@ class SimulatorRuntime:
             except (TypeError, ValueError):
                 return None
 
+        # Phase 3 fix — derive window-level peaks ourselves so the
+        # evaluator does not fall back to the LAST-sample magnitude.
+        # Accel raw values are in m/s²; convert to g to match the
+        # 3.0g / 2.5g thresholds on `FallPreTrigger`.  Gyro is already
+        # in dps so passes through unchanged.
+        #
+        # Without this fix, when the source motion window does not carry
+        # an `accel_mag_peak_g` metadata key, the evaluator computed
+        # sqrt(x²+y²+z²) of the LAST sample (~22 m/s² typical) and
+        # compared to 3.0g — falsely tripping the HARD trigger for every
+        # variant.
+        _G_TO_MS2 = 9.80665
+
+        def _peak_g_from_arrays(ax: list[Any], ay: list[Any], az: list[Any]) -> float | None:
+            n = min(len(ax), len(ay), len(az))
+            if n == 0:
+                return None
+            peak_ms2 = 0.0
+            for i in range(n):
+                try:
+                    x = float(ax[i]); y = float(ay[i]); z = float(az[i])
+                except (TypeError, ValueError):
+                    continue
+                mag = math.sqrt(x * x + y * y + z * z)
+                if mag > peak_ms2:
+                    peak_ms2 = mag
+            return peak_ms2 / _G_TO_MS2 if peak_ms2 > 0 else 0.0
+
+        def _peak_dps_from_arrays(gx: list[Any], gy: list[Any], gz: list[Any]) -> float | None:
+            n = min(len(gx), len(gy), len(gz))
+            if n == 0:
+                return None
+            peak = 0.0
+            for i in range(n):
+                try:
+                    x = float(gx[i]); y = float(gy[i]); z = float(gz[i])
+                except (TypeError, ValueError):
+                    continue
+                mag = math.sqrt(x * x + y * y + z * z)
+                if mag > peak:
+                    peak = mag
+            return peak
+
+        # Prefer metadata when present (some parquet windows already carry
+        # the correctly-scaled peak), else compute from arrays.
+        accel_peak_g = motion.get("accel_mag_peak_g")
+        if accel_peak_g is None:
+            accel_peak_g = _peak_g_from_arrays(ax_arr, ay_arr, az_arr)
+        gyro_peak_dps = motion.get("gyro_mag_peak_dps")
+        if gyro_peak_dps is None:
+            gyro_peak_dps = _peak_dps_from_arrays(gx_arr, gy_arr, gz_arr)
+
         sample = {
             "accel": {
                 "x": _last(ax_arr) or 0.0,
@@ -2168,8 +2220,8 @@ class SimulatorRuntime:
                 "y": _last(gy_arr) or 0.0,
                 "z": _last(gz_arr) or 0.0,
             },
-            "accel_mag_peak_g": motion.get("accel_mag_peak_g"),
-            "gyro_mag_peak_dps": motion.get("gyro_mag_peak_dps"),
+            "accel_mag_peak_g": accel_peak_g,
+            "gyro_mag_peak_dps": gyro_peak_dps,
             "posture_change_angle_deg": motion.get("posture_change_angle_deg"),
             "post_impact_low_motion_duration_s": motion.get(
                 "post_impact_low_motion_duration_s"
