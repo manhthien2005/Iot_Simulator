@@ -60,12 +60,24 @@ SLEEP_PHASE_VITALS: dict[str, dict[str, float]] = {
 # ---------------------------------------------------------------------------
 
 _FE_VARIANT_MOTION_CONFIG: dict[str, dict[str, Any]] = {
+    # peak_g_range — target accel-magnitude peak (g) the window is scaled to.
+    # posture_deg_range — target posture_change_angle_deg metadata to inject.
+    #   Only set when the soft-trigger evaluator should see it (≥45° for soft).
+    # low_motion_s_range — target post_impact_low_motion_duration_s metadata.
+    #   Only set when the soft trigger should also see low-motion ≥1.0s.
     "false_fall":       {"source_activity": "walking", "peak_g_range": (1.2, 1.8)},
     "slip_recovery":    {"source_activity": "walking", "peak_g_range": (1.5, 2.3)},
-    "fall_brief":       {"source_activity": "fall",    "peak_g_range": (2.5, 2.95)},
-    "fall_from_bed":    {"source_activity": "fall",    "peak_g_range": (2.6, 3.4)},
-    "confirmed":        {"source_activity": "fall",    "peak_g_range": (3.5, 4.5)},
-    "fall_no_response": {"source_activity": "fall",    "peak_g_range": (3.8, 5.0)},
+    "fall_brief":       {"source_activity": "fall",    "peak_g_range": (2.5, 2.95),
+                         "posture_deg_range": (45, 55)},
+    "fall_from_bed":    {"source_activity": "fall",    "peak_g_range": (2.6, 2.95),
+                         "posture_deg_range": (50, 70),
+                         "low_motion_s_range": (1.0, 1.8)},
+    "confirmed":        {"source_activity": "fall",    "peak_g_range": (5.0, 7.0),
+                         "posture_deg_range": (60, 85),
+                         "low_motion_s_range": (1.5, 2.5)},
+    "fall_no_response": {"source_activity": "fall",    "peak_g_range": (6.0, 9.0),
+                         "posture_deg_range": (70, 90),
+                         "low_motion_s_range": (2.0, 3.0)},
 }
 
 _G_TO_MS2: float = 9.80665
@@ -288,7 +300,25 @@ class MotionGenerator:
         window = deepcopy(windows[self._rng.randrange(len(windows))])
         target_min, target_max = config["peak_g_range"]
         target_peak_g = self._rng.uniform(float(target_min), float(target_max))
-        return self._scale_window_to_peak_g(window, target_peak_g)
+        window = self._scale_window_to_peak_g(window, target_peak_g)
+        # Phase 3 — inject posture / low-motion metadata so the BE
+        # pre-trigger evaluator can fire the SOFT trigger paths
+        # (IMPACT_PLUS_POSTURE_CHANGE / IMPACT_PLUS_LOW_MOTION) for the
+        # warning-band variants.  Without this metadata the dataset
+        # windows pulled from the `fall` activity bucket carry only the
+        # accel/gyro arrays and pre-trigger sees `posture=None`,
+        # `low_motion=None` -> only HARD can fire.
+        posture_range = config.get("posture_deg_range")
+        if posture_range is not None:
+            window["posture_change_angle_deg"] = round(
+                self._rng.uniform(float(posture_range[0]), float(posture_range[1])), 1
+            )
+        low_motion_range = config.get("low_motion_s_range")
+        if low_motion_range is not None:
+            window["post_impact_low_motion_duration_s"] = round(
+                self._rng.uniform(float(low_motion_range[0]), float(low_motion_range[1])), 2
+            )
+        return window
 
     @staticmethod
     def _scale_window_to_peak_g(window: dict[str, Any], target_peak_g: float) -> dict[str, Any]:

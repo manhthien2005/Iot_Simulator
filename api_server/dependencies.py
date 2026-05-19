@@ -308,11 +308,20 @@ _FALL_VARIANT_DEFAULT_POLICY: _FallVariantPolicy = _FALL_VARIANT_POLICIES["confi
 # vitals/motion deltas.  This indirection keeps the FE labels operator-
 # friendly while preserving dataset compatibility.
 _FALL_VARIANT_TO_PERSONA: dict[str, str] = {
-    "false_fall": "fall_brief",          # use brief-fall vitals (mild) but no countdown
-    "slip_recovery": "fall_brief",       # similar non-impact profile
+    # Phase 3 — identity mapping so the FE variant string flows through
+    # PersonaEngine + MotionGenerator unchanged.  MotionGenerator now
+    # uses `_FE_VARIANT_MOTION_CONFIG[fe_variant]` to pick the correct
+    # source activity + scaled peak; flattening the persona alias here
+    # keeps that lookup keyed on the FE variant.
+    #
+    # Vitals generation does not branch on fall_variant (only
+    # activity_state == "fall"), so we don't lose any vitals deltas by
+    # dropping the legacy `fall_1` / `fall_no_response` aliases.
+    "false_fall": "false_fall",
+    "slip_recovery": "slip_recovery",
     "fall_brief": "fall_brief",
-    "fall_from_bed": "fall_no_response", # sleeping persona + bradycardia profile
-    "confirmed": "fall_1",
+    "fall_from_bed": "fall_from_bed",
+    "confirmed": "confirmed",
     "fall_no_response": "fall_no_response",
 }
 
