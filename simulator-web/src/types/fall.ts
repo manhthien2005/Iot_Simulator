@@ -105,6 +105,27 @@ export interface CountdownPolicy {
   allowsCancel: boolean;
 }
 
+/** Pre-trigger evidence captured at inject_event time (Module FA Phase 2).
+ *
+ * Mirrors `api_server.schemas.PreTriggerEvidence` and is populated by
+ * `simulator_core.dependencies.SimulatorRuntime._compute_pre_trigger_evidence`
+ * using `pre_model_trigger.fall_pre_trigger.FallPreTrigger.evaluate_with_evidence`.
+ *
+ * The FE Fall Lab pipeline strip (Section B stage 2) prefers this BE-truth
+ * data over its FE-derived peak-vs-threshold view; falls back to FE derive
+ * when `preTriggerResult` is `null` (legacy responses or pre-trigger
+ * orchestrator init failure).
+ */
+export interface PreTriggerEvidence {
+  fired: boolean;
+  triggerType: "hard" | "soft" | "none";
+  reasonCodes: string[];
+  accelPeakG: number | null;
+  postureAngleDeg: number | null;
+  lowMotionSec: number | null;
+  gyroPeakDps: number | null;
+}
+
 // ---- Aggregate fall state -------------------------------------------------
 
 export interface FallState {
@@ -126,6 +147,10 @@ export interface FallState {
   motionWindowRef: MotionWindowRef | null;
   /** Module FA — variant-specific countdown policy. */
   countdownPolicy: CountdownPolicy | null;
+  /** Module FA Phase 2 — pre-trigger evaluation evidence captured at
+   *  inject_event time.  ``null`` for legacy responses or when the
+   *  pre-trigger orchestrator failed to initialize at startup. */
+  preTriggerResult: PreTriggerEvidence | null;
 }
 
 // ---- Variant catalogue (FE source of truth for the operator picker) ------
