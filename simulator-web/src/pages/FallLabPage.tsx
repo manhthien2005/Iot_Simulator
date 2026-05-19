@@ -14,7 +14,6 @@ import { useSessions } from "../hooks/useSessions";
 import { useFallState } from "../hooks/useFallState";
 import { useLatestMotion } from "../hooks/useLatestMotion";
 import { useRecentEvents } from "../hooks/useRecentEvents";
-import { useConfirm } from "../hooks/useConfirm";
 import { injectFallEvent, injectSosCancel } from "../services/eventApi";
 import { useSessionStore } from "../stores/sessionStore";
 import { runWithToast } from "../utils/toast";
@@ -107,7 +106,6 @@ export function FallLabPage() {
   const [pendingVariant, setPendingVariant] = useState<FallVariantId | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [hoveredVariant, setHoveredVariant] = useState<FallVariantId | null>(null);
-  const [confirm, confirmDialog] = useConfirm();
 
   const guardDisabled =
     !activeSession
@@ -118,19 +116,12 @@ export function FallLabPage() {
 
   async function handleInjectVariant(variant: FallVariantSpec) {
     if (guardDisabled) return;
-    if (variant.severity === "critical") {
-      const ok = await confirm({
-        severity: "critical",
-        title: `Mô phỏng "${variant.label}"?`,
-        description:
-          `${variant.description}\n\n` +
-          `Countdown: ${variant.countdownSec}s · ` +
-          `Đẩy alert: ${variant.pushesAlert ? "có" : "không"} · ` +
-          `Cho phép huỷ: ${variant.allowsCancel ? "có" : "không"}.`,
-        confirmLabel: `Inject ${variant.label}`,
-      });
-      if (!ok) return;
-    }
+    // Note: pre-inject confirm dialog deliberately removed for variant `critical`
+    // — production mobile flow has no confirm step, so a 1-3s operator-side
+    // pause inflates end-to-end latency measurements.  Operators get a clear
+    // toast (loading / success / error) and can rely on the SOS countdown +
+    // "Tôi ổn" cancel button to abort an injected fall.  The cancel path is
+    // kept because the production mobile UI also has it (parity preserved).
     setPendingVariant(variant.id);
     try {
       await runWithToast(injectFallEvent(focusDeviceId, variant.id), {
@@ -222,8 +213,6 @@ export function FallLabPage() {
       <MotionWindowCard motion={motion ?? null} fallState={fallState ?? null} />
 
       <RecentEventsCard events={recentEvents} />
-
-      {confirmDialog}
     </section>
   );
 }
