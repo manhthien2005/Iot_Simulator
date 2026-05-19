@@ -286,4 +286,123 @@ class FallPreTrigger:
         return actions
 
 
+    def evaluate_with_evidence(self, motion: dict[str, Any] | None) -> dict[str, Any]:
+        """Evaluate motion + return structured evidence for the Fall Lab UI.
+
+        Companion to :meth:`evaluate` that returns the actual numeric
+        signals + reason codes the operator sees in the AI Pipeline strip
+        (Section B), instead of just the abstract ``TriggerActionItem``
+        list the orchestrator routes on.
+
+        Output shape mirrors ``api_server.schemas.PreTriggerEvidence``:
+
+        ::
+
+            {
+                "fired": bool,
+                "triggerType": "hard" | "soft" | "none",
+                "reasonCodes": list[str],
+                "accelPeakG": float | None,
+                "postureAngleDeg": float | None,
+                "lowMotionSec": float | None,
+                "gyroPeakDps": float | None,
+            }
+
+        We re-implement the matching logic here (rather than running
+        :meth:`evaluate` and post-parsing the metadata strings) so the
+        numeric values flow through unrounded — and so a future change
+        to the public ``evaluate`` API does not silently change the
+        evidence shape consumed by the FE.
+        """
+        if not motion:
+            return {
+                "fired": False, "triggerType": "none", "reasonCodes": [],
+                "accelPeakG": None, "postureAngleDeg": None,
+                "lowMotionSec": None, "gyroPeakDps": None,
+            }
+
+        accel = motion.get("accel") or {}
+        gyro = motion.get("gyro") or {}
+        accel_mag = _compute_accel_magnitude(accel)
+        gyro_mag = _compute_gyro_magnitude(gyro)
+        posture_angle = _safe_float(motion.get("posture_change_angle_deg"))
+        low_motion_dur = _safe_float(motion.get("post_impact_low_motion_duration_s"))
+        accel_peak = _safe_float(motion.get("accel_mag_peak_g")) or accel_mag
+        gyro_peak = _safe_float(motion.get("gyro_mag_peak_dps")) or gyro_mag
+
+        # Hard trigger: high impact peak (mirrors :meth:`evaluate` line 197).
+        if accel_peak is not None and accel_peak >= self._hard_accel_g:
+            return {
+                "fired": True,
+                "triggerType": "hard",
+                "reasonCodes": ["IMPACT_PEAK_3G"],
+                "accelPeakG": float(accel_peak),
+                "postureAngleDeg": float(posture_angle) if posture_angle is not None else None,
+                "lowMotionSec": float(low_motion_dur) if low_motion_dur is not None else None,
+                "gyroPeakDps": float(gyro_peak) if gyro_peak is not None else None,
+            }
+
+        # Soft trigger: impact + posture change.
+        if (
+            accel_peak is not None
+            and accel_peak >= self._soft_accel_g
+            and posture_angle is not None
+            and posture_angle >= self._soft_posture_deg
+        ):
+            return {
+                "fired": True,
+                "triggerType": "soft",
+                "reasonCodes": ["IMPACT_PLUS_POSTURE_CHANGE"],
+                "accelPeakG": float(accel_peak),
+                "postureAngleDeg": float(posture_angle),
+                "lowMotionSec": float(low_motion_dur) if low_motion_dur is not None else None,
+                "gyroPeakDps": float(gyro_peak) if gyro_peak is not None else None,
+            }
+
+        # Soft trigger: impact + post-impact low motion.
+        if (
+            accel_peak is not None
+            and accel_peak >= self._soft_accel_g
+            and low_motion_dur is not None
+            and low_motion_dur >= self._soft_low_motion_s
+        ):
+            return {
+                "fired": True,
+                "triggerType": "soft",
+                "reasonCodes": ["IMPACT_PLUS_LOW_MOTION"],
+                "accelPeakG": float(accel_peak),
+                "postureAngleDeg": float(posture_angle) if posture_angle is not None else None,
+                "lowMotionSec": float(low_motion_dur),
+                "gyroPeakDps": float(gyro_peak) if gyro_peak is not None else None,
+            }
+
+        # Soft trigger: gyro + posture change.
+        if (
+            gyro_peak is not None
+            and gyro_peak >= self._gyro_dps
+            and posture_angle is not None
+            and posture_angle >= self._soft_posture_deg
+        ):
+            return {
+                "fired": True,
+                "triggerType": "soft",
+                "reasonCodes": ["GYRO_PLUS_POSTURE_CHANGE"],
+                "accelPeakG": float(accel_peak) if accel_peak is not None else None,
+                "postureAngleDeg": float(posture_angle),
+                "lowMotionSec": float(low_motion_dur) if low_motion_dur is not None else None,
+                "gyroPeakDps": float(gyro_peak),
+            }
+
+        # No trigger fired — return all observed values for diagnostics.
+        return {
+            "fired": False,
+            "triggerType": "none",
+            "reasonCodes": [],
+            "accelPeakG": float(accel_peak) if accel_peak is not None else None,
+            "postureAngleDeg": float(posture_angle) if posture_angle is not None else None,
+            "lowMotionSec": float(low_motion_dur) if low_motion_dur is not None else None,
+            "gyroPeakDps": float(gyro_peak) if gyro_peak is not None else None,
+        }
+
+
 __all__ = ["FallPreTrigger"]
