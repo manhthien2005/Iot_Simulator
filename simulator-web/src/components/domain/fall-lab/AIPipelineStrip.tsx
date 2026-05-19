@@ -2,7 +2,8 @@ import type { CSSProperties, ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Clock, MinusCircle, XCircle } from "lucide-react";
 import { Badge } from "../../ui/Badge";
 import { Card } from "../../ui/Card";
-import type { FallState, FallVariantSpec } from "../../../types/fall";
+import { InfoTooltip } from "./InfoTooltip";
+import type { FallState, FallVariantSpec, PreTriggerEvidence } from "../../../types/fall";
 
 // ---------------------------------------------------------------------------
 // AIPipelineStrip — Module FA Phase 1, Section B of the Fall Lab.
@@ -61,10 +62,10 @@ export function AIPipelineStrip({
       }
     >
       <div style={stripStyle}>
-        <Stage num={1} title="Motion window 50 mẫu" data={window} />
-        <Stage num={2} title="Pre-trigger evaluate" data={preTrigger} />
-        <Stage num={3} title="Model API /predict" data={modelApi} />
-        <Stage num={4} title="Verdict + countdown" data={verdict} />
+        <Stage num={1} title="Motion window 50 mẫu" tooltipKey="pipelineStage1" data={window} />
+        <Stage num={2} title="Pre-trigger evaluate" tooltipKey="pipelineStage2" data={preTrigger} />
+        <Stage num={3} title="Model API /predict" tooltipKey="pipelineStage3" data={modelApi} />
+        <Stage num={4} title="Verdict + countdown" tooltipKey="pipelineStage4" data={verdict} />
       </div>
     </Card>
   );
@@ -81,13 +82,21 @@ interface StageData {
   rows: { label: string; value: ReactNode }[];
 }
 
-function Stage({ num, title, data }: { num: number; title: string; data: StageData }) {
+function Stage({ num, title, data, tooltipKey }: {
+  num: number;
+  title: string;
+  data: StageData;
+  tooltipKey?: import("./fallLabTooltips").FallLabTooltipKey;
+}) {
   return (
     <div style={{ ...stageStyle, ...stageBgStyle(data.status) }}>
       <div style={stageHeadStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={stageNumStyle}>{num}</span>
-          <span style={{ fontSize: "13px", fontWeight: 600 }}>{title}</span>
+          <span style={{ fontSize: "13px", fontWeight: 600 }}>
+            {title}
+            {tooltipKey ? <InfoTooltip k={tooltipKey} /> : null}
+          </span>
         </div>
         <StatusIcon status={data.status} />
       </div>

@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { CheckCircle2, Circle, XCircle } from "lucide-react";
 import { Badge } from "../../ui/Badge";
 import { Card } from "../../ui/Card";
+import { InfoTooltip } from "./InfoTooltip";
 import {
   FALL_VARIANT_CATALOGUE,
   type FallVariantId,
@@ -69,13 +70,13 @@ export function ScenarioMatrixCard({
             <tr>
               <th style={thStyle}>Kịch bản</th>
               <th style={thStyle}>Severity</th>
-              <th style={thStyle}>Peak |a|</th>
-              <th style={thStyle}>Posture</th>
-              <th style={thStyle}>Pre-trigger</th>
-              <th style={thStyle}>Inject env</th>
-              <th style={thStyle}>AI band</th>
-              <th style={thStyle}>Countdown</th>
-              <th style={thStyle}>Alert</th>
+              <th style={thStyle}>Peak |a| <InfoTooltip k="scenarioPeakG" /></th>
+              <th style={thStyle}>Posture <InfoTooltip k="scenarioPostureDeg" /></th>
+              <th style={thStyle}>Pre-trigger <InfoTooltip k="scenarioPreTrigger" /></th>
+              <th style={thStyle}>Inject env <InfoTooltip k="scenarioInjectEnv" /></th>
+              <th style={thStyle}>AI band <InfoTooltip k="scenarioAiBand" /></th>
+              <th style={thStyle}>Countdown <InfoTooltip k="scenarioCountdown" /></th>
+              <th style={thStyle}>Alert <InfoTooltip k="scenarioPushAlert" /></th>
               <th style={{ ...thStyle, textAlign: "right" }}>&nbsp;</th>
             </tr>
           </thead>

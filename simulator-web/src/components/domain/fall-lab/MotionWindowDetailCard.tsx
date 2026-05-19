@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, ChevronRight } from "lucide-react";
 import { Badge } from "../../ui/Badge";
 import { Card } from "../../ui/Card";
 import { EmptyState } from "../../ui/EmptyState";
+import { InfoTooltip } from "./InfoTooltip";
 import { describeFallVariant } from "../../../utils/motionLabels";
 import type { MotionLatest } from "../../../types/motion";
 import type { FallState } from "../../../types/fall";
@@ -102,10 +103,10 @@ export function MotionWindowDetailCard({ motion, fallState }: Props) {
           <div style={{ display: "grid", gap: "12px" }}>
 
             <div style={metaGridStyle}>
-              <MetricCell label="Đỉnh |a|" value={`${stats.peak.toFixed(2)} g`} highlight={stats.peak >= HARD_THRESHOLD_G} />
-              <MetricCell label="Trung bình |a|" value={`${stats.mean.toFixed(2)} g`} />
-              <MetricCell label="Peak ở mẫu" value={`${stats.peakIdx} / ${stats.count}`} />
-              <MetricCell label="Tần số" value={motion.sampleRate ? `${motion.sampleRate} Hz` : "—"} />
+              <MetricCell label="Đỉnh |a|" tooltipKey="motionPeak" value={`${stats.peak.toFixed(2)} g`} highlight={stats.peak >= HARD_THRESHOLD_G} />
+              <MetricCell label="Trung bình |a|" tooltipKey="motionMean" value={`${stats.mean.toFixed(2)} g`} />
+              <MetricCell label="Peak ở mẫu" tooltipKey="motionPeakIndex" value={`${stats.peakIdx} / ${stats.count}`} />
+              <MetricCell label="Tần số" tooltipKey="motionSampleRate" value={motion.sampleRate ? `${motion.sampleRate} Hz` : "—"} />
             </div>
 
             <HeroChart
@@ -144,10 +145,20 @@ export function MotionWindowDetailCard({ motion, fallState }: Props) {
 // Sub-pieces (kept inline; each <30 lines so the file stays scannable)
 // ---------------------------------------------------------------------------
 
-function MetricCell({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function MetricCell({
+  label, value, highlight, tooltipKey,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+  tooltipKey?: import("./fallLabTooltips").FallLabTooltipKey;
+}) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-      <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{label}</span>
+      <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+        {label}
+        {tooltipKey ? <InfoTooltip k={tooltipKey} /> : null}
+      </span>
       <strong style={{
         fontFamily: "var(--font-mono)",
         fontSize: "13px",
@@ -227,6 +238,7 @@ function ImpactSplit(props: {
       <div style={{ ...paneStyle, ...prePaneStyle }}>
         <h4 style={{ ...paneHeadStyle, color: "var(--severity-normal)" }}>
           Pre-impact · mẫu 0–{Math.max(props.peakIdx - 1, 0)}
+          <InfoTooltip k="motionPreImpact" />
         </h4>
         <Row label="Mean |a|" value={`${props.preMean.toFixed(2)} g`} />
         <Row label="Peak |a|" value={`${props.prePeak.toFixed(2)} g`} />
@@ -235,6 +247,7 @@ function ImpactSplit(props: {
       <div style={{ ...paneStyle, ...postPaneStyle }}>
         <h4 style={{ ...paneHeadStyle, color: "var(--severity-critical)" }}>
           Post-impact · mẫu {props.peakIdx}–{props.count - 1}
+          <InfoTooltip k="motionPostImpact" />
         </h4>
         <Row label="Mean |a|" value={`${props.postMean.toFixed(2)} g`} />
         <Row label="Std |a|" value={`${props.postStd.toFixed(2)} g`} />
