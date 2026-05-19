@@ -281,6 +281,21 @@ class AIPrediction(BaseModel):
     # Both NULL until the model returns and persists a row.
     fallEventId: int | None = None
     modelRequestId: str | None = None
+    # P2-1 (2026-05-18): structured failure reason so the FE can pick
+    # the right Vietnamese copy without parsing explanationSummary. One
+    # of: ``transport_error`` (BE unreachable / timeout),
+    # ``model_unavailable`` (BE returned status="model_unavailable"),
+    # ``validation_422`` (BE returned 422 / non-ok status),
+    # ``insufficient_samples`` (window <50), ``device_unbound`` (sim
+    # device not yet bound to BE device id), ``ok`` (success).
+    failureReason: Literal[
+        "ok",
+        "transport_error",
+        "model_unavailable",
+        "validation_422",
+        "insufficient_samples",
+        "device_unbound",
+    ] = "ok"
 
 
 class MotionWindowRef(BaseModel):
