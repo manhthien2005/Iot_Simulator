@@ -67,7 +67,6 @@ const mainLinks: NavLinkSpec[] = [
     icon: BedDouble,
     prefetch: { queryKey: ["db-devices"], queryFn: fetchDbDevices },
   },
-  { to: "/analytics", label: "Phân tích", icon: BarChart3 },
   { to: "/diagnostics", label: "Diagnostics", icon: Wrench },
   {
     to: "/verification",
