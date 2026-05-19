@@ -2125,12 +2125,25 @@ class SimulatorRuntime:
         # sample (impact tail) for accel/gyro instantaneous values and
         # forward the window-level peak/posture/low-motion metadata
         # MotionGenerator already attaches.
-        ax_arr = motion.get("accel_x") or []
-        ay_arr = motion.get("accel_y") or []
-        az_arr = motion.get("accel_z") or []
-        gx_arr = motion.get("gyro_x") or []
-        gy_arr = motion.get("gyro_y") or []
-        gz_arr = motion.get("gyro_z") or []
+        # NOTE: motion arrays are numpy ndarrays from MotionGenerator's
+        # parquet pipeline so we MUST avoid `arr or []` and `not arr`
+        # which both raise `ValueError: truth value of an array is
+        # ambiguous`.  Mirrors the same pattern in
+        # ``simulator_core.fall_ai_client.motion_window_to_samples``.
+        def _coerce(value: Any) -> list[Any]:
+            if value is None:
+                return []
+            try:
+                return list(value)
+            except TypeError:
+                return []
+
+        ax_arr = _coerce(motion.get("accel_x"))
+        ay_arr = _coerce(motion.get("accel_y"))
+        az_arr = _coerce(motion.get("accel_z"))
+        gx_arr = _coerce(motion.get("gyro_x"))
+        gy_arr = _coerce(motion.get("gyro_y"))
+        gz_arr = _coerce(motion.get("gyro_z"))
 
         def _last(arr: Any) -> float | None:
             try:
