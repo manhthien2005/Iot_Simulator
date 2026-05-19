@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Activity } from "lucide-react";
+import { Activity, Info } from "lucide-react";
 import { Card } from "../components/ui/Card";
 import { EmptyState } from "../components/ui/EmptyState";
 import { PageHeader } from "../components/ui/PageHeader";
 import { DeviceSessionBar } from "../components/domain/fall-lab/DeviceSessionBar";
-import { VariantPickerCard } from "../components/domain/fall-lab/VariantPickerCard";
+import { ScenarioMatrixCard } from "../components/domain/fall-lab/ScenarioMatrixCard";
 import { AIVerdictPanel } from "../components/domain/fall-lab/AIVerdictPanel";
-import { MotionWindowCard } from "../components/domain/fall-lab/MotionWindowCard";
-import { RecentEventsCard } from "../components/domain/fall-lab/RecentEventsCard";
+import { AIPipelineStrip } from "../components/domain/fall-lab/AIPipelineStrip";
+import { MotionWindowDetailCard } from "../components/domain/fall-lab/MotionWindowDetailCard";
+import { VitalsAfterFallCard } from "../components/domain/fall-lab/VitalsAfterFallCard";
+import { FallEventsTimelineCard } from "../components/domain/fall-lab/FallEventsTimelineCard";
+import { FailureReasonBanner } from "../components/domain/fall-lab/FailureReasonBanner";
 import { useDevices } from "../hooks/useDevices";
 import { useSessions } from "../hooks/useSessions";
 import { useFallState } from "../hooks/useFallState";
@@ -27,29 +30,21 @@ import {
 } from "../types/fall";
 
 // ---------------------------------------------------------------------------
-// FallLabPage — Module FA dedicated full-page lab.
+// FallLabPage — Module FA Phase 1 redesigned layout (6 sections).
 //
-// Replaces the cramped Fall card on `SessionRunnerPage` for operators who
-// specifically want to validate the fall AI pipeline.  Three columns:
+//   A. KỊCH BẢN          — bảng so sánh 6 variants + evidence checklist
+//   B. QUY TRÌNH AI      — 4-stage pipeline (window → pre-trigger → API → verdict)
+//   C. CỬA SỔ 50 MẪU     — accelMag với threshold lines + peak marker + sub-traces
+//   D. BIẾN THIÊN VITALS — HR/SpO2/BP/RR ±60s quanh fall, pre/post 30s baseline
+//   E. AI VERDICT        — band + probability + confidence + SHAP top 3 + countdown
+//   F. LỊCH SỬ           — events grouped by session, expand snapshot, compare 2
 //
-//   ┌──────────── Variant Picker ──────────┬───── Live AI Verdict ──────┐
-//   │  6 severity-coded buttons            │  Probability + risk band   │
-//   │  Description card for hovered/active │  Top 3 SHAP features (VI)  │
-//   │                                      │  Countdown + cancel        │
-//   └──────────────────────────────────────┴────────────────────────────┘
-//   ┌──────────────────────── Motion Window ────────────────────────────┐
-//   │  Aligned to the window the AI scored, accel-magnitude hero +      │
-//   │  collapsible 6-axis detail.                                       │
-//   └───────────────────────────────────────────────────────────────────┘
-//   ┌──────────────────── Recent Fall Events ───────────────────────────┐
-//   │  Table of the last 15 fall_detected / sos_cancel events with the  │
-//   │  AI verdict metadata captured at inject time.                     │
-//   └───────────────────────────────────────────────────────────────────┘
-//
-// All state is BE-derived: variant policy, countdown total, AI verdict,
-// motion window timestamp, and recent events.  The FE never invents the
-// countdown or guesses what the AI will say — it shows what the BE
-// reports and tints accordingly.
+// Pre-inject confirm dialog removed: production mobile flow has no confirm
+// step, so the 1-3s operator pause inflated end-to-end latency measurements
+// during research.  SOS cancel ("Tôi ổn") kept because production mobile UI
+// has the same button.  All numeric expectations come from
+// `FALL_VARIANT_CATALOGUE` which mirrors the BE pre-trigger thresholds and
+// `simulator_core.fall_ai_client.FALL_VARIANT_CONTEXT`.
 // ---------------------------------------------------------------------------
 
 export function FallLabPage() {
@@ -116,12 +111,10 @@ export function FallLabPage() {
 
   async function handleInjectVariant(variant: FallVariantSpec) {
     if (guardDisabled) return;
-    // Note: pre-inject confirm dialog deliberately removed for variant `critical`
-    // — production mobile flow has no confirm step, so a 1-3s operator-side
-    // pause inflates end-to-end latency measurements.  Operators get a clear
-    // toast (loading / success / error) and can rely on the SOS countdown +
-    // "Tôi ổn" cancel button to abort an injected fall.  The cancel path is
-    // kept because the production mobile UI also has it (parity preserved).
+    // Pre-inject confirm dialog removed deliberately — production mobile
+    // flow has no confirm step, so a 1-3s operator-side pause inflates
+    // end-to-end latency measurements during research.  Toast loading +
+    // SOS countdown + "Tôi ổn" cancel are enough.
     setPendingVariant(variant.id);
     try {
       await runWithToast(injectFallEvent(focusDeviceId, variant.id), {
@@ -156,12 +149,23 @@ export function FallLabPage() {
     (hoveredVariant && FALL_VARIANT_CATALOGUE.find((v) => v.id === hoveredVariant))
     ?? null;
 
+  // Derive motion peak |a| (used by AIPipelineStrip stage 2 — replaced by
+  // BE evidence in Phase 2 once `FallState.preTriggerResult` lands).
+  const motionPeakG = useMemo(() => {
+    if (!motion || motion.accelMag.length === 0) return null;
+    return Math.max(...motion.accelMag);
+  }, [motion]);
+
+  const noSession = !activeSession || activeSession.status !== "running";
+
   return (
     <section className="page-section">
       <PageHeader
-        title="Phòng thí nghiệm té ngã"
-        subtitle="Inject các kịch bản té ngã, theo dõi verdict của AI (healthguard-model-api) và xác minh BE escalation tương ứng. Tất cả số liệu (verdict, countdown, motion window) đều derive từ BE — FE không invent dữ liệu."
+        title="Phòng nghiên cứu té ngã"
+        subtitle="Inject các kịch bản té ngã, theo dõi quy trình AI đánh giá (pre-trigger → model API → verdict), quan sát biến thiên sinh hiệu sau té ngã và xác minh BE escalation tương ứng. Mọi số liệu đều derive từ BE — không invent dữ liệu."
       />
+
+      <LatencyDisclaimer />
 
       <DeviceSessionBar
         focusDevice={focusDevice}
@@ -178,42 +182,95 @@ export function FallLabPage() {
         }}
       />
 
-      {!activeSession || activeSession.status !== "running" ? (
+      {noSession ? (
         <Card>
           <EmptyState
             icon={Activity}
             title="Chưa có phiên đang chạy"
-            description="Bật một phiên ở tab 'Mô phỏng tín hiệu sinh tồn' và đảm bảo có thiết bị đang online để bắt đầu inject té ngã."
+            description="Bật một phiên ở tab 'Mô phỏng sinh tồn' và đảm bảo có thiết bị đang online để bắt đầu inject té ngã."
           />
         </Card>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0,1.1fr) minmax(0,1fr)",
-            gap: "14px",
-          }}
-        >
-          <VariantPickerCard
+        <>
+          <SectionLabel>A · Kịch bản té ngã</SectionLabel>
+          <ScenarioMatrixCard
             disabled={guardDisabled}
             pendingVariant={pendingVariant}
             onPick={handleInjectVariant}
             onHover={setHoveredVariant}
-            focalVariantSpec={focalVariantSpec}
+            focalVariant={focalVariantSpec}
           />
+
+          <SectionLabel>B · Quy trình AI đánh giá</SectionLabel>
+          <AIPipelineStrip
+            fallState={fallState ?? null}
+            motionPeakG={motionPeakG}
+            motionSampleCount={motion?.accelMag.length ?? null}
+            motionSampleRate={motion?.sampleRate ?? null}
+            expectedVariant={focalVariantSpec}
+          />
+
+          <SectionLabel>C · Cửa sổ chuyển động 50 mẫu</SectionLabel>
+          <MotionWindowDetailCard motion={motion ?? null} fallState={fallState ?? null} />
+
+          <SectionLabel>D · Biến thiên sinh hiệu sau té ngã</SectionLabel>
+          <VitalsAfterFallCard
+            deviceId={focusDeviceId || null}
+            lastFallEventAt={fallState?.lastFallEventAt ?? null}
+          />
+
+          <SectionLabel>E · AI verdict + countdown SOS</SectionLabel>
+          <FailureReasonBanner prediction={fallState?.aiPrediction ?? null} />
           <AIVerdictPanel
             fallState={fallState ?? null}
             disabled={guardDisabled}
             onCancel={handleCancel}
             cancelling={cancelling}
           />
-        </div>
+
+          <SectionLabel>F · Lịch sử sự kiện té ngã</SectionLabel>
+          <FallEventsTimelineCard events={recentEvents} />
+        </>
       )}
-
-      <MotionWindowCard motion={motion ?? null} fallState={fallState ?? null} />
-
-      <RecentEventsCard events={recentEvents} />
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline helpers (small, page-local only).
+// ---------------------------------------------------------------------------
+
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <div
+      style={{
+        fontSize: "11px",
+        fontWeight: 700,
+        color: "var(--text-muted)",
+        textTransform: "uppercase",
+        letterSpacing: "0.08em",
+        marginTop: "4px",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function LatencyDisclaimer() {
+  return (
+    <Card padding="sm">
+      <div style={{ display: "flex", gap: "10px", alignItems: "flex-start", borderLeft: "3px solid var(--severity-info)", paddingLeft: "10px" }}>
+        <Info size={16} style={{ color: "var(--severity-info)", flexShrink: 0, marginTop: "1px" }} />
+        <div style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.55 }}>
+          <strong style={{ color: "var(--severity-info)" }}>Lưu ý độ trễ trong giả lập:</strong>{" "}
+          Trên simulator, <code>inject_event</code> chạy đồng bộ tới Model API (port 8001) và trả verdict trong <strong>~50–200ms</strong>.
+          Trên mobile thực, độ trễ end-to-end là <strong>1–3s</strong> (MQTT → BE buffer → model API → push notif).
+          Pre-inject confirm dialog đã được loại bỏ (gây delay không tồn tại trong production flow).
+          Hủy SOS bằng nút "Tôi ổn" giữ nguyên — vì mobile production cũng có nút này.
+        </div>
+      </div>
+    </Card>
   );
 }
 
