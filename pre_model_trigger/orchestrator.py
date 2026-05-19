@@ -14,7 +14,11 @@ from typing import Any, Sequence
 
 from pre_model_trigger.fall_pre_trigger import FallPreTrigger
 from pre_model_trigger.healthguard_client import HealthGuardAPIClient
-from pre_model_trigger.normalization import normalize_vitals_for_rules, validate_data_quality
+from pre_model_trigger.normalization import (
+    available_metrics,
+    normalize_vitals_for_rules,
+    validate_data_quality,
+)
 from pre_model_trigger.response_handler import ResponseHandler
 from pre_model_trigger.rule_engine import RuleEngine
 from pre_model_trigger.settings_provider import SystemSettingsProvider
@@ -101,13 +105,21 @@ class TriggerOrchestrator:
         # Step 0 — normalize field names and compute derived metrics (Fix #1 #2)
         normalized_vitals = normalize_vitals_for_rules(vitals)
 
-        # Step 0b — data quality gate (Fix #3)
+        # Step 0b — data quality gate (Fix #3, P0-5 relaxed 2026-05-18).
+        # ``validate_data_quality`` now flips ``is_valid`` only on FATAL
+        # issues: missing both critical fields (HR + SpO2), non-numeric
+        # values, sensor_error_flag, or signal-quality below threshold.
+        # Soft-field absences (BP/temp/RR) are reported in errors but
+        # ``is_valid`` stays True, and the rule engine skips per-metric
+        # via :func:`available_metrics` instead of dropping every rule.
         _dq_ok, _dq_errors = validate_data_quality(normalized_vitals)
+        present_metrics = available_metrics(normalized_vitals)
         if not _dq_ok:
             logger.warning(
-                "Data quality gate SUPPRESSED all vitals rules for device=%s errors=%s "
-                "(drop_or_hold_if_invalid=true). URGENT rules also skipped — review "
-                "if this device may have a real clinical event.",
+                "Data quality gate SUPPRESSED vitals rules for device=%s errors=%s "
+                "(fatal: missing both HR+SpO2 / non-numeric / sensor error / "
+                "low signal quality). Soft-field absences alone no longer "
+                "block evaluation — see P0-5.",
                 device_id,
                 _dq_errors,
             )
@@ -125,6 +137,18 @@ class TriggerOrchestrator:
                 fall_actions = self._fall_pre_trigger.evaluate(motion=motion)
                 actions.extend(fall_actions)
             return self._response_handler.process(actions, device_id=device_id)
+
+        # Log soft-field absences once per tick at INFO level so ops can
+        # see how often partial vitals payloads arrive without polluting
+        # WARN logs.
+        if _dq_errors:
+            logger.info(
+                "Partial vitals tick for device=%s — evaluating rules on %s "
+                "(soft-field absences: %s)",
+                device_id,
+                sorted(present_metrics),
+                _dq_errors,
+            )
 
         # Step 1 — buffer normalized vitals for time-series analysis
         self._vitals_buffer.push(device_id, normalized_vitals)

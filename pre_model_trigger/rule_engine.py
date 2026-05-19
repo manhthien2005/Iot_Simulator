@@ -94,7 +94,28 @@ def _eval_multi_metric_condition(condition_str: str, vitals: dict[str, Any]) -> 
 
         "heart_rate > 100 and resp_rate >= 20"
         "spo2 <= 94 and resp_rate >= 20"
+
+    P1-11 (2026-05-18): the parser only understands AND chains. Rules
+    containing ``or`` / ``not`` / parentheses are flagged at ERROR level
+    and treated as non-firing instead of silently truncating the
+    expression. If the rules JSON ever needs richer logic, switch to a
+    proper AST evaluator with an opcode whitelist.
     """
+    lowered = (condition_str or "").lower()
+    if (
+        re.search(r"\bor\b", lowered)
+        or re.search(r"\bnot\b", lowered)
+        or "(" in condition_str
+        or ")" in condition_str
+    ):
+        logger.error(
+            "Combination rule uses unsupported operator (or/not/parens): %r — "
+            "treating as non-firing. Update rules_config.json or extend "
+            "_eval_multi_metric_condition.",
+            condition_str,
+        )
+        return False
+
     parts = [p.strip() for p in condition_str.split(" and ")]
     for part in parts:
         match = _CMP_RE.match(part)
@@ -122,7 +143,12 @@ def _eval_multi_metric_condition(condition_str: str, vitals: dict[str, Any]) -> 
     return True
 
 
-def _check_condition(value: float, condition: dict[str, Any]) -> bool:
+def _check_condition(
+    value: float,
+    condition: dict[str, Any],
+    *,
+    metric_name: str | None = None,
+) -> bool:
     """Return ``True`` when *value* satisfies the condition dict.
 
     Supports two formats:
@@ -135,6 +161,15 @@ def _check_condition(value: float, condition: dict[str, Any]) -> bool:
 
     2. **Structured keys** ``lt``, ``gt``, ``lte``, ``gte`` — kept for
        backward compatibility / programmatic use.
+
+    P1-12 (2026-05-18): when ``metric_name`` is supplied (i.e. the rule
+    came out of an ``instant_rules.<metric>`` section), the parser
+    cross-checks every non-numeric token against the section name and
+    refuses to evaluate when they disagree. Previously a copy-paste typo
+    in rules_config (e.g. ``resp_rate >= 20`` placed under
+    ``instant_rules.heart_rate.urgent``) would silently fire whenever
+    HR>=20 because the pre-resolved ``value`` was substituted regardless
+    of which token the condition actually referenced.
     """
     # --- Format 1: string condition expression ---
     expr = condition.get("condition")
@@ -145,7 +180,25 @@ def _check_condition(value: float, condition: dict[str, Any]) -> bool:
             if match is None:
                 logger.warning("Unparseable condition fragment: %r", part)
                 return False
-            if not _eval_single_cmp(match.group(1), match.group(2), match.group(3), value):
+            left_raw, op, right_raw = match.group(1), match.group(2), match.group(3)
+            if metric_name is not None:
+                left_is_num = _safe_float(left_raw) is not None
+                right_is_num = _safe_float(right_raw) is not None
+                if not left_is_num and left_raw != metric_name:
+                    logger.error(
+                        "Rule mismatch: section=%s but condition references "
+                        "non-matching metric token %r in %r — refusing to fire.",
+                        metric_name, left_raw, expr,
+                    )
+                    return False
+                if not right_is_num and right_raw != metric_name:
+                    logger.error(
+                        "Rule mismatch: section=%s but condition references "
+                        "non-matching metric token %r in %r — refusing to fire.",
+                        metric_name, right_raw, expr,
+                    )
+                    return False
+            if not _eval_single_cmp(left_raw, op, right_raw, value):
                 return False
         return True
 
@@ -261,7 +314,7 @@ class RuleEngine:
             for severity_key in ("urgent", "send_to_risk_model", "watch"):
                 conditions = severity_groups.get(severity_key, [])
                 for cond in conditions:
-                    if _check_condition(raw_value, cond):
+                    if _check_condition(raw_value, cond, metric_name=metric):
                         reason_code = cond.get("reason_code", f"{metric}_{severity_key}")
                         action_type = "alert" if severity_key == "urgent" else "model_call"
                         actions.append(TriggerActionItem(

@@ -15,15 +15,25 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Post-normalization field names required for rule evaluation.
-_REQUIRED_FIELDS: tuple[str, ...] = (
+# Post-normalization field names. Split into "critical" vs "soft" so a
+# tick missing only soft fields (BP/temp/RR — many wearables omit these)
+# does not silently suppress URGENT instant rules on the critical ones.
+#
+# P0-5 (2026-05-18): previously every required field was treated equally,
+# which meant a HR=200 / SpO2=85 emergency was ignored just because the
+# device did not report a respiratory rate that tick.
+_CRITICAL_FIELDS: tuple[str, ...] = (
     "heart_rate",
     "spo2",
+)
+_SOFT_FIELDS: tuple[str, ...] = (
     "body_temp",
     "sys_bp",
     "dia_bp",
     "resp_rate",
 )
+# Backwards-compatible alias still used by external callers / tests.
+_REQUIRED_FIELDS: tuple[str, ...] = _CRITICAL_FIELDS + _SOFT_FIELDS
 
 _MINIMUM_SIGNAL_QUALITY_SCORE: float = 0.7
 
@@ -98,10 +108,22 @@ def validate_data_quality(
     """Validate data quality of a normalized vitals snapshot.
 
     Checks:
-    - All required fields are present and non-None.
-    - Required fields are numeric.
+    - Critical fields (heart_rate, spo2) MUST be present and non-None.
+      Without at least one of them the tick is unsafe to evaluate.
+    - Soft fields (body_temp, sys_bp, dia_bp, resp_rate) MAY be missing —
+      :func:`available_metrics` reports the subset that survived for the
+      orchestrator's per-metric rule gating.
+    - Required-but-present fields must be numeric.
     - ``signal_quality_score`` >= ``minimum_signal_quality`` (default 0.7).
     - ``sensor_error_flag`` is not ``True``.
+
+    P0-5 (2026-05-18): previously a single missing soft field (e.g.
+    ``resp_rate``) suppressed the entire vitals rule pass, including
+    URGENT instant rules on the critical fields that were present. The
+    new contract treats only ``heart_rate`` + ``spo2`` as fatal because
+    the canonical clinical-rules ingest at the BE
+    (``/telemetry/ingest`` ``INSUFFICIENT_VITALS`` gate) already
+    requires at least one of those two.
 
     Parameters
     ----------
@@ -113,14 +135,24 @@ def validate_data_quality(
     Returns
     -------
     (is_valid, errors)
-        ``is_valid`` is ``True`` when no quality issues found.
+        ``is_valid`` is ``True`` when no critical issues were found —
+        soft-field absences are reported in :func:`available_metrics`
+        rather than blocking evaluation here.
         ``errors`` lists each specific issue detected.
     """
     errors: list[str] = []
 
-    for field in _REQUIRED_FIELDS:
+    # Hard gate — at least one critical field MUST be present.
+    critical_present = [f for f in _CRITICAL_FIELDS if vitals.get(f) is not None]
+    if not critical_present:
+        for field in _CRITICAL_FIELDS:
+            errors.append(f"missing_critical_field:{field}")
+
+    # Soft-field absences logged but do not flip ``is_valid``. The
+    # orchestrator decides per-metric whether to evaluate the rule.
+    for field in _SOFT_FIELDS:
         if vitals.get(field) is None:
-            errors.append(f"missing_required_field:{field}")
+            errors.append(f"missing_soft_field:{field}")
 
     for field in _REQUIRED_FIELDS:
         value = vitals.get(field)
@@ -130,7 +162,11 @@ def validate_data_quality(
             except (TypeError, ValueError):
                 errors.append(f"non_numeric_value:{field}")
 
+    # Try both signal_quality and signal_quality_score (A2 alignment with
+    # /telemetry/ingest VitalIngestVitals which uses signal_quality).
     sq = vitals.get("signal_quality_score")
+    if sq is None:
+        sq = vitals.get("signal_quality")
     if sq is not None:
         try:
             if float(sq) < minimum_signal_quality:
@@ -141,7 +177,40 @@ def validate_data_quality(
     if vitals.get("sensor_error_flag") is True:
         errors.append("sensor_error_flag")
 
-    return len(errors) == 0, errors
+    # Hard-fatal subset that should suppress evaluation entirely.
+    fatal = [
+        e
+        for e in errors
+        if e.startswith("missing_critical_field:")
+        or e.startswith("non_numeric_value:")
+        or e == "sensor_error_flag"
+        or e == "signal_quality_score_below_threshold"
+    ]
+    return len(fatal) == 0, errors
 
 
-__all__ = ["normalize_vitals_for_rules", "validate_data_quality"]
+def available_metrics(vitals: dict[str, Any]) -> set[str]:
+    """Return the subset of ``_REQUIRED_FIELDS`` present + numeric.
+
+    P0-5: the orchestrator uses this to gate which rule sections fire
+    on a given tick — a missing ``resp_rate`` no longer suppresses
+    URGENT heart_rate / spo2 rules.
+    """
+    out: set[str] = set()
+    for field in _REQUIRED_FIELDS:
+        value = vitals.get(field)
+        if value is None:
+            continue
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            continue
+        out.add(field)
+    return out
+
+
+__all__ = [
+    "available_metrics",
+    "normalize_vitals_for_rules",
+    "validate_data_quality",
+]
