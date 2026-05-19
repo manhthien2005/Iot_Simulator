@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { Activity, ArrowDown, ArrowUp, Minus } from "lucide-react";
 import { Card } from "../../ui/Card";
 import { EmptyState } from "../../ui/EmptyState";
+import { InfoTooltip } from "./InfoTooltip";
 import { useVitalsRingBuffer, type VitalsBufferEntry } from "../../../hooks/useVitalsRingBuffer";
 
 // ---------------------------------------------------------------------------
@@ -102,7 +103,7 @@ function VitalsGrid({ summary }: { summary: VitalsSummary }) {
     <div style={{ display: "grid", gap: "12px" }}>
       <div style={vitalsGridStyle}>
         <VitalCell
-          label="Nhịp tim" unit="bpm"
+          label="Nhịp tim" tooltipKey="vitalsHr" unit="bpm"
           now={summary.latest.heartRate}
           pre={summary.preMean.heartRate}
           post={summary.postMean.heartRate}
@@ -112,7 +113,7 @@ function VitalsGrid({ summary }: { summary: VitalsSummary }) {
           warnUpAt={HR_DELTA_WARN}
         />
         <VitalCell
-          label="SpO₂" unit="%"
+          label="SpO₂" tooltipKey="vitalsSpo2" unit="%"
           now={summary.latest.spo2}
           pre={summary.preMean.spo2}
           post={summary.postMean.spo2}
@@ -122,7 +123,7 @@ function VitalsGrid({ summary }: { summary: VitalsSummary }) {
           warnDownAt={SPO2_DELTA_WARN}
         />
         <VitalCell
-          label="HA tâm thu" unit="mmHg"
+          label="HA tâm thu" tooltipKey="vitalsBpSys" unit="mmHg"
           now={summary.latest.bloodPressureSys ?? null}
           pre={summary.preMean.bloodPressureSys}
           post={summary.postMean.bloodPressureSys}
@@ -132,7 +133,7 @@ function VitalsGrid({ summary }: { summary: VitalsSummary }) {
           warnUpAt={BP_DELTA_WARN}
         />
         <VitalCell
-          label="Nhịp thở" unit="br/m"
+          label="Nhịp thở" tooltipKey="vitalsRr" unit="br/m"
           now={summary.latest.respiratoryRate ?? null}
           pre={summary.preMean.respiratoryRate}
           post={summary.postMean.respiratoryRate}
@@ -148,6 +149,7 @@ function VitalsGrid({ summary }: { summary: VitalsSummary }) {
 
 interface VitalCellProps {
   label: string;
+  tooltipKey: import("./fallLabTooltips").FallLabTooltipKey;
   unit: string;
   now: number | null;
   pre: number | null;
@@ -159,7 +161,7 @@ interface VitalCellProps {
   warnDownAt?: number;
 }
 
-function VitalCell({ label, unit, now, pre, post, window, fallTs, getter, warnUpAt, warnDownAt }: VitalCellProps) {
+function VitalCell({ label, tooltipKey, unit, now, pre, post, window, fallTs, getter, warnUpAt, warnDownAt }: VitalCellProps) {
   const delta = pre != null && post != null ? post - pre : null;
   const tone = severityForDelta(delta, warnUpAt, warnDownAt);
   return (
@@ -167,6 +169,7 @@ function VitalCell({ label, unit, now, pre, post, window, fallTs, getter, warnUp
       <div style={vitalHeadStyle}>
         <strong style={{ fontSize: "11px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
           {label}
+          <InfoTooltip k={tooltipKey} />
         </strong>
         <DeltaChip delta={delta} unit={unit} tone={tone} />
       </div>

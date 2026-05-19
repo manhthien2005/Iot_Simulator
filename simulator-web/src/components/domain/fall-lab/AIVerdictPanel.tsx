@@ -12,6 +12,7 @@ import {
 import { Badge } from "../../ui/Badge";
 import { Button } from "../../ui/Button";
 import { Card } from "../../ui/Card";
+import { InfoTooltip } from "./InfoTooltip";
 import { aiLabelText, aiStatusLabel, fallSeverityPalette } from "../../../utils/severity";
 import type {
   AIPrediction,
@@ -127,11 +128,14 @@ function AIVerdictBlock({ prediction }: { prediction: AIPrediction | null }) {
             {aiLabelText(prediction.label)}
           </strong>
         </div>
-        <Badge severity={prediction.riskBand}>{prediction.riskBand}</Badge>
+        <Badge severity={prediction.riskBand}>
+          {prediction.riskBand}
+          <InfoTooltip k="verdictBand" />
+        </Badge>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px" }}>
-        <ProbabilityMeter label="Xác suất té ngã" value={probabilityPct} tone={prediction.riskBand} />
-        <ProbabilityMeter label="Độ tin cậy" value={confidencePct} tone={prediction.riskBand} />
+        <ProbabilityMeter label="Xác suất té ngã" tooltipKey="verdictProbability" value={probabilityPct} tone={prediction.riskBand} />
+        <ProbabilityMeter label="Độ tin cậy" tooltipKey="verdictConfidence" value={confidencePct} tone={prediction.riskBand} />
       </div>
       {prediction.explanationSummary
         ? <p style={{ margin: 0, fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
@@ -143,6 +147,7 @@ function AIVerdictBlock({ prediction }: { prediction: AIPrediction | null }) {
           <div style={{ display: "grid", gap: "6px", marginTop: "4px" }}>
             <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
               Đặc trưng đóng góp lớn nhất
+              <InfoTooltip k="verdictTopFeatures" />
             </span>
             {prediction.topFeatures.map((feature, idx) => (
               <div
@@ -177,8 +182,8 @@ function AIVerdictBlock({ prediction }: { prediction: AIPrediction | null }) {
             {new Date(prediction.predictedAt).toLocaleTimeString("vi-VN", { hour12: false })}
           </code>
         </span>
-        {prediction.requiresAttention ? <Badge severity="warning">Cần chú ý</Badge> : null}
-        {prediction.highPriorityAlert ? <Badge severity="critical">High priority</Badge> : null}
+        {prediction.requiresAttention ? <Badge severity="warning">Cần chú ý<InfoTooltip k="verdictRequiresAttention" /></Badge> : null}
+        {prediction.highPriorityAlert ? <Badge severity="critical">High priority<InfoTooltip k="verdictHighPriorityAlert" /></Badge> : null}
       </div>
     </div>
   );
@@ -188,15 +193,20 @@ function ProbabilityMeter({
   label,
   value,
   tone,
+  tooltipKey,
 }: {
   label: string;
   value: number;
   tone: "normal" | "warning" | "critical";
+  tooltipKey?: import("./fallLabTooltips").FallLabTooltipKey;
 }) {
   const palette = fallSeverityPalette(tone);
   return (
     <div style={{ display: "grid", gap: "4px" }}>
-      <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{label}</span>
+      <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+        {label}
+        {tooltipKey ? <InfoTooltip k={tooltipKey} /> : null}
+      </span>
       <div
         style={{
           height: "8px",
