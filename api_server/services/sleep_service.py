@@ -844,8 +844,16 @@ class SleepService:
         summary: dict[str, Any],
         phases_pattern_override: list[str] | None,
     ) -> list[SleepStageSegment]:
+        # Sleep-EDF raw recordings can be 10-22h long because they include
+        # awake bookends from the PSG study window.  Cap the synthesised
+        # session to a clinically plausible 3-11h range so push payloads
+        # carry a realistic night, not a multi-day recording.
         total_sleep_s = int(summary.get("total_sleep_s") or 0)
-        total_duration_minutes = max(1, int(round(total_sleep_s / 60))) if total_sleep_s > 0 else 360
+        if total_sleep_s > 0:
+            raw_minutes = max(1, int(round(total_sleep_s / 60)))
+        else:
+            raw_minutes = 360
+        total_duration_minutes = max(180, min(660, raw_minutes))
         stage_proportions = self._normalize_stage_proportions(summary.get("stage_proportions"))
         ordered_stages = ["awake", "light", "deep", "rem"]
         stage_minutes: dict[str, int] = {}
@@ -1185,13 +1193,18 @@ class SleepService:
 
         if has_registry_sessions:
             summary = dict(effective.get("summary") or raw.get("summary") or {})
+            # Always rebuild phases from the scenario stage_proportions when
+            # we have a profile entry — relying on raw Sleep-EDF phases
+            # leaks 4-6h awake bookends into the push payload (P0 bug
+            # surfaced by test_sleep_module.ps1).
+            has_profile = scenario_id in self._scenario_profiles
             phases = (
                 self._build_scenario_phase_segments(
                     raw=raw,
                     summary=summary,
                     phases_pattern_override=effective.get("phases_pattern_override"),
                 )
-                if effective.get("use_summary_override") or effective.get("phases_pattern_override") is not None
+                if has_profile or effective.get("use_summary_override") or effective.get("phases_pattern_override") is not None
                 else self._sleep_stage_segments_from_raw(raw)
             )
             fallback_duration_minutes = int(summary.get("total_sleep_s") or 0) // 60 or 360
@@ -1199,8 +1212,17 @@ class SleepService:
                 phases,
                 fallback_duration_minutes=fallback_duration_minutes,
             )
-            sleep_efficiency = _safe_float(summary.get("sleep_efficiency"), 0.85) or 0.85
-            efficiency_pct = round(sleep_efficiency * 100 if sleep_efficiency <= 1 else sleep_efficiency, 1)
+            # Derive efficiency from the rebuilt phases dict instead of
+            # trusting summary.sleep_efficiency, because awake minutes are
+            # what the BE will actually persist; otherwise eff_stored and
+            # eff_recomputed at /sleep/history time disagree.
+            awake_minutes = max(0, int(phases_dict.get("awake", 0)))
+            asleep_minutes = max(0, duration_minutes - awake_minutes)
+            efficiency_pct = (
+                round((asleep_minutes / duration_minutes) * 100, 1)
+                if duration_minutes > 0
+                else 0.0
+            )
             disorder_tags = list(effective.get("disorder_tags") or [])
         else:
             fallback = self._fallback_sleep_session(device_id=device_id)
@@ -1247,6 +1269,7 @@ class SleepService:
             "efficiency": efficiency_pct,
             "duration_minutes": duration_minutes,
             "phases": phases_dict,
+            "wake_count": int(summary.get("wake_count") or 0) if has_registry_sessions else 0,
             "start_time": start_time.isoformat().replace("+00:00", "Z"),
             "end_time": end_time.isoformat().replace("+00:00", "Z"),
             "heart_rate_mean_bpm": (sleep_ai_record or {}).get("heart_rate_mean_bpm"),
