@@ -54,6 +54,7 @@ try:
         MotionWindowRef,
         PipelineStage,
         PipelineStageStatusValue,
+        PreTriggerEvidence,
         RiskContribution,
         RiskHistoryPoint,
         RiskInjectRequest,
@@ -130,6 +131,7 @@ except ModuleNotFoundError:
         MotionWindowRef,
         PipelineStage,
         PipelineStageStatusValue,
+        PreTriggerEvidence,
         RiskContribution,
         RiskHistoryPoint,
         RiskInjectRequest,
@@ -801,6 +803,10 @@ class SimulatorRuntime:
         self._fall_predictions: dict[str, AIPrediction] = {}
         self._fall_motion_refs: dict[str, MotionWindowRef] = {}
         self._fall_countdown_policies: dict[str, CountdownPolicy] = {}
+        # Phase 2 — pre-trigger evidence captured at inject_event time so
+        # the FE Fall Lab pipeline strip (Section B stage 2) shows BE truth
+        # instead of FE-derived peak-vs-threshold guesses.
+        self._fall_pre_trigger_results: dict[str, PreTriggerEvidence] = {}
         self.devices: dict[str, DeviceRecord] = {}
         self.device_scenarios: dict[str, str] = {}
         self.sessions: dict[str, SessionRecord] = {}
@@ -880,6 +886,11 @@ class SimulatorRuntime:
             _settings_provider = SystemSettingsProvider()
             _rule_engine = RuleEngine(settings_provider=_settings_provider)
             _fall_pre_trigger = FallPreTrigger(settings_provider=_settings_provider)
+            # Phase 2 — keep refs on self so inject_event can capture
+            # PreTriggerEvidence on the same motion window the AI sees,
+            # without spinning up a fresh FallPreTrigger per call.
+            self._settings_provider = _settings_provider
+            self._fall_pre_trigger = _fall_pre_trigger
             _api_client = HealthGuardAPIClient(
                 base_url=self._health_backend_url,
                 http_sender=self._http_sender,
@@ -2081,6 +2092,79 @@ class SimulatorRuntime:
             fallVariant=fe_variant or None,
         )
 
+    def _compute_pre_trigger_evidence(
+        self,
+        motion: dict[str, Any] | None,
+    ) -> PreTriggerEvidence | None:
+        """Run pre-trigger evaluation against the inject-time motion window.
+
+        Phase 2 wiring — exposes the BE's hard/soft trigger reasoning
+        to the FE Fall Lab pipeline strip (Section B stage 2).  We
+        adapt the column-array motion shape from MotionGenerator into
+        the per-sample dict that :class:`FallPreTrigger` consumes by
+        reading the most recent sample's accel/gyro values, plus the
+        precomputed peak / posture / low-motion fields the persona
+        engine attaches to the window metadata.
+
+        Returns ``None`` only when the runtime has no FallPreTrigger
+        configured (pre-trigger disabled at startup).  In that case the
+        FE strip falls back to its FE-derived peak-vs-threshold view.
+        """
+        if not motion:
+            return None
+        # Late import to avoid circular Iot_Simulator -> pre_model_trigger
+        # at module load time.  The instance is created at __init__ time
+        # via the TriggerOrchestrator wiring; if startup failed we have
+        # no pre-trigger to query and return None so the FE strip falls
+        # back to its FE-derived peak-vs-threshold view.
+        pre_trigger = getattr(self, "_fall_pre_trigger", None)
+        if pre_trigger is None:
+            return None
+
+        # Build the per-sample dict the evaluator expects.  Use the LAST
+        # sample (impact tail) for accel/gyro instantaneous values and
+        # forward the window-level peak/posture/low-motion metadata
+        # MotionGenerator already attaches.
+        ax_arr = motion.get("accel_x") or []
+        ay_arr = motion.get("accel_y") or []
+        az_arr = motion.get("accel_z") or []
+        gx_arr = motion.get("gyro_x") or []
+        gy_arr = motion.get("gyro_y") or []
+        gz_arr = motion.get("gyro_z") or []
+
+        def _last(arr: Any) -> float | None:
+            try:
+                length = len(arr)
+            except TypeError:
+                return None
+            if length == 0:
+                return None
+            try:
+                return float(arr[length - 1])
+            except (TypeError, ValueError):
+                return None
+
+        sample = {
+            "accel": {
+                "x": _last(ax_arr) or 0.0,
+                "y": _last(ay_arr) or 0.0,
+                "z": _last(az_arr) or 0.0,
+            },
+            "gyro": {
+                "x": _last(gx_arr) or 0.0,
+                "y": _last(gy_arr) or 0.0,
+                "z": _last(gz_arr) or 0.0,
+            },
+            "accel_mag_peak_g": motion.get("accel_mag_peak_g"),
+            "gyro_mag_peak_dps": motion.get("gyro_mag_peak_dps"),
+            "posture_change_angle_deg": motion.get("posture_change_angle_deg"),
+            "post_impact_low_motion_duration_s": motion.get(
+                "post_impact_low_motion_duration_s"
+            ),
+        }
+        evidence_dict = pre_trigger.evaluate_with_evidence(sample)
+        return PreTriggerEvidence(**evidence_dict)
+
     def _override_severity_from_verdict(
         self,
         policy: _FallVariantPolicy,
@@ -2162,6 +2246,7 @@ class SimulatorRuntime:
                     self._fall_predictions.pop(device_id, None)
                     self._fall_motion_refs.pop(device_id, None)
                     self._fall_countdown_policies.pop(device_id, None)
+                    self._fall_pre_trigger_results.pop(device_id, None)
                 else:
                     record.simulator.inject_event(device_id, event_type, variant)
 
@@ -2179,10 +2264,17 @@ class SimulatorRuntime:
                 # ---- AI verdict + variant policy application (fall only) ----
                 ai_verdict: AIPrediction | None = None
                 motion_ref: MotionWindowRef | None = None
+                pre_trigger_evidence: PreTriggerEvidence | None = None
                 severity = "warning"
                 if event_type == "fall_detected" and policy is not None:
                     payload = self._latest_motion_payload_locked(record, device_id)
                     motion = (payload or {}).get("motion") or {}
+                    # Phase 2 — capture pre-trigger evidence on the same
+                    # motion window the AI sees, so the FE Fall Lab
+                    # pipeline strip (Section B stage 2) renders BE truth.
+                    pre_trigger_evidence = self._compute_pre_trigger_evidence(motion)
+                    if pre_trigger_evidence is not None:
+                        self._fall_pre_trigger_results[device_id] = pre_trigger_evidence
                     ai_verdict = self._call_fall_ai_locked(
                         motion, device_id, variant or ""
                     )
@@ -2736,6 +2828,7 @@ class SimulatorRuntime:
                 aiPrediction=self._fall_predictions.get(device_id),
                 motionWindowRef=self._fall_motion_refs.get(device_id),
                 countdownPolicy=cached_policy,
+                preTriggerResult=self._fall_pre_trigger_results.get(device_id),
             )
 
     @staticmethod
@@ -3043,6 +3136,7 @@ class SimulatorRuntime:
             self._fall_predictions.pop(device_id, None)
             self._fall_motion_refs.pop(device_id, None)
             self._fall_countdown_policies.pop(device_id, None)
+            self._fall_pre_trigger_results.pop(device_id, None)
 
     def _tick_session_locked(self, record: SessionRecord, force: bool) -> SessionSideEffects:
         effects = SessionSideEffects()
