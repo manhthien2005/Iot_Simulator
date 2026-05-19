@@ -50,6 +50,21 @@ export type AIPredictionBand = "normal" | "warning" | "critical";
 /** ``modelStatus`` distinguishes ok / offline / no_window / skipped. */
 export type AIModelStatus = "ok" | "offline" | "no_window" | "skipped";
 
+/** Structured failure reason from `AIPrediction` (mirrors `api_server/schemas.py`).
+ *
+ *  Allows the FE to pick the right Vietnamese copy without parsing
+ *  `explanationSummary`.  The BE always emits this field; older clients
+ *  treated absence as "ok" but every FallState response now carries the
+ *  enum explicitly.
+ */
+export type AIFailureReason =
+  | "ok"
+  | "transport_error"
+  | "model_unavailable"
+  | "validation_422"
+  | "insufficient_samples"
+  | "device_unbound";
+
 export interface AITopFeature {
   featureName: string;
   contribution: number;
@@ -68,6 +83,13 @@ export interface AIPrediction {
   topFeatures: AITopFeature[];
   predictedAt: string;
   modelStatus: AIModelStatus;
+  /** P0-4 — BE persists fall_event_id + model_request_id when the AI
+   *  pipeline writes a row.  Both null until the model returns. */
+  fallEventId: number | null;
+  modelRequestId: string | null;
+  /** P2-1 — structured failure reason mapped to Vietnamese copy by
+   *  `<FailureReasonBanner/>`.  Defaults to "ok" on success. */
+  failureReason: AIFailureReason;
 }
 
 export interface MotionWindowRef {

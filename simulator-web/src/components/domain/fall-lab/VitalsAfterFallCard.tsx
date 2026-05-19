@@ -97,7 +97,7 @@ export function VitalsAfterFallCard({ deviceId, lastFallEventAt }: Props) {
 // Sub-pieces
 // ---------------------------------------------------------------------------
 
-function VitalsGrid({ summary }: { summary: NonNullable<ReturnType<typeof useSummary>> }) {
+function VitalsGrid({ summary }: { summary: VitalsSummary }) {
   return (
     <div style={{ display: "grid", gap: "12px" }}>
       <div style={vitalsGridStyle}>
@@ -303,10 +303,12 @@ function bgForTone(tone: "normal" | "warning" | "critical"): string {
 }
 
 // Type alias for the summary memo so callers can reuse it.
-type SummaryMemo = ReturnType<typeof useSummary>;
-function useSummary(): SummaryMemo {
-  // Stub for type extraction only — not actually used.
-  return null as unknown as { fallTs: number; windowEntries: VitalsBufferEntry[]; preMean: VitalsMean; postMean: VitalsMean; latest: VitalsBufferEntry } | null;
+interface VitalsSummary {
+  fallTs: number;
+  windowEntries: VitalsBufferEntry[];
+  preMean: VitalsMean;
+  postMean: VitalsMean;
+  latest: VitalsBufferEntry;
 }
 
 // ---------------------------------------------------------------------------
