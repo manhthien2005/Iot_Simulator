@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, BarChart3, LayoutDashboard, Play, Settings, ShieldCheck, Watch, Wrench, ChevronLeft, ChevronRight, Menu } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, BedDouble, LayoutDashboard, Play, Settings, ShieldCheck, Watch, Wrench, ChevronLeft, ChevronRight, Menu } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import type { QueryKey } from "@tanstack/react-query";
@@ -60,6 +60,12 @@ const mainLinks: NavLinkSpec[] = [
     label: "Phòng lab té ngã",
     icon: AlertTriangle,
     prefetch: { queryKey: ["sessions"], queryFn: fetchSessions },
+  },
+  {
+    to: "/sleep-lab",
+    label: "Mô phỏng giấc ngủ",
+    icon: BedDouble,
+    prefetch: { queryKey: ["db-devices"], queryFn: fetchDbDevices },
   },
   { to: "/analytics", label: "Phân tích", icon: BarChart3 },
   { to: "/diagnostics", label: "Diagnostics", icon: Wrench },
