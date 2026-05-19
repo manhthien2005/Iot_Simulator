@@ -1,0 +1,1359 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fall Lab — Mockup refactor (review-first)</title>
+  <style>
+    /* CSS variables copied from simulator-web/src/index.css */
+    :root {
+      --bg-base: #0a0e1a;
+      --bg-surface: #111827;
+      --bg-elevated: #1a2235;
+      --bg-hover: #1e2d4a;
+      --bg-active: #253555;
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-cyan: #06b6d4;
+      --accent-cyan-bg: rgba(6, 182, 212, 0.08);
+      --accent-cyan-bg-active: rgba(6, 182, 212, 0.16);
+      --accent-cyan-border: rgba(6, 182, 212, 0.30);
+      --severity-normal: #22c55e;
+      --severity-normal-bg: rgba(34, 197, 94, 0.10);
+      --severity-normal-border: rgba(34, 197, 94, 0.30);
+      --severity-warning: #f59e0b;
+      --severity-warning-bg: rgba(245, 158, 11, 0.10);
+      --severity-warning-border: rgba(245, 158, 11, 0.30);
+      --severity-critical: #ef4444;
+      --severity-critical-bg: rgba(239, 68, 68, 0.10);
+      --severity-critical-border: rgba(239, 68, 68, 0.30);
+      --severity-offline: #6b7280;
+      --severity-offline-bg: rgba(107, 114, 128, 0.12);
+      --severity-info: #3b82f6;
+      --severity-info-bg: rgba(59, 130, 246, 0.12);
+      --severity-info-border: rgba(59, 130, 246, 0.30);
+      --border-default: #1e2d4a;
+      --border-subtle: #253555;
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-xl: 16px;
+      --radius-full: 9999px;
+      --shadow-card: 0 2px 8px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.03);
+      --font-ui: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: var(--font-ui);
+      color: var(--text-primary);
+      background:
+        radial-gradient(ellipse at 10% 90%, rgba(6,182,212,0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 90% 5%, rgba(99,102,241,0.08) 0%, transparent 50%),
+        var(--bg-base);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .review-banner {
+      background: var(--accent-cyan-bg-active);
+      border-bottom: 1px solid var(--accent-cyan-border);
+      color: var(--accent-cyan);
+      text-align: center;
+      padding: 8px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .review-banner code {
+      background: rgba(0,0,0,0.25);
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+
+    .page {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 32px 64px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .page-header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+    .page-header p { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; max-width: 920px; }
+
+    .section-label {
+      font-size: 11px; font-weight: 700; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.08em;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .section-label::before {
+      content: ""; flex: 1; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-default) 30%, var(--border-default));
+      max-width: 12px;
+    }
+
+    .card {
+      background: var(--bg-elevated);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-default);
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; flex-wrap: wrap;
+    }
+    .card-head strong { font-size: 13px; }
+    .card-body { padding: 14px 16px; }
+    .card-body--tight { padding: 10px 14px; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: var(--radius-full);
+      font-size: 11px; font-weight: 600;
+      border: 1px solid transparent; white-space: nowrap;
+    }
+    .badge--normal { background: var(--severity-normal-bg); color: var(--severity-normal); border-color: var(--severity-normal-border); }
+    .badge--warning { background: var(--severity-warning-bg); color: var(--severity-warning); border-color: var(--severity-warning-border); }
+    .badge--critical { background: var(--severity-critical-bg); color: var(--severity-critical); border-color: var(--severity-critical-border); }
+    .badge--offline { background: var(--severity-offline-bg); color: var(--severity-offline); border-color: rgba(107,114,128,0.35); }
+    .badge--info { background: var(--severity-info-bg); color: var(--severity-info); border-color: var(--severity-info-border); }
+    .badge--dot::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 14px; border-radius: var(--radius-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-active); color: var(--text-primary);
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: background-color 150ms;
+    }
+    .btn:hover { background: var(--bg-hover); }
+    .btn--primary { background: var(--accent-cyan); border-color: var(--accent-cyan); color: #001019; }
+    .btn--ghost { background: transparent; }
+    .btn--danger { background: var(--severity-critical-bg); border-color: var(--severity-critical-border); color: var(--severity-critical); }
+    .btn--sm { padding: 4px 10px; font-size: 12px; }
+
+    code, .mono { font-family: var(--font-mono); font-size: 12px; }
+    .muted { color: var(--text-muted); }
+    .secondary { color: var(--text-secondary); }
+
+    /* Device session bar */
+    .session-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .session-bar select {
+      background: var(--bg-base); color: var(--text-primary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      padding: 6px 10px; min-width: 220px; font-size: 13px;
+    }
+    .session-bar .divider { width: 1px; height: 22px; background: var(--border-default); }
+  </style>
+</head>
+<body>
+
+<div class="review-banner">
+  REVIEW MOCKUP — file standalone <code>simulator-web/docs/fall-lab-mockup.html</code> · default state: variant <code>confirmed</code> đã inject 12s trước, AI verdict critical, countdown 18/30s
+</div>
+
+<div class="page">
+
+  <!-- PAGE HEADER -->
+  <header class="page-header">
+    <h1>Phòng nghiên cứu té ngã</h1>
+    <p>
+      Inject các kịch bản té ngã, theo dõi quy trình AI đánh giá (pre-trigger → model API → verdict),
+      quan sát biến thiên sinh hiệu sau té ngã và xác minh BE escalation tương ứng.
+      Mọi số liệu đều derive từ BE — không invent dữ liệu.
+    </p>
+  </header>
+
+  <!-- Disclaimer -->
+  <div class="card" style="border-left: 3px solid var(--severity-info);">
+    <div class="card-body card-body--tight" style="display:flex; gap:12px; align-items:flex-start;">
+      <div style="font-size:18px; line-height:1; color:var(--severity-info);">ⓘ</div>
+      <div style="font-size:12px; color:var(--text-secondary); line-height:1.55;">
+        <strong style="color:var(--severity-info);">Lưu ý độ trễ trong giả lập:</strong>
+        Trên simulator, <code>inject_event</code> chạy đồng bộ tới Model API (port 8001) và trả verdict trong <strong>~50–200ms</strong>.
+        Trên mobile thực, độ trễ end-to-end là <strong>1–3s</strong> (MQTT → BE buffer → model API → push notif).
+        Pre-inject confirm dialog đã được loại bỏ (gây delay không tồn tại trong production flow).
+        Hủy SOS bằng nút "Tôi ổn" giữ nguyên vì mobile production cũng có nút này.
+      </div>
+    </div>
+  </div>
+
+  <!-- DEVICE SESSION BAR -->
+  <div class="card">
+    <div class="card-body card-body--tight session-bar">
+      <span class="muted" style="font-size:12px;">Thiết bị mục tiêu:</span>
+      <select aria-label="Thiết bị mục tiêu">
+        <option>SW-001 · Watch của bà Nguyễn Thị Mai</option>
+        <option>SW-002 · Watch của ông Trần Văn Hùng</option>
+      </select>
+      <span class="badge badge--warning badge--dot">Đang đếm ngược</span>
+      <div class="divider"></div>
+      <span class="muted" style="font-size:11px;">Phiên:</span>
+      <span class="badge badge--normal badge--dot">Đang chạy · 02:14:38</span>
+      <div class="divider"></div>
+      <span class="muted" style="font-size:11px;">Model API 8001:</span>
+      <span class="badge badge--normal badge--dot">ok · 84ms</span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SECTION A — KỊCH BẢN (scenario matrix)
+       ============================================================ -->
+  <div class="section-label">A · Kịch bản té ngã (6 variants — bảng so sánh)</div>
+
+  <style>
+    .scenario-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 12.5px;
+    }
+    .scenario-table thead th {
+      text-align: left;
+      padding: 10px 12px;
+      background: var(--bg-base);
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--border-default);
+      white-space: nowrap;
+    }
+    .scenario-table tbody td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border-default);
+      vertical-align: middle;
+    }
+    .scenario-table tbody tr:last-child td { border-bottom: none; }
+    .scenario-table tbody tr {
+      transition: background 120ms;
+      cursor: pointer;
+    }
+    .scenario-table tbody tr:hover { background: var(--bg-hover); }
+    .scenario-table tbody tr.is-active {
+      background: var(--accent-cyan-bg);
+      box-shadow: inset 3px 0 0 var(--accent-cyan);
+    }
+    .scenario-table .scenario-name { font-weight: 600; color: var(--text-primary); }
+    .scenario-table .scenario-action {
+      font-size: 11px; color: var(--text-muted); margin-top: 2px;
+    }
+    .scenario-table .col-tight { white-space: nowrap; }
+    .scenario-table .col-actions { text-align: right; }
+    .pct-range {
+      font-family: var(--font-mono); font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .evidence-checklist {
+      margin-top: 12px;
+      padding: 12px 14px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+    }
+    .evidence-checklist h4 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    .evidence-row {
+      display: grid;
+      grid-template-columns: 18px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      color: var(--text-secondary);
+    }
+    .evidence-row .check { color: var(--severity-normal); }
+    .evidence-row .cross { color: var(--severity-critical); }
+    .evidence-row .pending { color: var(--text-muted); }
+  </style>
+
+  <div class="card">
+    <div class="card-head">
+      <strong>Bảng so sánh kịch bản (chọn 1 để inject)</strong>
+      <span class="muted" style="font-size:11px;">Hover để xem evidence checklist · row đang chọn được highlight</span>
+    </div>
+    <div class="card-body" style="padding: 0;">
+      <table class="scenario-table">
+        <thead>
+          <tr>
+            <th>Kịch bản</th>
+            <th class="col-tight">Severity</th>
+            <th class="col-tight">Peak |a| kỳ vọng</th>
+            <th class="col-tight">Posture</th>
+            <th class="col-tight">Pre-trigger</th>
+            <th class="col-tight">Inject env</th>
+            <th class="col-tight">AI band kỳ vọng</th>
+            <th class="col-tight">Countdown</th>
+            <th class="col-tight">Push alert</th>
+            <th class="col-actions">&nbsp;</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <div class="scenario-name">Té ngã giả</div>
+              <div class="scenario-action">Vung tay mạnh, đặt thiết bị xuống</div>
+            </td>
+            <td><span class="badge badge--normal">normal</span></td>
+            <td class="mono">1.2 – 1.8 g</td>
+            <td class="mono">&lt; 20°</td>
+            <td><span class="badge badge--offline">none</span></td>
+            <td><span class="badge badge--offline">false</span></td>
+            <td><span class="badge badge--normal">normal</span><div class="pct-range">5 – 25%</div></td>
+            <td class="mono">0s</td>
+            <td><span class="muted">—</span></td>
+            <td class="col-actions"><button class="btn btn--ghost btn--sm">Inject</button></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="scenario-name">Trượt — tự đứng dậy</div>
+              <div class="scenario-action">Trượt nhẹ rồi gượng dậy ngay</div>
+            </td>
+            <td><span class="badge badge--normal">normal</span></td>
+            <td class="mono">1.5 – 2.3 g</td>
+            <td class="mono">20 – 40°</td>
+            <td><span class="badge badge--offline">none</span></td>
+            <td><span class="badge badge--offline">false</span></td>
+            <td><span class="badge badge--normal">normal</span><div class="pct-range">10 – 30%</div></td>
+            <td class="mono">0s</td>
+            <td><span class="muted">—</span></td>
+            <td class="col-actions"><button class="btn btn--ghost btn--sm">Inject</button></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="scenario-name">Té ngã nhẹ</div>
+              <div class="scenario-action">Va chạm nhẹ, có khả năng tự hồi phục</div>
+            </td>
+            <td><span class="badge badge--warning">warning</span></td>
+            <td class="mono">2.5 – 3.0 g</td>
+            <td class="mono">40 – 60°</td>
+            <td><span class="badge badge--warning">soft</span></td>
+            <td><span class="badge badge--offline">false</span></td>
+            <td><span class="badge badge--warning">warning</span><div class="pct-range">35 – 55%</div></td>
+            <td class="mono">10s · auto</td>
+            <td><span class="badge badge--info">webhook</span></td>
+            <td class="col-actions"><button class="btn btn--ghost btn--sm">Inject</button></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="scenario-name">Té khỏi giường</div>
+              <div class="scenario-action">Người đang ngủ té khỏi giường (edge case)</div>
+            </td>
+            <td><span class="badge badge--critical">critical</span></td>
+            <td class="mono">2.5 – 3.5 g</td>
+            <td class="mono">60 – 90°</td>
+            <td><span class="badge badge--warning">soft</span></td>
+            <td><span class="badge badge--info">true</span></td>
+            <td><span class="badge badge--warning">warning</span><div class="pct-range">55 – 75%</div></td>
+            <td class="mono">30s</td>
+            <td><span class="badge badge--info">webhook</span></td>
+            <td class="col-actions"><button class="btn btn--ghost btn--sm">Inject</button></td>
+          </tr>
+          <tr class="is-active">
+            <td>
+              <div class="scenario-name">Té ngã xác nhận <span class="badge badge--info" style="margin-left:6px;">đã inject 12s trước</span></div>
+              <div class="scenario-action">Va chạm rõ rệt + bất động sau đó</div>
+            </td>
+            <td><span class="badge badge--critical">critical</span></td>
+            <td class="mono">3.5 – 4.5 g</td>
+            <td class="mono">&gt; 60°</td>
+            <td><span class="badge badge--critical">hard</span></td>
+            <td><span class="badge badge--info">true</span></td>
+            <td><span class="badge badge--critical">critical</span><div class="pct-range">75 – 95%</div></td>
+            <td class="mono">30s</td>
+            <td><span class="badge badge--info">webhook</span></td>
+            <td class="col-actions"><button class="btn btn--ghost btn--sm" disabled>Đang chạy</button></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="scenario-name">Té ngã + không phản hồi</div>
+              <div class="scenario-action">Worst case: té ngã, không tự dậy, không huỷ được</div>
+            </td>
+            <td><span class="badge badge--critical">critical</span></td>
+            <td class="mono">3.8 – 5.0 g</td>
+            <td class="mono">&gt; 70°</td>
+            <td><span class="badge badge--critical">hard</span></td>
+            <td><span class="badge badge--info">true</span></td>
+            <td><span class="badge badge--critical">critical</span><div class="pct-range">85 – 98%</div></td>
+            <td class="mono">30s · không huỷ</td>
+            <td><span class="badge badge--info">webhook</span></td>
+            <td class="col-actions"><button class="btn btn--ghost btn--sm">Inject</button></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="card-body card-body--tight" style="border-top: 1px solid var(--border-default);">
+        <div class="evidence-checklist">
+          <h4>Evidence checklist · "Té ngã xác nhận"</h4>
+          <div class="evidence-row"><span class="check">✓</span><span>Peak |a| trong cửa sổ 50 mẫu phải đạt &ge; 3.5g</span><code>4.21g</code></div>
+          <div class="evidence-row"><span class="check">✓</span><span>Posture change &gt; 60°</span><code>72°</code></div>
+          <div class="evidence-row"><span class="check">✓</span><span>Pre-trigger HARD fired (IMPACT_PEAK_3G)</span><code>hard</code></div>
+          <div class="evidence-row"><span class="check">✓</span><span>Inject environment signals (floor_vibration, pressure_mat)</span><code>true</code></div>
+          <div class="evidence-row"><span class="check">✓</span><span>AI band rơi vào critical (75 – 95%)</span><code>87%</code></div>
+          <div class="evidence-row"><span class="pending">○</span><span>Countdown 30s đang chạy — chờ operator hoặc auto-escalate</span><code>18/30s</code></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SECTION B — QUY TRÌNH AI ĐÁNH GIÁ (4-stage pipeline)
+       ============================================================ -->
+  <div class="section-label">B · Quy trình AI đánh giá (pipeline 4 stages)</div>
+
+  <style>
+    .pipeline-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+      position: relative;
+    }
+    .pipeline-stage {
+      padding: 14px 16px;
+      border-right: 1px solid var(--border-default);
+      display: grid;
+      gap: 8px;
+      position: relative;
+    }
+    .pipeline-stage:last-child { border-right: none; }
+    .pipeline-stage.is-ok { background: rgba(34,197,94,0.04); }
+    .pipeline-stage.is-fail { background: rgba(239,68,68,0.05); }
+    .pipeline-stage.is-skip { background: rgba(107,114,128,0.05); }
+    .pipeline-stage::after {
+      content: "▶";
+      position: absolute;
+      right: -7px; top: 22px;
+      width: 14px; height: 14px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: 50%;
+      font-size: 8px;
+      color: var(--text-muted);
+      display: grid; place-items: center;
+      z-index: 1;
+    }
+    .pipeline-stage:last-child::after { display: none; }
+    .stage-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px;
+    }
+    .stage-num {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      display: grid; place-items: center;
+      font-size: 11px; font-weight: 700;
+      color: var(--text-secondary);
+    }
+    .stage-title { font-size: 13px; font-weight: 600; }
+    .stage-status {
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      display: grid; place-items: center;
+      font-size: 11px; font-weight: 700;
+    }
+    .stage-status.is-ok { background: var(--severity-normal); color: #001a0a; }
+    .stage-status.is-fail { background: var(--severity-critical); color: #1a0000; }
+    .stage-status.is-skip { background: var(--severity-offline); color: #fff; }
+    .stage-status.is-pending { background: var(--severity-warning); color: #1a0e00; }
+    .stage-detail {
+      font-size: 11px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+    .stage-detail .kv {
+      display: grid; grid-template-columns: 1fr auto;
+      gap: 4px; padding: 2px 0;
+    }
+    .stage-detail .kv code { color: var(--text-primary); }
+  </style>
+
+  <div class="card">
+    <div class="card-head">
+      <strong>Pipeline đánh giá: motion window → pre-trigger → model API → verdict</strong>
+      <span class="muted" style="font-size:11px;">Click vào mỗi stage để mở rộng evidence</span>
+    </div>
+    <div class="pipeline-strip">
+      <div class="pipeline-stage is-ok">
+        <div class="stage-head">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="stage-num">1</span>
+            <span class="stage-title">Motion window 50 mẫu</span>
+          </div>
+          <span class="stage-status is-ok">✓</span>
+        </div>
+        <div class="stage-detail">
+          <div class="kv"><span>Sample count</span><code>50 / 50</code></div>
+          <div class="kv"><span>Sample rate</span><code>50 Hz</code></div>
+          <div class="kv"><span>Emitted at</span><code>16:54:32</code></div>
+          <div class="kv"><span>Peak index</span><code>22</code></div>
+        </div>
+      </div>
+
+      <div class="pipeline-stage is-ok">
+        <div class="stage-head">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="stage-num">2</span>
+            <span class="stage-title">Pre-trigger evaluate</span>
+          </div>
+          <span class="stage-status is-ok">✓</span>
+        </div>
+        <div class="stage-detail">
+          <div class="kv"><span>Trigger type</span><span class="badge badge--critical" style="padding:1px 6px;">hard</span></div>
+          <div class="kv"><span>Reason code</span><code>IMPACT_PEAK_3G</code></div>
+          <div class="kv"><span>Accel peak</span><code>4.21g · ngưỡng 3.0g</code></div>
+          <div class="kv"><span>Posture angle</span><code>72° · ngưỡng 45°</code></div>
+        </div>
+      </div>
+
+      <div class="pipeline-stage is-ok">
+        <div class="stage-head">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="stage-num">3</span>
+            <span class="stage-title">Model API /predict</span>
+          </div>
+          <span class="stage-status is-ok">✓</span>
+        </div>
+        <div class="stage-detail">
+          <div class="kv"><span>Endpoint</span><code style="font-size:10px;">8001/api/v1/fall/predict</code></div>
+          <div class="kv"><span>Roundtrip</span><code>84 ms</code></div>
+          <div class="kv"><span>Status</span><span class="badge badge--normal" style="padding:1px 6px;">ok</span></div>
+          <div class="kv"><span>Failure reason</span><code>—</code></div>
+        </div>
+      </div>
+
+      <div class="pipeline-stage is-ok">
+        <div class="stage-head">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="stage-num">4</span>
+            <span class="stage-title">Verdict + countdown</span>
+          </div>
+          <span class="stage-status is-pending">⏱</span>
+        </div>
+        <div class="stage-detail">
+          <div class="kv"><span>Label</span><span class="badge badge--critical" style="padding:1px 6px;">critical_fall</span></div>
+          <div class="kv"><span>Probability</span><code>87%</code></div>
+          <div class="kv"><span>Countdown</span><code>18 / 30s · cho phép huỷ</code></div>
+          <div class="kv"><span>FSM state</span><span class="badge badge--warning" style="padding:1px 6px;">fall_countdown</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SECTION C — CỬA SỔ 50 MẪU (motion window detail)
+       ============================================================ -->
+  <div class="section-label">C · Cửa sổ chuyển động 50 mẫu (đúng cửa sổ AI đã chấm)</div>
+
+  <style>
+    .motion-hero {
+      position: relative;
+      height: 180px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+    .motion-hero svg { width: 100%; height: 100%; display: block; }
+    .motion-meta {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      margin-bottom: 12px;
+    }
+    .motion-meta .cell { display: grid; gap: 2px; }
+    .motion-meta .cell span { font-size: 11px; color: var(--text-muted); }
+    .motion-meta .cell strong { font-family: var(--font-mono); font-size: 14px; color: var(--text-primary); }
+    .motion-meta .cell.is-critical strong { color: var(--severity-critical); }
+    .motion-legend {
+      display: flex; gap: 14px; flex-wrap: wrap;
+      padding: 8px 12px; font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .motion-legend .item {
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .motion-legend .swatch {
+      width: 14px; height: 3px; border-radius: 2px;
+    }
+
+    .impact-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      margin-top: 12px;
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+    .impact-split .pane { padding: 12px 14px; }
+    .impact-split .pane.pre { background: rgba(34,197,94,0.04); border-right: 1px solid var(--border-default); }
+    .impact-split .pane.post { background: rgba(239,68,68,0.05); }
+    .impact-split .pane h4 {
+      margin: 0 0 8px;
+      font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .impact-split .pane.pre h4 { color: var(--severity-normal); }
+    .impact-split .pane.post h4 { color: var(--severity-critical); }
+    .impact-split .row {
+      display: grid; grid-template-columns: 1fr auto;
+      padding: 4px 0; font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .impact-split .row code { color: var(--text-primary); }
+
+    .subtraces {
+      margin-top: 14px;
+      display: grid;
+      gap: 8px;
+    }
+    .subtrace-row {
+      display: grid;
+      grid-template-columns: 160px 1fr 80px;
+      gap: 10px;
+      align-items: center;
+      padding: 6px 10px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+    }
+    .subtrace-row .lbl { font-size: 12px; color: var(--text-secondary); }
+    .subtrace-row .lbl small { display: block; color: var(--text-muted); font-size: 10px; }
+    .subtrace-row svg { width: 100%; height: 28px; display: block; }
+    .subtrace-row .val { font-family: var(--font-mono); font-size: 11px; text-align: right; color: var(--text-secondary); }
+    .env-lane {
+      display: flex; height: 16px; border-radius: var(--radius-sm); overflow: hidden;
+      border: 1px solid var(--border-default);
+    }
+    .env-lane .seg { flex: 1; }
+    .env-lane .seg.zero { background: rgba(107,114,128,0.18); }
+    .env-lane .seg.one { background: var(--severity-warning); }
+  </style>
+
+  <div class="card">
+    <div class="card-head">
+      <strong>Cửa sổ chuyển động · accel magnitude với threshold + peak marker</strong>
+      <div style="display:flex; gap:6px;">
+        <span class="badge badge--info">variant: confirmed</span>
+        <span class="badge badge--normal">cùng cửa sổ AI đã chấm</span>
+      </div>
+    </div>
+    <div class="card-body">
+
+      <!-- Metrics 4 cells -->
+      <div class="motion-meta">
+        <div class="cell is-critical"><span>Đỉnh |a|</span><strong>4.21 m/s²·g</strong></div>
+        <div class="cell"><span>Trung bình |a|</span><strong>1.84 g</strong></div>
+        <div class="cell"><span>Peak ở mẫu</span><strong>22 / 50</strong></div>
+        <div class="cell"><span>Tần số mẫu</span><strong>50 Hz</strong></div>
+      </div>
+
+      <!-- Hero accelMag chart with threshold lines + peak marker -->
+      <div class="motion-hero" aria-label="Gia tốc tổng |a| theo thời gian, với 2 ngưỡng pre-trigger và đường peak">
+        <svg viewBox="0 0 600 180" preserveAspectRatio="none">
+          <!-- Pre-impact background (samples 0..22) -->
+          <rect x="0" y="0" width="264" height="180" fill="rgba(34,197,94,0.05)" />
+          <!-- Post-impact background (samples 22..50) -->
+          <rect x="264" y="0" width="336" height="180" fill="rgba(239,68,68,0.06)" />
+
+          <!-- Hard threshold 3.0g (red dashed) -->
+          <line x1="0" y1="72" x2="600" y2="72" stroke="#ef4444" stroke-width="1" stroke-dasharray="6 4" opacity="0.7" />
+          <text x="6" y="68" fill="#ef4444" font-size="10" font-family="JetBrains Mono">hard 3.0g</text>
+
+          <!-- Soft threshold 2.5g (amber dashed) -->
+          <line x1="0" y1="96" x2="600" y2="96" stroke="#f59e0b" stroke-width="1" stroke-dasharray="6 4" opacity="0.7" />
+          <text x="6" y="92" fill="#f59e0b" font-size="10" font-family="JetBrains Mono">soft 2.5g</text>
+
+          <!-- Peak vertical line at sample 22 (x = 22/50 * 600 = 264) -->
+          <line x1="264" y1="0" x2="264" y2="180" stroke="#06b6d4" stroke-width="1" stroke-dasharray="3 3" opacity="0.6" />
+          <text x="270" y="18" fill="#06b6d4" font-size="10" font-family="JetBrains Mono">impact ở mẫu 22</text>
+
+          <!-- accelMag polyline (50 samples, normalized to chart height) -->
+          <polyline
+            fill="none" stroke="#06b6d4" stroke-width="2"
+            points="0,156 12,154 24,150 36,148 48,150 60,152 72,148 84,144 96,142 108,140 120,138 132,134 144,128 156,118 168,108 180,96 192,82 204,68 216,52 228,36 240,22 252,12 264,18 276,40 288,68 300,96 312,118 324,134 336,144 348,150 360,152 372,150 384,148 396,148 408,150 420,152 432,154 444,154 456,156 468,158 480,158 492,158 504,158 516,158 528,158 540,158 552,158 564,158 576,158 588,158 600,158" />
+
+          <!-- Peak dot -->
+          <circle cx="252" cy="12" r="4" fill="#ef4444" stroke="#fff" stroke-width="1" />
+        </svg>
+      </div>
+
+      <!-- Legend -->
+      <div class="motion-legend">
+        <span class="item"><span class="swatch" style="background:#06b6d4;"></span>|a| accel magnitude</span>
+        <span class="item"><span class="swatch" style="background:#ef4444;"></span>ngưỡng hard 3.0g</span>
+        <span class="item"><span class="swatch" style="background:#f59e0b;"></span>ngưỡng soft 2.5g</span>
+        <span class="item"><span class="swatch" style="background:rgba(34,197,94,0.4);"></span>vùng pre-impact (mẫu 0-21)</span>
+        <span class="item"><span class="swatch" style="background:rgba(239,68,68,0.4);"></span>vùng post-impact (mẫu 22-49)</span>
+      </div>
+
+      <!-- Pre/post impact metrics -->
+      <div class="impact-split">
+        <div class="pane pre">
+          <h4>Pre-impact · mẫu 0–21</h4>
+          <div class="row"><span>Mean |a|</span><code>1.21 g</code></div>
+          <div class="row"><span>Peak |a|</span><code>1.94 g</code></div>
+          <div class="row"><span>Gyro mean</span><code>42 dps</code></div>
+          <div class="row"><span>Tư thế</span><code>đứng (pitch ≈ 5°)</code></div>
+        </div>
+        <div class="pane post">
+          <h4>Post-impact · mẫu 22–49</h4>
+          <div class="row"><span>Mean |a|</span><code>2.18 g</code></div>
+          <div class="row"><span>Std |a|</span><code>0.74 g</code></div>
+          <div class="row"><span>Low-motion duration</span><code>1.4s · ngưỡng 1.0s</code></div>
+          <div class="row"><span>Tư thế</span><code>nằm (pitch ≈ 78°)</code></div>
+        </div>
+      </div>
+
+      <!-- 3 sub-traces (gyro, orientation, environment) -->
+      <div class="subtraces">
+        <div class="subtrace-row">
+          <div class="lbl">Gyro magnitude<small>derive từ gx/gy/gz</small></div>
+          <svg viewBox="0 0 600 28" preserveAspectRatio="none">
+            <polyline fill="none" stroke="#f59e0b" stroke-width="1.5"
+              points="0,24 24,22 48,22 72,20 96,18 120,16 144,14 168,12 192,10 216,8 240,4 252,2 264,4 276,8 300,14 324,18 348,22 372,24 396,24 420,24 444,24 468,24 492,24 516,24 540,24 564,24 588,24 600,24" />
+          </svg>
+          <div class="val">peak 312 dps</div>
+        </div>
+
+        <div class="subtrace-row">
+          <div class="lbl">Orientation pitch<small>derive từ accel gravity</small></div>
+          <svg viewBox="0 0 600 28" preserveAspectRatio="none">
+            <polyline fill="none" stroke="#94a3b8" stroke-width="1.5"
+              points="0,22 60,22 120,22 180,20 240,16 264,8 288,6 336,5 384,4 432,4 480,4 528,4 576,4 600,4" />
+          </svg>
+          <div class="val">5° → 78°</div>
+        </div>
+
+        <div class="subtrace-row">
+          <div class="lbl">Environment binary<small>floor_vibration · pressure_mat</small></div>
+          <div class="env-lane" aria-label="Binary lane: 0 trước peak, 1 từ peak trở đi">
+            <div class="seg zero" style="flex:22"></div>
+            <div class="seg one" style="flex:28"></div>
+          </div>
+          <div class="val">0 → 1 ở mẫu 22</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SECTION D — BIẾN THIÊN SINH HIỆU SAU TÉ NGÃ
+       ============================================================ -->
+  <div class="section-label">D · Biến thiên sinh hiệu sau té ngã (±60s quanh fall event)</div>
+
+  <style>
+    .vitals-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .vital-card {
+      padding: 12px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      display: grid; gap: 8px;
+    }
+    .vital-card .head {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .vital-card .head strong {
+      font-size: 12px; color: var(--text-secondary);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .vital-card .now {
+      font-family: var(--font-mono);
+      font-size: 22px; font-weight: 700;
+      color: var(--text-primary);
+    }
+    .vital-card .now.is-up { color: var(--severity-critical); }
+    .vital-card .now.is-down { color: var(--severity-warning); }
+    .vital-card .now small {
+      font-size: 11px; font-weight: 500; color: var(--text-muted);
+      margin-left: 4px;
+    }
+    .vital-card .delta {
+      font-size: 11px; font-family: var(--font-mono);
+      padding: 2px 6px; border-radius: var(--radius-sm);
+    }
+    .vital-card .delta.up { background: var(--severity-critical-bg); color: var(--severity-critical); }
+    .vital-card .delta.down { background: var(--severity-warning-bg); color: var(--severity-warning); }
+    .vital-card .delta.flat { background: var(--severity-offline-bg); color: var(--severity-offline); }
+    .vital-card svg { width: 100%; height: 50px; display: block; }
+    .vital-card .baseline {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 6px; padding-top: 6px;
+      border-top: 1px dashed var(--border-default);
+      font-size: 11px; color: var(--text-muted);
+    }
+    .vital-card .baseline strong {
+      display: block; font-family: var(--font-mono);
+      font-size: 12px; color: var(--text-secondary);
+      font-weight: 600;
+    }
+  </style>
+
+  <div class="card">
+    <div class="card-head">
+      <strong>Sinh hiệu trước/sau fall event · cửa sổ ±60s</strong>
+      <span class="muted" style="font-size:11px;">marker dọc đỏ tại <code>lastFallEventAt = 16:54:32</code></span>
+    </div>
+    <div class="card-body">
+      <div class="vitals-grid">
+
+        <!-- HR -->
+        <div class="vital-card">
+          <div class="head">
+            <strong>Nhịp tim</strong>
+            <span class="delta up">+47 bpm</span>
+          </div>
+          <div class="now is-up">125<small>bpm</small></div>
+          <svg viewBox="0 0 200 50" preserveAspectRatio="none">
+            <line x1="100" y1="0" x2="100" y2="50" stroke="#ef4444" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
+            <polyline fill="none" stroke="#06b6d4" stroke-width="1.5"
+              points="0,30 20,32 40,30 60,28 80,30 100,28 110,12 120,8 140,10 160,14 180,18 200,18" />
+          </svg>
+          <div class="baseline">
+            <div>Pre 30s<strong>78 bpm</strong></div>
+            <div>Post 30s<strong>122 bpm</strong></div>
+          </div>
+        </div>
+
+        <!-- SpO2 -->
+        <div class="vital-card">
+          <div class="head">
+            <strong>SpO₂</strong>
+            <span class="delta down">-4%</span>
+          </div>
+          <div class="now is-down">93<small>%</small></div>
+          <svg viewBox="0 0 200 50" preserveAspectRatio="none">
+            <line x1="100" y1="0" x2="100" y2="50" stroke="#ef4444" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
+            <polyline fill="none" stroke="#06b6d4" stroke-width="1.5"
+              points="0,8 20,8 40,10 60,8 80,10 100,12 110,28 120,32 140,34 160,32 180,32 200,30" />
+          </svg>
+          <div class="baseline">
+            <div>Pre 30s<strong>97%</strong></div>
+            <div>Post 30s<strong>93%</strong></div>
+          </div>
+        </div>
+
+        <!-- BP -->
+        <div class="vital-card">
+          <div class="head">
+            <strong>Huyết áp tâm thu</strong>
+            <span class="delta up">+22 mmHg</span>
+          </div>
+          <div class="now is-up">142<small>mmHg</small></div>
+          <svg viewBox="0 0 200 50" preserveAspectRatio="none">
+            <line x1="100" y1="0" x2="100" y2="50" stroke="#ef4444" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
+            <polyline fill="none" stroke="#06b6d4" stroke-width="1.5"
+              points="0,32 20,30 40,32 60,30 80,32 100,30 110,18 120,12 140,14 160,16 180,18 200,18" />
+          </svg>
+          <div class="baseline">
+            <div>Pre 30s<strong>120 mmHg</strong></div>
+            <div>Post 30s<strong>140 mmHg</strong></div>
+          </div>
+        </div>
+
+        <!-- RR -->
+        <div class="vital-card">
+          <div class="head">
+            <strong>Nhịp thở</strong>
+            <span class="delta up">+9 br/m</span>
+          </div>
+          <div class="now is-up">25<small>br/m</small></div>
+          <svg viewBox="0 0 200 50" preserveAspectRatio="none">
+            <line x1="100" y1="0" x2="100" y2="50" stroke="#ef4444" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
+            <polyline fill="none" stroke="#06b6d4" stroke-width="1.5"
+              points="0,32 20,30 40,32 60,30 80,30 100,28 110,16 120,12 140,12 160,14 180,16 200,16" />
+          </svg>
+          <div class="baseline">
+            <div>Pre 30s<strong>16 br/m</strong></div>
+            <div>Post 30s<strong>24 br/m</strong></div>
+          </div>
+        </div>
+
+      </div>
+
+      <div style="margin-top: 12px; padding: 10px 12px; background: var(--severity-warning-bg); border: 1px solid var(--severity-warning-border); border-radius: var(--radius-md); font-size: 12px; color: var(--text-secondary); line-height: 1.55;">
+        <strong style="color: var(--severity-warning);">Cảnh báo biến thiên:</strong>
+        HR delta <strong>+47 bpm</strong> (&gt; ngưỡng +20) · SpO₂ delta <strong>-4%</strong> (&gt; ngưỡng -3%) · BP_sys delta <strong>+22 mmHg</strong>.
+        Pattern phù hợp với phản ứng giao cảm sau té ngã + có thể có ép ngực do tư thế nằm sấp.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SECTION E — AI VERDICT (band + probability + SHAP + countdown)
+       ============================================================ -->
+  <div class="section-label">E · AI verdict + countdown SOS</div>
+
+  <style>
+    .verdict-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+      gap: 14px;
+    }
+    .verdict-block {
+      padding: 14px;
+      background: var(--severity-critical-bg);
+      border: 1px solid var(--severity-critical-border);
+      border-radius: var(--radius-md);
+      display: grid; gap: 12px;
+    }
+    .verdict-head {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .verdict-label {
+      font-size: 16px; font-weight: 700;
+      color: var(--severity-critical);
+      display: inline-flex; align-items: center; gap: 8px;
+    }
+    .verdict-label::before {
+      content: "▲"; font-size: 14px;
+    }
+    .verdict-meters {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    }
+    .meter { display: grid; gap: 4px; }
+    .meter .lbl { font-size: 11px; color: var(--text-muted); }
+    .meter .bar {
+      height: 8px; background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-full); overflow: hidden;
+    }
+    .meter .fill { height: 100%; }
+    .meter .fill.critical { background: var(--severity-critical); }
+    .meter .fill.normal { background: var(--accent-cyan); }
+    .meter .val {
+      font-family: var(--font-mono); font-size: 14px; font-weight: 700;
+    }
+    .meter .val.critical { color: var(--severity-critical); }
+
+    .shap-list { display: grid; gap: 6px; }
+    .shap-list .head {
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+    .shap-row {
+      display: grid; grid-template-columns: 1fr auto;
+      gap: 8px; align-items: center;
+      padding: 6px 10px;
+      background: rgba(255,255,255,0.025);
+      border-radius: var(--radius-sm);
+      border-left: 3px solid var(--severity-critical);
+    }
+    .shap-row.warning { border-left-color: var(--severity-warning); }
+    .shap-row .text { font-size: 12px; }
+    .shap-row .text small { display: block; color: var(--text-muted); font-size: 10px; font-family: var(--font-mono); }
+    .shap-row .contribution {
+      font-family: var(--font-mono); font-size: 12px;
+      font-weight: 600;
+    }
+    .shap-row .contribution.positive { color: var(--severity-critical); }
+    .shap-row .contribution.warning { color: var(--severity-warning); }
+
+    .countdown-block {
+      padding: 14px;
+      background: var(--severity-warning-bg);
+      border: 1px solid var(--severity-warning-border);
+      border-radius: var(--radius-md);
+      display: grid; gap: 10px;
+    }
+    .countdown-head {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .countdown-bar {
+      height: 10px; background: var(--bg-base);
+      border-radius: var(--radius-full); overflow: hidden;
+    }
+    .countdown-fill {
+      height: 100%; background: var(--severity-warning);
+      width: 60%;
+      transition: width 400ms linear;
+    }
+    .why-this-verdict {
+      padding: 10px 12px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      font-size: 12px; line-height: 1.55;
+      color: var(--text-secondary);
+    }
+    .why-this-verdict strong { color: var(--text-primary); }
+
+    .failure-banner {
+      padding: 10px 12px;
+      background: var(--severity-offline-bg);
+      border: 1px dashed rgba(107,114,128,0.4);
+      border-radius: var(--radius-md);
+      font-size: 12px; color: var(--text-secondary);
+      display: none; /* show when failureReason !== "ok" */
+    }
+    .failure-banner.is-shown { display: block; }
+  </style>
+
+  <div class="verdict-grid">
+    <div class="card">
+      <div class="card-head">
+        <strong>Verdict từ Model API (port 8001)</strong>
+        <span class="badge badge--normal badge--dot">live · 84ms roundtrip</span>
+      </div>
+      <div class="card-body" style="display: grid; gap: 12px;">
+
+        <div class="verdict-block">
+          <div class="verdict-head">
+            <span class="verdict-label">critical_fall</span>
+            <span class="badge badge--critical">critical band</span>
+          </div>
+
+          <div class="verdict-meters">
+            <div class="meter">
+              <span class="lbl">Xác suất té ngã</span>
+              <div class="bar"><div class="fill critical" style="width: 87%;"></div></div>
+              <span class="val critical">87%</span>
+            </div>
+            <div class="meter">
+              <span class="lbl">Độ tin cậy model</span>
+              <div class="bar"><div class="fill critical" style="width: 91%;"></div></div>
+              <span class="val critical">91%</span>
+            </div>
+          </div>
+
+          <p style="margin: 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5;">
+            Va chạm mạnh + tư thế nằm + bất động sau đó. Mô hình rất tự tin đây là té ngã thật cần can thiệp ngay.
+          </p>
+
+          <div class="shap-list">
+            <div class="head">3 đặc trưng đóng góp lớn nhất (SHAP)</div>
+            <div class="shap-row">
+              <div class="text">
+                Tiếp xúc với mặt sàn cao
+                <small>floor_vibration_mean</small>
+              </div>
+              <span class="contribution positive">+0.524</span>
+            </div>
+            <div class="shap-row">
+              <div class="text">
+                Bất động sau va chạm
+                <small>post_impact_accel_std</small>
+              </div>
+              <span class="contribution positive">+0.418</span>
+            </div>
+            <div class="shap-row warning">
+              <div class="text">
+                Đỉnh gia tốc vượt ngưỡng
+                <small>accel_mag_max</small>
+              </div>
+              <span class="contribution warning">+0.382</span>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--text-muted);">
+            <span>Predicted at: <code style="color: var(--text-secondary);">16:54:32.084</code></span>
+            <span class="badge badge--warning">requires attention</span>
+            <span class="badge badge--critical">high priority alert</span>
+          </div>
+        </div>
+
+        <div class="why-this-verdict">
+          <strong>Tại sao verdict này?</strong>
+          AI rơi vào band <em>critical</em> vì xác suất ≥ 75% (ngưỡng band: normal &lt; 50% · warning 50-75% · critical ≥ 75%).
+          3 features đóng góp dương lớn nhất cho thấy có tiếp xúc sàn + bất động + đỉnh gia tốc đồng thời —
+          pattern điển hình của té ngã có va chạm thực sự.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <strong>Countdown SOS · BE FSM <span class="mono" style="color: var(--severity-warning);">fall_countdown</span></strong>
+        <span class="muted" style="font-size: 11px;">Bắt đầu lúc 16:54:32</span>
+      </div>
+      <div class="card-body" style="display: grid; gap: 12px;">
+
+        <div class="countdown-block">
+          <div class="countdown-head">
+            <strong style="font-size: 13px;">SOS countdown đang chạy</strong>
+            <span style="font-family: var(--font-mono); font-size: 14px; font-weight: 700; color: var(--severity-warning);">
+              18 / 30s
+            </span>
+          </div>
+          <div class="countdown-bar"><div class="countdown-fill"></div></div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <span class="badge badge--info">cho phép huỷ</span>
+            <span class="badge badge--warning">webhook đã đẩy</span>
+          </div>
+          <button class="btn btn--danger" style="width: 100%; justify-content: center;">
+            Tôi ổn — Hủy SOS
+          </button>
+          <p style="margin: 0; font-size: 11px; color: var(--text-muted); line-height: 1.5;">
+            Nút này mô phỏng đúng UX mobile thực — operator/user có thể bấm để FSM về <code>fall_resolved</code>.
+            Variant "không phản hồi" sẽ disable nút này.
+          </p>
+        </div>
+
+        <!-- Example failure banner (hidden in default state, shown for offline mode) -->
+        <div class="failure-banner is-shown" style="display: block;">
+          <strong style="color: var(--text-secondary);">Mapping failureReason (preview cho các state offline):</strong>
+          <ul style="margin: 6px 0 0; padding-left: 18px; font-size: 11px; line-height: 1.6;">
+            <li><code>transport_error</code> → "Mất kết nối tới Model API (port 8001)"</li>
+            <li><code>model_unavailable</code> → "Model API trả unavailable, fallback rule-based"</li>
+            <li><code>validation_422</code> → "Payload sai format — mismatch schema model API"</li>
+            <li><code>insufficient_samples</code> → "Cửa sổ &lt; 50 mẫu, chưa đủ để chấm AI"</li>
+            <li><code>device_unbound</code> → "Thiết bị giả lập chưa bound DB device id"</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SECTION F — LỊCH SỬ & SO SÁNH (events timeline)
+       ============================================================ -->
+  <div class="section-label">F · Lịch sử sự kiện té ngã (group theo session run)</div>
+
+  <style>
+    .timeline-group {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    .timeline-group:last-child { margin-bottom: 0; }
+    .timeline-group-head {
+      padding: 10px 14px;
+      background: var(--bg-base);
+      border-bottom: 1px solid var(--border-default);
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px;
+    }
+    .timeline-group-head strong { color: var(--text-primary); }
+    .timeline-group-head .meta { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+
+    .timeline-row {
+      padding: 10px 14px;
+      display: grid;
+      grid-template-columns: 22px 90px 140px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      border-bottom: 1px solid var(--border-default);
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    .timeline-row:last-child { border-bottom: none; }
+    .timeline-row:hover { background: var(--bg-hover); }
+    .timeline-row .check input { accent-color: var(--accent-cyan); cursor: pointer; }
+    .timeline-row .ts { font-family: var(--font-mono); color: var(--text-muted); font-size: 11px; }
+    .timeline-row .type { font-weight: 600; }
+    .timeline-row .type.fall { color: var(--severity-critical); }
+    .timeline-row .type.cancel { color: var(--severity-normal); }
+    .timeline-row .meta { color: var(--text-secondary); }
+    .timeline-row .meta code { color: var(--text-primary); }
+    .timeline-row .badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+    .timeline-expanded {
+      padding: 12px 14px;
+      background: var(--bg-base);
+      border-bottom: 1px solid var(--border-default);
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .timeline-expanded .pane h5 {
+      margin: 0 0 6px;
+      font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+    .timeline-expanded .pane .row {
+      display: grid; grid-template-columns: 1fr auto;
+      padding: 2px 0; font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .timeline-expanded .pane .row code { color: var(--text-primary); }
+    .timeline-mini-chart {
+      width: 100%; height: 40px; display: block;
+      background: var(--bg-elevated); border-radius: var(--radius-sm);
+    }
+
+    .compare-bar {
+      padding: 10px 14px;
+      background: var(--accent-cyan-bg);
+      border: 1px solid var(--accent-cyan-border);
+      border-radius: var(--radius-md);
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+  </style>
+
+  <div class="card">
+    <div class="card-head">
+      <strong>Sự kiện gần đây (8) · checkbox 2 events để so sánh</strong>
+      <span class="muted" style="font-size: 11px;">BE-recorded · không invent</span>
+    </div>
+    <div class="card-body">
+
+      <div class="compare-bar">
+        <span style="color: var(--text-secondary);">
+          <strong style="color: var(--accent-cyan);">2 events đã chọn</strong> · sẵn sàng so sánh side-by-side
+        </span>
+        <button class="btn btn--primary btn--sm">So sánh 2 events →</button>
+      </div>
+
+      <div class="timeline-group">
+        <div class="timeline-group-head">
+          <strong>Session đang chạy · session-7f3a · device SW-001</strong>
+          <span class="meta">started 14:40:12 · 4 events</span>
+        </div>
+
+        <div class="timeline-row" style="background: rgba(6,182,212,0.04);">
+          <span class="check"><input type="checkbox" checked aria-label="Select event"/></span>
+          <span class="ts">16:54:32</span>
+          <span class="type fall">▲ Fall detected</span>
+          <span class="meta">variant <code>confirmed</code></span>
+          <div class="badges">
+            <span class="badge badge--critical">AI: critical_fall · 87%</span>
+          </div>
+        </div>
+        <div class="timeline-expanded">
+          <div class="pane">
+            <h5>AI verdict snapshot</h5>
+            <div class="row"><span>Label</span><code>critical_fall</code></div>
+            <div class="row"><span>Probability</span><code>87%</code></div>
+            <div class="row"><span>Confidence</span><code>91%</code></div>
+            <div class="row"><span>Top feature</span><code>floor_vibration_mean</code></div>
+          </div>
+          <div class="pane">
+            <h5>Motion peak</h5>
+            <svg class="timeline-mini-chart" viewBox="0 0 200 40" preserveAspectRatio="none">
+              <polyline fill="none" stroke="#06b6d4" stroke-width="1.5"
+                points="0,32 30,30 60,28 80,24 100,4 120,16 140,28 160,32 180,32 200,32"/>
+            </svg>
+            <div class="row"><span>Peak |a|</span><code>4.21g</code></div>
+            <div class="row"><span>Peak ở mẫu</span><code>22 / 50</code></div>
+          </div>
+          <div class="pane">
+            <h5>Vitals delta</h5>
+            <div class="row"><span>HR</span><code style="color: var(--severity-critical);">+47 bpm</code></div>
+            <div class="row"><span>SpO₂</span><code style="color: var(--severity-warning);">-4%</code></div>
+            <div class="row"><span>BP_sys</span><code style="color: var(--severity-critical);">+22</code></div>
+            <div class="row"><span>RR</span><code style="color: var(--severity-critical);">+9</code></div>
+          </div>
+        </div>
+
+        <div class="timeline-row">
+          <span class="check"><input type="checkbox" checked aria-label="Select event"/></span>
+          <span class="ts">15:22:08</span>
+          <span class="type fall">▲ Fall detected</span>
+          <span class="meta">variant <code>fall_brief</code></span>
+          <div class="badges">
+            <span class="badge badge--warning">AI: possible_fall · 42%</span>
+          </div>
+        </div>
+        <div class="timeline-row">
+          <span class="check"><input type="checkbox" aria-label="Select event"/></span>
+          <span class="ts">15:22:18</span>
+          <span class="type cancel">● SOS cancelled</span>
+          <span class="meta">auto-resolve sau 10s</span>
+          <div class="badges">
+            <span class="badge badge--normal">resolved</span>
+          </div>
+        </div>
+        <div class="timeline-row">
+          <span class="check"><input type="checkbox" aria-label="Select event"/></span>
+          <span class="ts">14:51:44</span>
+          <span class="type fall">▲ Fall detected</span>
+          <span class="meta">variant <code>false_fall</code></span>
+          <div class="badges">
+            <span class="badge badge--normal">AI: normal · 12%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline-group">
+        <div class="timeline-group-head">
+          <strong>Session trước · session-2c8b · device SW-001</strong>
+          <span class="meta">10:12:30 → 11:48:55 · 3 events</span>
+        </div>
+
+        <div class="timeline-row">
+          <span class="check"><input type="checkbox" aria-label="Select event"/></span>
+          <span class="ts">11:48:21</span>
+          <span class="type fall">▲ Fall detected</span>
+          <span class="meta">variant <code>fall_no_response</code></span>
+          <div class="badges">
+            <span class="badge badge--critical">AI: critical_fall · 92%</span>
+            <span class="badge badge--offline">no_window</span>
+          </div>
+        </div>
+        <div class="timeline-row">
+          <span class="check"><input type="checkbox" aria-label="Select event"/></span>
+          <span class="ts">10:45:02</span>
+          <span class="type fall">▲ Fall detected</span>
+          <span class="meta">variant <code>fall_from_bed</code></span>
+          <div class="badges">
+            <span class="badge badge--warning">AI: likely_fall · 64%</span>
+          </div>
+        </div>
+        <div class="timeline-row">
+          <span class="check"><input type="checkbox" aria-label="Select event"/></span>
+          <span class="ts">10:45:38</span>
+          <span class="type cancel">● SOS cancelled</span>
+          <span class="meta">user pressed "Tôi ổn"</span>
+          <div class="badges">
+            <span class="badge badge--normal">resolved</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div style="margin-top: 12px; padding: 12px 16px; background: var(--bg-elevated); border: 1px dashed var(--border-default); border-radius: var(--radius-md); font-size: 12px; color: var(--text-muted); line-height: 1.55;">
+    <strong style="color: var(--text-secondary);">Ghi chú review:</strong>
+    Mockup này dùng để anh review layout và information density. Mọi số liệu (HR 78→125, SpO₂ 97→93, AI prob 87%, peak 4.21g) là MOCK.
+    Khi code React thật:
+    <ul style="margin: 6px 0 0; padding-left: 18px;">
+      <li>Section A · bảng kịch bản: data từ <code>FALL_VARIANT_CATALOGUE</code> mở rộng</li>
+      <li>Section B · pipeline: stage 2 cần BE thêm <code>preTriggerResult</code> (Phase 2), stages khác derive từ <code>fallState</code></li>
+      <li>Section C · motion: peak index derive FE từ <code>accelMag.indexOf(Math.max())</code>, env binary derive từ pattern</li>
+      <li>Section D · vitals: query telemetry endpoint với window ±60s quanh <code>lastFallEventAt</code></li>
+      <li>Section E · verdict: data từ <code>fallState.aiPrediction</code>, failureReason mapping client-side</li>
+      <li>Section F · timeline: query <code>/events/recent</code> rồi group by sessionId FE-side</li>
+    </ul>
+  </div>
+
+</div>
+
+</body>
+</html>
+
