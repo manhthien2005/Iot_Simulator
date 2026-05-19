@@ -325,6 +325,38 @@ class CountdownPolicy(BaseModel):
     allowsCancel: bool = True
 
 
+class PreTriggerEvidence(BaseModel):
+    """Pre-trigger stage outcome captured during ``inject_event`` (Phase 2).
+
+    Mirrors :meth:`pre_model_trigger.fall_pre_trigger.FallPreTrigger.evaluate`
+    but exposes the actual numbers + reason codes the FE Fall Lab pipeline
+    strip displays in stage 2 — instead of the FE re-deriving from the
+    motion window peak (which would diverge from BE truth as soon as we
+    add posture / low-motion soft-trigger logic).
+
+    ``triggerType``:
+        * ``hard`` — `IMPACT_PEAK_3G` fired (accel_mag_peak_g >= 3.0g).
+        * ``soft`` — one of the soft trigger combinations matched
+          (e.g. `IMPACT_PLUS_POSTURE_CHANGE`,
+          `IMPACT_PLUS_LOW_MOTION`, `GYRO_PLUS_POSTURE_CHANGE`).
+        * ``none`` — neither hard nor soft criteria met; AI was still
+          called but the BE did not flag pre-trigger evidence.
+
+    Numeric fields are nullable because the inject-time motion window
+    may not always include every metric (e.g. ``post_impact_low_motion``
+    is generator-derived; ``posture_change_angle_deg`` lives in the
+    parquet metadata).  The FE should render "—" when missing.
+    """
+
+    fired: bool = False
+    triggerType: Literal["hard", "soft", "none"] = "none"
+    reasonCodes: list[str] = Field(default_factory=list)
+    accelPeakG: float | None = None
+    postureAngleDeg: float | None = None
+    lowMotionSec: float | None = None
+    gyroPeakDps: float | None = None
+
+
 class FallState(BaseModel):
     """Operator-visible fall pipeline state for one focal device.
 
@@ -352,6 +384,7 @@ class FallState(BaseModel):
     aiPrediction: AIPrediction | None = None
     motionWindowRef: MotionWindowRef | None = None
     countdownPolicy: CountdownPolicy | None = None
+    preTriggerResult: PreTriggerEvidence | None = None
 
 
 class AlertEvent(BaseModel):
