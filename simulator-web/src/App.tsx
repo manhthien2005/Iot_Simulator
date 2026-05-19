@@ -7,6 +7,7 @@ const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) =
 const DevicesPage = lazy(() => import("./pages/DevicesPage").then((module) => ({ default: module.DevicesPage })));
 const SessionRunnerPage = lazy(() => import("./pages/SessionRunnerPage").then((module) => ({ default: module.SessionRunnerPage })));
 const FallLabPage = lazy(() => import("./pages/FallLabPage").then((module) => ({ default: module.FallLabPage })));
+const SleepLabPage = lazy(() => import("./pages/SleepLabPage").then((module) => ({ default: module.SleepLabPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage").then((module) => ({ default: module.AnalyticsPage })));
 const DiagnosticsPage = lazy(() => import("./pages/DiagnosticsPage").then((module) => ({ default: module.DiagnosticsPage })));
 const VerificationPage = lazy(() => import("./pages/VerificationPage").then((module) => ({ default: module.VerificationPage })));
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="devices" element={withBoundary(<DevicesPage />)} />
         <Route path="session" element={withBoundary(<SessionRunnerPage />)} />
         <Route path="fall-lab" element={withBoundary(<FallLabPage />)} />
+        <Route path="sleep-lab" element={withBoundary(<SleepLabPage />)} />
         <Route path="analytics" element={withBoundary(<AnalyticsPage />)} />
         <Route path="diagnostics" element={withBoundary(<DiagnosticsPage />)} />
         <Route path="verification" element={withBoundary(<VerificationPage />)} />
