@@ -9,6 +9,7 @@ export const POLL_INTERVALS = {
   devices: 5_000,
   dbDevices: 5_000,
   vitals: 1_000,
+  vitalsLatest: 1_500,
   health: 15_000,
   analytics: 15_000,
   analyticsRisk: 10_000,
