@@ -1018,16 +1018,17 @@ class SimulatorRuntime:
     # ── Runtime persistence helpers (Module F.1 / F.2) ───────────────────
 
     def _sync_runtime_env_from_persistence(self) -> None:
-        """Mirror the persisted values into ``os.environ``.
+        """Mirror the persisted ``sleep_speed_factor`` into ``os.environ``.
 
-        Some legacy code paths (e.g. ``sleep_service`` reading
-        ``SIM_SLEEP_SPEED_FACTOR`` on every tick) still source values from
-        the env. Keeping env in sync with the persistence layer means a
-        single source of truth — the JSON file — drives every consumer.
+        Module H cleanup: ``SIM_TICK_INTERVAL_SECONDS`` and
+        ``SIM_PUSH_INTERVAL_SECONDS`` mirrors were dead — no consumer in
+        ``api_server/`` reads them; live values are read directly from
+        ``self._background_tick_interval`` / ``self._push_interval``.
+        Only ``sleep_service`` still reads ``SIM_SLEEP_SPEED_FACTOR`` from
+        env (it has no ``SimulatorRuntime`` handle), so that mirror stays
+        until a follow-up wires sleep_service to the runtime directly.
         """
         values = self._runtime_persistence.values
-        os.environ["SIM_TICK_INTERVAL_SECONDS"] = str(values.tick_interval_seconds)
-        os.environ["SIM_PUSH_INTERVAL_SECONDS"] = str(values.push_interval_seconds)
         os.environ["SIM_SLEEP_SPEED_FACTOR"] = str(values.sleep_speed_factor)
 
     def apply_and_persist_runtime_config(
