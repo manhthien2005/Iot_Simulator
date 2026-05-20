@@ -1,6 +1,6 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Download, Terminal } from "lucide-react";
+import { Download, Terminal, X } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LogEntry } from "../../hooks/useLogStream";
 import { Button } from "../ui/Button";
@@ -9,6 +9,8 @@ import { Card } from "../ui/Card";
 interface LogViewerProps {
   logs: LogEntry[];
   deviceNameMap?: Record<string, string>;
+  focusedDeviceId?: string | null;
+  onClearFocus?: () => void;
 }
 
 function sanitizeCsvCell(val: string): string {
@@ -16,10 +18,15 @@ function sanitizeCsvCell(val: string): string {
   return val;
 }
 
-function LogViewerInner({ logs, deviceNameMap = {} }: LogViewerProps) {
+function LogViewerInner({ logs, deviceNameMap = {}, focusedDeviceId, onClearFocus }: LogViewerProps) {
   const [device, setDevice] = useState("all");
   const [level, setLevel] = useState("WARN+");
   const parentRef = useRef<HTMLDivElement | null>(null);
+
+  // Sync external focus → internal device filter.
+  useEffect(() => {
+    if (focusedDeviceId) setDevice(focusedDeviceId);
+  }, [focusedDeviceId]);
 
   const devices = useMemo(() => ["all", ...Array.from(new Set(logs.map((log) => log.device_id)))], [logs]);
   const filtered = useMemo(() => {
@@ -69,9 +76,25 @@ function LogViewerInner({ logs, deviceNameMap = {} }: LogViewerProps) {
     <Card
       header={
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
             <Terminal size={16} />
             <strong>Trình xem log</strong>
+            {focusedDeviceId && (
+              <span style={filterPillStyle}>
+                Đang lọc: {deviceNameMap[focusedDeviceId] ?? focusedDeviceId}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDevice("all");
+                    onClearFocus?.();
+                  }}
+                  aria-label="Bỏ lọc"
+                  style={pillCloseBtnStyle}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <select value={device} onChange={(event) => setDevice(event.target.value)} style={selectStyle}>
@@ -152,4 +175,29 @@ const selectStyle: CSSProperties = {
   border: "1px solid var(--border-default)",
   borderRadius: "var(--radius-md)",
   padding: "6px 8px",
+};
+
+const filterPillStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "6px",
+  padding: "4px 6px 4px 10px",
+  borderRadius: "var(--radius-full)",
+  background: "var(--severity-info-bg)",
+  color: "var(--severity-info)",
+  fontSize: "12px",
+  border: "1px solid var(--severity-info-border)",
+};
+
+const pillCloseBtnStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  cursor: "pointer",
+  padding: "2px",
+  borderRadius: "var(--radius-full)",
+  lineHeight: 0,
 };

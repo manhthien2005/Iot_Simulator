@@ -1,48 +1,40 @@
-import { useMemo } from "react";
-import { VerificationTable } from "../components/domain/VerificationTable";
+import { useCallback, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
+import { EvidenceGrid } from "../components/domain/EvidenceGrid";
 import { LogViewer } from "../components/domain/LogViewer";
-import { LastGoodPublishCard } from "../components/domain/LastGoodPublishCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { useSessions } from "../hooks/useSessions";
 import { useAllVerifications } from "../hooks/useVerification";
 import { useLogStream } from "../hooks/useLogStream";
 import { useDevices } from "../hooks/useDevices";
-import { useSessionStore } from "../stores/sessionStore";
+import { useRelativeTime } from "../hooks/useRelativeTime";
 
 // ---------------------------------------------------------------------------
-// VerificationPage — Module E rebuild as the "Trung tâm Bằng chứng".
+// VerificationPage — "Trung tâm Bằng chứng" rebuild.
 //
 // Layout:
-//   1. Page header (truthful copy + running-session count line)
-//   2. <VerificationTable/>           — one card per running session/device
-//   3. <LastGoodPublishCard/>         — evidence for the active/first session
-//   4. <LogViewer/>                   — live log stream (active session WS)
+//   1. PageHeader + LivenessSummary (replaces session-id headerLine).
+//   2. <EvidenceGrid/> — one card per device with liveness, pipeline, log strip.
+//   3. <LogViewer/>   — full-stream log viewer; auto-filters by deviceId when
+//                       a card focuses logs.
 // ---------------------------------------------------------------------------
 
-export function VerificationPage() {
-  const { activeSessionId } = useSessionStore();
-  const { data: sessions = [], refetch: refetchSessions } = useSessions();
+const LIVENESS_OK_MS = 10_000;
+const LIVENESS_WARN_MS = 60_000;
 
-  const runningSessions = useMemo(
-    () => sessions.filter((s) => s.status === "running"),
+export function VerificationPage() {
+  const { data: sessions = [], refetch: refetchSessions, dataUpdatedAt } = useSessions();
+
+  const runningIds = useMemo(
+    () => sessions.filter((s) => s.status === "running").map((s) => s.id),
     [sessions],
   );
-  const runningIds = useMemo(
-    () => runningSessions.map((s) => s.id),
-    [runningSessions],
-  );
 
-  const activeSession = useMemo(
-    () =>
-      sessions.find((s) => s.id === activeSessionId && s.status === "running") ??
-      runningSessions[0] ??
-      null,
-    [activeSessionId, sessions, runningSessions],
-  );
-
-  const { data: allRows = [], refetch } = useAllVerifications(runningIds);
+  const { data: rows = [], refetch } = useAllVerifications(runningIds);
   const { data: devices = [] } = useDevices();
   const { logs } = useLogStream(runningIds);
+
+  const [focusedDeviceId, setFocusedDeviceId] = useState<string | null>(null);
 
   const deviceNameMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -50,63 +42,121 @@ export function VerificationPage() {
     return map;
   }, [devices]);
 
-  const activeResult = useMemo(
-    () => allRows.find((r) => r.sessionId === activeSession?.id) ?? allRows[0] ?? null,
-    [allRows, activeSession],
-  );
-
-  function handleRefresh() {
+  const handleRefresh = useCallback(() => {
     refetch();
     refetchSessions();
-  }
+  }, [refetch, refetchSessions]);
 
-  const headerLine = useMemo(() => {
-    if (runningSessions.length === 0) {
-      return "Chưa có phiên đang chạy — bắt đầu một phiên để xem bằng chứng.";
-    }
-    const names = runningSessions
-      .map((s) => {
-        const devList = s.deviceIds.slice(0, 2).join(", ");
-        const extra = s.deviceIds.length > 2 ? ` +${s.deviceIds.length - 2}` : "";
-        return `[${s.id.slice(0, 8)}…] ${devList}${extra}`;
-      })
-      .join(" · ");
-    return `${runningSessions.length} phiên đang chạy — ${names}`;
-  }, [runningSessions]);
+  const handleClearFocus = useCallback(() => setFocusedDeviceId(null), []);
+
+  const liveCount = useMemo(
+    () =>
+      rows.filter((r) => isLive(r.lastGoodPublishAt ?? r.lastCheckedAt, r.status)).length,
+    [rows],
+  );
 
   return (
     <section className="page-section">
       <div>
         <PageHeader
           title="Trung tâm Bằng chứng"
-          subtitle="Tiến trình pipeline theo từng phiên, lý do lỗi, lần publish thành công gần nhất và log thời gian thực — đủ bằng chứng để báo cáo phiên mô phỏng. Trạng thái hệ thống tổng quan đã chuyển sang trang Bảng điều khiển."
+          subtitle="Mỗi thẻ là một bằng chứng đang sống của một thiết bị: liveness, pipeline xác minh, và 3 dòng log gần nhất. Trạng thái hệ thống tổng quan đã chuyển sang trang Bảng điều khiển."
         />
-        <p style={activeSessionStyle}>{headerLine}</p>
+        <LivenessSummary
+          liveCount={liveCount}
+          totalCount={rows.length}
+          updatedAt={dataUpdatedAt}
+        />
       </div>
 
-      <VerificationTable
-        rows={allRows}
-        onRefresh={handleRefresh}
+      <EvidenceGrid
+        rows={rows}
+        logs={logs}
         deviceNameMap={deviceNameMap}
+        onRefresh={handleRefresh}
+        onFocusLogs={setFocusedDeviceId}
       />
 
-      <div style={gridStyle}>
-        <LastGoodPublishCard result={activeResult} />
-        <LogViewer logs={logs} deviceNameMap={deviceNameMap} />
-      </div>
+      <LogViewer
+        logs={logs}
+        deviceNameMap={deviceNameMap}
+        focusedDeviceId={focusedDeviceId}
+        onClearFocus={handleClearFocus}
+      />
     </section>
   );
 }
 
-const activeSessionStyle = {
-  margin: "4px 0 0 0",
-  fontSize: "12px",
-  color: "var(--text-muted)",
-  fontFamily: "var(--font-mono)",
-} as const;
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-const gridStyle = {
-  display: "grid",
-  gridTemplateColumns: "minmax(280px, 1fr) minmax(0, 2fr)",
-  gap: "12px",
-} as const;
+function isLive(iso: string | null | undefined, status: string): boolean {
+  if (status === "FAILED") return false;
+  if (!iso) return false;
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return false;
+  return Date.now() - ts < LIVENESS_WARN_MS;
+}
+
+function LivenessSummary({
+  liveCount,
+  totalCount,
+  updatedAt,
+}: {
+  liveCount: number;
+  totalCount: number;
+  updatedAt: number;
+}) {
+  const updatedIso = updatedAt ? new Date(updatedAt).toISOString() : null;
+  const { label } = useRelativeTime(updatedIso, 1000);
+
+  if (totalCount === 0) {
+    return (
+      <p style={summaryStyle}>
+        Chưa có phiên đang chạy — bắt đầu một phiên để xem bằng chứng.
+      </p>
+    );
+  }
+
+  const dotClass = liveCount > 0 ? "live-dot" : undefined;
+  const dotStyle: CSSProperties = {
+    width: "8px",
+    height: "8px",
+    borderRadius: "50%",
+    background:
+      liveCount === totalCount
+        ? "var(--severity-normal)"
+        : liveCount > 0
+          ? "var(--severity-warning)"
+          : "var(--severity-critical)",
+  };
+
+  return (
+    <p style={summaryStyle}>
+      <span className={dotClass} style={dotStyle} aria-hidden />
+      <span>
+        <strong style={{ color: "var(--text-primary)" }}>
+          {liveCount}/{totalCount}
+        </strong>
+        &nbsp;thiết bị đang phát dữ liệu
+      </span>
+      <span style={{ color: "var(--text-muted)" }}>·</span>
+      <span>
+        cập nhật <code style={codeStyle}>{label}</code> trước
+      </span>
+    </p>
+  );
+}
+
+const summaryStyle: CSSProperties = {
+  margin: "8px 0 0 0",
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  fontSize: "13px",
+  color: "var(--text-secondary)",
+};
+
+const codeStyle: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  color: "var(--text-primary)",
+};
