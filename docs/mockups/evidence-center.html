@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — Trung tâm Bằng chứng</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg-base: #0a0e1a;
+    --bg-surface: #111827;
+    --bg-elevated: #1a2235;
+    --bg-hover: #1e2d4a;
+
+    --text-primary: #e2e8f0;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+
+    --severity-normal: #22c55e;
+    --severity-normal-bg: rgba(34, 197, 94, 0.10);
+    --severity-normal-border: rgba(34, 197, 94, 0.30);
+    --severity-warning: #f59e0b;
+    --severity-warning-bg: rgba(245, 158, 11, 0.10);
+    --severity-warning-border: rgba(245, 158, 11, 0.30);
+    --severity-critical: #ef4444;
+    --severity-critical-bg: rgba(239, 68, 68, 0.10);
+    --severity-critical-border: rgba(239, 68, 68, 0.30);
+    --severity-info: #3b82f6;
+    --severity-info-bg: rgba(59, 130, 246, 0.12);
+
+    --border-default: #1e2d4a;
+    --border-subtle: #253555;
+
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-full: 9999px;
+
+    --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.28);
+
+    --font-ui: "Inter", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    color: var(--text-primary);
+    background:
+      radial-gradient(ellipse at 10% 90%, rgba(6, 182, 212, 0.06) 0%, transparent 50%),
+      radial-gradient(ellipse at 90% 5%,  rgba(99, 102, 241, 0.08) 0%, transparent 50%),
+      var(--bg-base);
+    padding: 28px;
+  }
+
+  .page {
+    max-width: 1280px;
+    margin: 0 auto;
+    display: grid;
+    gap: 16px;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────── */
+  .page-header { display: grid; gap: 6px; }
+  .page-title  { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  .page-subtitle {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.55;
+    max-width: 880px;
+  }
+  .liveness-summary {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .liveness-summary strong { color: var(--text-primary); font-weight: 600; }
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--severity-normal);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+    animation: live-pulse 2s infinite;
+  }
+  @keyframes live-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+    70%  { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+  }
+  .refresh-btn {
+    margin-left: auto;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .refresh-btn:hover { color: var(--text-primary); border-color: var(--border-subtle); }
+
+  /* ── Card primitives ────────────────────────────────────────────── */
+  .card {
+    background: var(--bg-elevated);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-card);
+  }
+  .card-header {
+    padding: 14px 16px 10px 16px;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    border-bottom: 1px solid var(--border-default);
+  }
+  .card-body { padding: 14px 16px 16px 16px; }
+
+  .count-pill {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: var(--bg-base);
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+  }
+
+  /* ── Device evidence grid ───────────────────────────────────────── */
+  .evidence-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 12px;
+  }
+  @media (max-width: 800px) {
+    .evidence-grid { grid-template-columns: 1fr; }
+  }
+
+  .device-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    padding: 14px 14px 12px 14px;
+    display: grid;
+    gap: 10px;
+    transition: border-color 150ms ease;
+  }
+  .device-card:hover { border-color: var(--border-subtle); }
+  .device-card.is-warn   { border-color: var(--severity-warning-border); }
+  .device-card.is-fail   { border-color: var(--severity-critical-border); }
+
+  .device-card-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  }
+  .device-name {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--text-primary);
+  }
+  .device-meta {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* Liveness pill */
+  .liveness {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .liveness-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .liveness.ok {
+    background: var(--severity-normal-bg);
+    border-color: var(--severity-normal-border);
+    color: var(--severity-normal);
+  }
+  .liveness.ok .liveness-dot {
+    background: var(--severity-normal);
+    animation: live-pulse 2s infinite;
+  }
+  .liveness.warn {
+    background: var(--severity-warning-bg);
+    border-color: var(--severity-warning-border);
+    color: var(--severity-warning);
+  }
+  .liveness.warn .liveness-dot { background: var(--severity-warning); }
+  .liveness.fail {
+    background: var(--severity-critical-bg);
+    border-color: var(--severity-critical-border);
+    color: var(--severity-critical);
+  }
+  .liveness.fail .liveness-dot { background: var(--severity-critical); }
+
+  .liveness-since {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-left: 4px;
+  }
+
+  /* Pipeline mini */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin: 0; padding: 0; list-style: none;
+  }
+  .pipeline-stage {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 9px;
+    border-radius: var(--radius-md);
+    border: 1px solid;
+    min-width: 0;
+  }
+  .pipeline-stage.ok      { background: var(--severity-normal-bg);  border-color: var(--severity-normal-border);  color: var(--severity-normal); }
+  .pipeline-stage.pending { background: var(--bg-base);             border-color: var(--border-default);          color: var(--text-secondary); }
+  .pipeline-stage.failed  { background: var(--severity-critical-bg);border-color: var(--severity-critical-border);color: var(--severity-critical); }
+  .pipeline-stage.skipped { background: transparent;                border-color: var(--border-default);          color: var(--text-muted); }
+  .pipeline-stage-icon {
+    font-size: 11px;
+    width: 14px; height: 14px;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .pipeline-stage-label {
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Evidence log strip per card */
+  .evidence-log {
+    margin: 0; padding: 0; list-style: none;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-base);
+    overflow: hidden;
+  }
+  .evidence-log li {
+    display: grid;
+    grid-template-columns: 64px 52px 1fr;
+    gap: 8px;
+    padding: 5px 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-default);
+    line-height: 1.4;
+  }
+  .evidence-log li:last-child { border-bottom: none; }
+  .evidence-log .ts    { color: var(--text-muted); }
+  .evidence-log .lvl   { font-weight: 600; }
+  .evidence-log .lvl.INFO  { color: var(--severity-info); }
+  .evidence-log .lvl.WARN  { color: var(--severity-warning); }
+  .evidence-log .lvl.ERROR { color: var(--severity-critical); }
+  .evidence-log .msg {
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .device-card-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .device-card-foot .stat {
+    color: var(--text-secondary);
+  }
+  .device-card-foot .stat code {
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+  }
+  .focus-link {
+    color: var(--severity-info);
+    background: none; border: none;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .focus-link:hover { text-decoration: underline; }
+
+  .failure-banner {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--severity-critical);
+    background: var(--severity-critical-bg);
+    border: 1px solid var(--severity-critical-border);
+    border-radius: var(--radius-sm);
+    line-height: 1.5;
+  }
+
+  /* ── LogViewer (mock) ───────────────────────────────────────────── */
+  .logviewer-controls {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .logviewer-select {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+  .logviewer-body {
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    max-height: 320px;
+    overflow: auto;
+  }
+  .logviewer-row {
+    display: grid;
+    grid-template-columns: 110px 70px 160px 1fr;
+    gap: 8px;
+    align-items: center;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border-default);
+    color: var(--text-secondary);
+  }
+  .logviewer-row:last-child { border-bottom: none; }
+  .logviewer-row .lvl-INFO  { color: var(--severity-info); }
+  .logviewer-row .lvl-WARN  { color: var(--severity-warning); }
+  .logviewer-row .lvl-ERROR { color: var(--severity-critical); }
+  .logviewer-row .msg-cell { color: var(--text-primary); }
+
+  /* Filter pill above body when card focused */
+  .filter-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    background: var(--severity-info-bg);
+    color: var(--severity-info);
+    font-size: 12px;
+    border: 1px solid rgba(59,130,246,0.30);
+  }
+  .filter-pill button {
+    background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; line-height: 1;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── Header ─────────────────────────────────────── -->
+  <header class="page-header">
+    <h1 class="page-title">Trung tâm Bằng chứng</h1>
+    <p class="page-subtitle">
+      Mỗi thẻ là một bằng chứng đang sống của một thiết bị: liveness, pipeline xác minh, và 3 dòng log gần nhất.
+      Trạng thái hệ thống tổng quan đã chuyển sang trang Bảng điều khiển.
+    </p>
+    <div class="liveness-summary">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span><strong>2/3</strong> thiết bị đang phát dữ liệu</span>
+      <span style="color: var(--text-muted)">·</span>
+      <span>cập nhật <code style="font-family: var(--font-mono)">2s</code> trước</span>
+      <button class="refresh-btn" type="button">Kiểm tra lại</button>
+    </div>
+  </header>
+
+  <!-- ── Evidence cards ─────────────────────────────── -->
+  <section class="card">
+    <div class="card-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <strong>Bằng chứng theo thiết bị</strong>
+        <span class="count-pill">3 thiết bị</span>
+      </div>
+      <span style="font-size:11px; color: var(--text-muted)">cập nhật mỗi 2s</span>
+    </div>
+    <div class="card-body">
+      <ul class="evidence-grid" style="margin:0; padding:0; list-style:none;">
+
+        <!-- ── Card A: ok ─────────────────────────── -->
+        <li class="device-card">
+          <div class="device-card-head">
+            <div style="min-width:0">
+              <h3 class="device-name">Đồng hồ phòng 101 - A</h3>
+              <p class="device-meta">Phòng 101 · 2 giây kể từ tín hiệu cuối</p>
+            </div>
+            <span class="liveness ok" title="Đang nhận telemetry liên tục">
+              <span class="liveness-dot"></span>
+              Đang hoạt động
+              <span class="liveness-since">3s</span>
+            </span>
+          </div>
+
+          <ol class="pipeline">
+            <li class="pipeline-stage ok">       <span class="pipeline-stage-icon">✓</span><span class="pipeline-stage-label">Telemetry</span></li>
+            <li class="pipeline-stage ok">       <span class="pipeline-stage-icon">✓</span><span class="pipeline-stage-label">Risk score</span></li>
+            <li class="pipeline-stage ok">       <span class="pipeline-stage-icon">✓</span><span class="pipeline-stage-label">Alert dispatch</span></li>
+          </ol>
+
+          <ul class="evidence-log">
+            <li><span class="ts">08:23:14</span><span class="lvl INFO">INFO</span><span class="msg">vitals published · hr=78 spo2=97 latency=42ms</span></li>
+            <li><span class="ts">08:23:12</span><span class="lvl INFO">INFO</span><span class="msg">risk=0.12 (LOW) · model=guardian-v2</span></li>
+            <li><span class="ts">08:23:10</span><span class="lvl INFO">INFO</span><span class="msg">vitals published · hr=77 spo2=98 latency=39ms</span></li>
+          </ul>
+
+          <div class="device-card-foot">
+            <span class="stat">Ack <code>148/148</code> · latency <code>42 ms</code></span>
+            <button class="focus-link" type="button">Xem log đầy đủ →</button>
+          </div>
+        </li>
+
+        <!-- ── Card B: warn / delayed ─────────────── -->
+        <li class="device-card is-warn">
+          <div class="device-card-head">
+            <div style="min-width:0">
+              <h3 class="device-name">Đồng hồ phòng 102 - B</h3>
+              <p class="device-meta">Phòng 102 · 38 giây kể từ tín hiệu cuối</p>
+            </div>
+            <span class="liveness warn" title="Telemetry chậm hơn ngưỡng cho phép">
+              <span class="liveness-dot"></span>
+              Chậm cập nhật
+              <span class="liveness-since">38s</span>
+            </span>
+          </div>
+
+          <ol class="pipeline">
+            <li class="pipeline-stage ok">      <span class="pipeline-stage-icon">✓</span><span class="pipeline-stage-label">Telemetry</span></li>
+            <li class="pipeline-stage ok">      <span class="pipeline-stage-icon">✓</span><span class="pipeline-stage-label">Risk score</span></li>
+            <li class="pipeline-stage pending"> <span class="pipeline-stage-icon">⏱</span><span class="pipeline-stage-label">Alert dispatch</span></li>
+          </ol>
+
+          <ul class="evidence-log">
+            <li><span class="ts">08:22:36</span><span class="lvl WARN">WARN</span><span class="msg">publish ack chậm · 1.8s &gt; 1.0s · retry=2</span></li>
+            <li><span class="ts">08:22:34</span><span class="lvl INFO">INFO</span><span class="msg">vitals published · hr=82 spo2=96 latency=1840ms</span></li>
+            <li><span class="ts">08:22:30</span><span class="lvl INFO">INFO</span><span class="msg">risk=0.34 (LOW) · model=guardian-v2</span></li>
+          </ul>
+
+          <div class="device-card-foot">
+            <span class="stat">Ack <code>92/96</code> · latency <code>1840 ms</code></span>
+            <button class="focus-link" type="button">Xem log đầy đủ →</button>
+          </div>
+        </li>
+
+        <!-- ── Card C: failed ─────────────────────── -->
+        <li class="device-card is-fail">
+          <div class="device-card-head">
+            <div style="min-width:0">
+              <h3 class="device-name">Đồng hồ phòng 103 - C</h3>
+              <p class="device-meta">Phòng 103 · không nhận được tín hiệu trong 2 phút 14 giây</p>
+            </div>
+            <span class="liveness fail" title="Pipeline đã đứt">
+              <span class="liveness-dot"></span>
+              Mất kết nối
+              <span class="liveness-since">2m14s</span>
+            </span>
+          </div>
+
+          <ol class="pipeline">
+            <li class="pipeline-stage ok">     <span class="pipeline-stage-icon">✓</span><span class="pipeline-stage-label">Telemetry</span></li>
+            <li class="pipeline-stage failed"> <span class="pipeline-stage-icon">!</span><span class="pipeline-stage-label">Risk score</span></li>
+            <li class="pipeline-stage skipped"><span class="pipeline-stage-icon">–</span><span class="pipeline-stage-label">Alert dispatch</span></li>
+          </ol>
+
+          <ul class="evidence-log">
+            <li><span class="ts">08:21:02</span><span class="lvl ERROR">ERROR</span><span class="msg">model API timeout sau 5s · /v1/score</span></li>
+            <li><span class="ts">08:21:00</span><span class="lvl WARN">WARN</span><span class="msg">retry 3/3 thất bại</span></li>
+            <li><span class="ts">08:20:58</span><span class="lvl INFO">INFO</span><span class="msg">vitals published · hr=88 spo2=95 latency=44ms</span></li>
+          </ul>
+
+          <p class="failure-banner">
+            <strong>Nguyên nhân lỗi:</strong> Risk-model API trả 504 Gateway Timeout — pipeline đã thử lại 3 lần và dừng.
+          </p>
+
+          <div class="device-card-foot">
+            <span class="stat">Ack <code>231/240</code> · last good <code>08:20:58</code></span>
+            <button class="focus-link" type="button">Xem log đầy đủ →</button>
+          </div>
+        </li>
+
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── LogViewer (mock) ───────────────────────────── -->
+  <section class="card">
+    <div class="card-header">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <strong>Trình xem log đầy đủ</strong>
+        <span class="filter-pill">
+          Đang lọc: Đồng hồ phòng 102 - B
+          <button type="button" aria-label="Bỏ lọc">×</button>
+        </span>
+      </div>
+      <div class="logviewer-controls">
+        <select class="logviewer-select">
+          <option>Tất cả thiết bị</option>
+          <option>Đồng hồ phòng 101 - A</option>
+          <option selected>Đồng hồ phòng 102 - B</option>
+          <option>Đồng hồ phòng 103 - C</option>
+        </select>
+        <select class="logviewer-select">
+          <option selected>Cảnh báo trở lên</option>
+          <option>Tất cả mức</option>
+          <option>Lỗi</option>
+          <option>Cảnh báo</option>
+          <option>Thông tin</option>
+        </select>
+        <button class="refresh-btn" type="button">JSON</button>
+        <button class="refresh-btn" type="button">CSV</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="logviewer-body">
+        <div class="logviewer-row"><span>08:23:14</span><span class="lvl-INFO">[INFO]</span><span>Đồng hồ phòng 101 - A</span><span class="msg-cell">vitals published · hr=78 spo2=97 latency=42ms</span></div>
+        <div class="logviewer-row"><span>08:23:12</span><span class="lvl-INFO">[INFO]</span><span>Đồng hồ phòng 101 - A</span><span class="msg-cell">risk=0.12 (LOW) · model=guardian-v2</span></div>
+        <div class="logviewer-row"><span>08:22:36</span><span class="lvl-WARN">[WARN]</span><span>Đồng hồ phòng 102 - B</span><span class="msg-cell">publish ack chậm · 1.8s &gt; 1.0s · retry=2</span></div>
+        <div class="logviewer-row"><span>08:22:34</span><span class="lvl-INFO">[INFO]</span><span>Đồng hồ phòng 102 - B</span><span class="msg-cell">vitals published · hr=82 spo2=96 latency=1840ms</span></div>
+        <div class="logviewer-row"><span>08:22:30</span><span class="lvl-INFO">[INFO]</span><span>Đồng hồ phòng 102 - B</span><span class="msg-cell">risk=0.34 (LOW) · model=guardian-v2</span></div>
+        <div class="logviewer-row"><span>08:21:02</span><span class="lvl-ERROR">[ERROR]</span><span>Đồng hồ phòng 103 - C</span><span class="msg-cell">model API timeout sau 5s · /v1/score</span></div>
+        <div class="logviewer-row"><span>08:21:00</span><span class="lvl-WARN">[WARN]</span><span>Đồng hồ phòng 103 - C</span><span class="msg-cell">retry 3/3 thất bại</span></div>
+        <div class="logviewer-row"><span>08:20:58</span><span class="lvl-INFO">[INFO]</span><span>Đồng hồ phòng 103 - C</span><span class="msg-cell">vitals published · hr=88 spo2=95 latency=44ms</span></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
