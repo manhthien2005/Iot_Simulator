@@ -4,7 +4,7 @@ from datetime import date as Date, datetime as DateTime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 DeviceStateValue = Literal[
@@ -549,6 +549,24 @@ class RuntimeConfigUpdate(BaseModel):
     tick_interval_seconds: float | None = Field(default=None, ge=0.1, le=60)
     push_interval_seconds: int | None = Field(default=None, ge=1, le=300)
     sleep_speed_factor: float | None = Field(default=None, ge=1, le=3600)
+
+    @model_validator(mode="after")
+    def _push_must_cover_tick(self) -> "RuntimeConfigUpdate":
+        """Cross-field guard mirroring the FE validator (Module H).
+
+        ``push_interval_seconds`` must be >= ``tick_interval_seconds`` because
+        the simulator cannot flush a batch faster than it generates samples.
+        We only check when both fields are present in the same PATCH payload;
+        when only one knob changes, the merged-with-existing combo is checked
+        on the live runtime side.
+        """
+        if self.tick_interval_seconds is not None and self.push_interval_seconds is not None:
+            if self.push_interval_seconds < self.tick_interval_seconds:
+                raise ValueError(
+                    "push_interval_seconds must be >= tick_interval_seconds "
+                    "(không thể đẩy batch nhanh hơn lúc sinh vitals)"
+                )
+        return self
 
 
 TriggerModeValue = Literal["off", "shadow", "active"]

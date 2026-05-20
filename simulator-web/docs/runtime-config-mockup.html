@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tham số mô phỏng — Mockup refactor (review-first)</title>
+  <style>
+    /* CSS variables copied from simulator-web/src/index.css */
+    :root {
+      --bg-base: #0a0e1a;
+      --bg-surface: #111827;
+      --bg-elevated: #1a2235;
+      --bg-hover: #1e2d4a;
+      --bg-active: #253555;
+      --bg-glass: rgba(0,0,0,0.15);
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-cyan: #06b6d4;
+      --accent-cyan-bg: rgba(6,182,212,0.08);
+      --accent-cyan-bg-active: rgba(6,182,212,0.16);
+      --accent-cyan-border: rgba(6,182,212,0.30);
+      --severity-normal: #22c55e;
+      --severity-normal-bg: rgba(34,197,94,0.10);
+      --severity-normal-border: rgba(34,197,94,0.30);
+      --severity-warning: #f59e0b;
+      --severity-warning-bg: rgba(245,158,11,0.10);
+      --severity-warning-border: rgba(245,158,11,0.30);
+      --severity-critical: #ef4444;
+      --severity-critical-bg: rgba(239,68,68,0.10);
+      --severity-critical-border: rgba(239,68,68,0.30);
+      --severity-offline: #6b7280;
+      --severity-offline-bg: rgba(107,114,128,0.12);
+      --severity-offline-border: rgba(107,114,128,0.35);
+      --severity-info: #3b82f6;
+      --severity-info-bg: rgba(59,130,246,0.12);
+      --severity-info-border: rgba(59,130,246,0.30);
+      --border-default: #1e2d4a;
+      --border-subtle: #253555;
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-xl: 16px;
+      --radius-full: 9999px;
+      --shadow-card: 0 2px 8px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.03);
+      --font-ui: "Inter", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: var(--font-ui);
+      color: var(--text-primary);
+      background:
+        radial-gradient(ellipse at 10% 90%, rgba(6,182,212,0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 90% 5%, rgba(99,102,241,0.08) 0%, transparent 50%),
+        var(--bg-base);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .review-banner {
+      background: var(--accent-cyan-bg-active);
+      border-bottom: 1px solid var(--accent-cyan-border);
+      color: var(--accent-cyan);
+      text-align: center;
+      padding: 8px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .review-banner code {
+      background: rgba(0,0,0,0.25);
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+
+    .page {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px 32px 64px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .page-header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+    .page-header p { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; max-width: 760px; }
+
+    .section-label {
+      font-size: 11px; font-weight: 700; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.08em;
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 8px;
+    }
+    .section-label::before {
+      content: ""; flex: 1; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-default) 30%, var(--border-default));
+      max-width: 12px;
+    }
+
+    .card {
+      background: var(--bg-elevated);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-default);
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; flex-wrap: wrap;
+    }
+    .card-head strong { font-size: 13px; }
+    .card-body { padding: 16px; display: grid; gap: 14px; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: var(--radius-full);
+      font-size: 11px; font-weight: 600;
+      border: 1px solid transparent; white-space: nowrap;
+    }
+    .badge--normal { background: var(--severity-normal-bg); color: var(--severity-normal); border-color: var(--severity-normal-border); }
+    .badge--warning { background: var(--severity-warning-bg); color: var(--severity-warning); border-color: var(--severity-warning-border); }
+    .badge--info { background: var(--severity-info-bg); color: var(--severity-info); border-color: var(--severity-info-border); }
+    .badge--offline { background: var(--severity-offline-bg); color: var(--severity-offline); border-color: rgba(107,114,128,0.35); }
+    .badge--dot::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 14px; border-radius: var(--radius-md);
+      border: 1px solid var(--border-default);
+      background: var(--bg-active); color: var(--text-primary);
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: background-color 150ms;
+    }
+    .btn:hover { background: var(--bg-hover); }
+    .btn--primary { background: var(--accent-cyan); border-color: var(--accent-cyan); color: #001019; }
+    .btn--ghost { background: transparent; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    code, .mono { font-family: var(--font-mono); font-size: 12px; }
+    .muted { color: var(--text-muted); }
+    .secondary { color: var(--text-secondary); }
+
+    /* ── Persistence indicator (3 states) ───────────────────────── */
+    .persistence {
+      display: flex; gap: 10px;
+      padding: 10px 12px; border-radius: var(--radius-md);
+      border: 1px solid; align-items: flex-start;
+    }
+    .persistence__dot {
+      width: 8px; height: 8px; margin-top: 6px; border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .persistence__title { font-size: 13px; font-weight: 700; }
+    .persistence__body  { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+
+    .persistence--saved   { background: var(--severity-normal-bg);  border-color: var(--severity-normal-border); }
+    .persistence--saved   .persistence__dot,
+    .persistence--saved   .persistence__title { background: var(--severity-normal); color: var(--severity-normal); }
+    .persistence--saved   .persistence__dot { color: transparent; }
+
+    .persistence--default { background: var(--severity-warning-bg); border-color: var(--severity-warning-border); }
+    .persistence--default .persistence__dot { background: var(--severity-warning); }
+    .persistence--default .persistence__title { color: var(--severity-warning); }
+
+    .persistence--pending { background: var(--accent-cyan-bg); border-color: var(--accent-cyan-border); }
+    .persistence--pending .persistence__dot { background: var(--accent-cyan); }
+    .persistence--pending .persistence__title { color: var(--accent-cyan); }
+
+    /* ── Preset selector ────────────────────────────────────────── */
+    .preset-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }
+    .preset {
+      text-align: left;
+      padding: 10px 12px;
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--bg-base); color: var(--text-primary);
+      cursor: pointer;
+      transition: border-color 150ms, background 150ms;
+      display: grid; gap: 4px;
+    }
+    .preset:hover { border-color: var(--accent-cyan-border); background: var(--bg-hover); }
+    .preset.is-active { border-color: var(--accent-cyan); background: var(--accent-cyan-bg); }
+    .preset__name { font-size: 12.5px; font-weight: 700; }
+    .preset__hint { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+
+    /* ── Knob field row ─────────────────────────────────────────── */
+    .knob {
+      display: grid;
+      gap: 6px;
+      padding: 12px 14px;
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--bg-base);
+    }
+    .knob.is-warning { border-color: var(--severity-warning-border); background: var(--severity-warning-bg); }
+    .knob.is-error   { border-color: var(--severity-critical-border); background: var(--severity-critical-bg); }
+
+    .knob__label-row { display: flex; align-items: center; gap: 6px; }
+    .knob__label {
+      font-size: 12.5px; font-weight: 600; color: var(--text-primary);
+    }
+    .knob__hint-icon {
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--bg-active); color: var(--text-secondary);
+      font-size: 11px; font-weight: 700;
+      display: inline-grid; place-items: center;
+      cursor: help; user-select: none;
+      position: relative;
+    }
+    .knob__hint-icon:hover .knob__tooltip,
+    .knob__hint-icon:focus .knob__tooltip { display: block; }
+    .knob__tooltip {
+      display: none;
+      position: absolute; bottom: calc(100% + 6px); left: 50%;
+      transform: translateX(-50%);
+      width: 280px;
+      padding: 8px 10px;
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      font-size: 12px; font-weight: 400; line-height: 1.5;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+      z-index: 10;
+      text-align: left;
+      pointer-events: none;
+    }
+
+    .knob__input-row {
+      display: flex; align-items: stretch; gap: 8px;
+    }
+    .knob__input-wrap {
+      position: relative; flex: 1;
+    }
+    .knob__input {
+      width: 100%;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      color: var(--text-primary);
+      padding: 8px 56px 8px 12px;
+      font-size: 13px;
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      outline: none;
+    }
+    .knob__input:focus { border-color: var(--accent-cyan); }
+    .knob.is-warning .knob__input { border-color: var(--severity-warning); }
+    .knob.is-error   .knob__input { border-color: var(--severity-critical); }
+    .knob__suffix {
+      position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+      font-size: 12px; color: var(--text-muted);
+      pointer-events: none;
+      font-family: var(--font-mono);
+    }
+
+    .knob__helper { font-size: 12px; color: var(--text-secondary); }
+    .knob__helper strong { color: var(--text-primary); font-family: var(--font-mono); font-weight: 600; }
+    .knob.is-warning .knob__helper { color: var(--severity-warning); }
+    .knob.is-error   .knob__helper { color: var(--severity-critical); }
+
+    .knob__bounds {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .form-error {
+      padding: 8px 12px;
+      border: 1px solid var(--severity-critical-border);
+      background: var(--severity-critical-bg);
+      color: var(--severity-critical);
+      border-radius: var(--radius-md);
+      font-size: 12.5px;
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    .footer-actions {
+      display: flex; gap: 8px; flex-wrap: wrap;
+      padding-top: 4px;
+    }
+
+    /* ── Variant switcher (top of mockup, dev-only) ─────────────── */
+    .variant-bar {
+      display: flex; gap: 6px; flex-wrap: wrap;
+      padding: 10px 12px;
+      border: 1px dashed var(--accent-cyan-border);
+      border-radius: var(--radius-md);
+      background: var(--bg-glass);
+    }
+    .variant-bar strong { color: var(--accent-cyan); font-size: 12px; }
+    .variant-bar a {
+      font-size: 12px; padding: 2px 8px;
+      border-radius: var(--radius-full);
+      background: var(--bg-base); color: var(--text-secondary);
+      border: 1px solid var(--border-default);
+    }
+    .variant-bar a:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    details.flags {
+      background: var(--bg-elevated);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-card);
+      padding: 0;
+      overflow: hidden;
+    }
+    details.flags > summary {
+      padding: 12px 16px;
+      list-style: none;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 10px;
+      color: var(--text-primary);
+      font-size: 13px;
+    }
+    details.flags > summary::-webkit-details-marker { display: none; }
+    details.flags > summary::after {
+      content: "▾"; margin-left: auto; color: var(--text-muted);
+      transition: transform 150ms;
+    }
+    details.flags[open] > summary::after { transform: rotate(180deg); }
+    details.flags > .flags-body {
+      padding: 14px 16px;
+      border-top: 1px solid var(--border-default);
+      display: grid; gap: 10px;
+    }
+    .flag-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px; align-items: center;
+      padding: 8px 10px;
+      border-radius: var(--radius-md);
+      background: var(--bg-base);
+    }
+    .flag-row code { color: var(--accent-cyan); }
+    .flag-row .hint { color: var(--text-muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+
+<div class="review-banner">
+  REVIEW MOCKUP — file standalone <code>simulator-web/docs/runtime-config-mockup.html</code> · render đủ state để chốt UI trước khi sửa React
+</div>
+
+<div class="page">
+
+  <!-- Variant switcher (review only) -->
+  <div class="variant-bar">
+    <strong>Variants:</strong>
+    <a href="#variant-default">A · Default (saved)</a>
+    <a href="#variant-warning">B · Soft warning (tick=20s)</a>
+    <a href="#variant-error">C · Cross-field error (push&lt;tick)</a>
+    <a href="#variant-pending">D · Pending save</a>
+    <a href="#variant-flags">E · Feature flags collapsed</a>
+  </div>
+
+  <!-- PAGE HEADER -->
+  <header class="page-header">
+    <h1>Tham số mô phỏng</h1>
+    <p>
+      Điều chỉnh tốc độ sinh vitals, chu kỳ đẩy lên backend và hệ số tăng tốc giấc ngủ
+      của IoT Simulator. Các thay đổi được lưu vào <code>runtime.json</code> và áp dụng
+      ngay cho phiên đang chạy — không cần khởi động lại.
+    </p>
+  </header>
+
+  <!-- ============================================================
+       VARIANT A — DEFAULT (đã lưu)
+       ============================================================ -->
+  <div class="section-label" id="variant-default">A · Default — đã lưu vào runtime.json</div>
+
+  <div class="card">
+    <div class="card-head">
+      <strong>Simulator runtime</strong>
+      <span class="badge badge--info">3 tham số · áp dụng ngay</span>
+    </div>
+    <div class="card-body">
+
+      <!-- Persistence indicator: SAVED -->
+      <div class="persistence persistence--saved">
+        <div class="persistence__dot" style="background: var(--severity-normal);"></div>
+        <div>
+          <div class="persistence__title" style="color: var(--severity-normal);">Đã lưu lúc 14:32 · 20/05/2026</div>
+          <div class="persistence__body">
+            Cấu hình hiện tại đến từ <code>runtime.json</code> — vẫn giữ nguyên sau khi khởi động lại.
+          </div>
+        </div>
+      </div>
+
+      <!-- Preset bar -->
+      <div>
+        <div style="font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;">Preset</div>
+        <div class="preset-bar">
+          <button class="preset is-active" type="button">
+            <div class="preset__name">Demo nhanh</div>
+            <div class="preset__hint">tick 1s · push 5s · sleep 60×</div>
+          </button>
+          <button class="preset" type="button">
+            <div class="preset__name">Realistic</div>
+            <div class="preset__hint">tick 5s · push 30s · sleep 60×</div>
+          </button>
+          <button class="preset" type="button">
+            <div class="preset__name">Stress test</div>
+            <div class="preset__hint">tick 0.5s · push 1s · sleep 1×</div>
+          </button>
+          <button class="preset" type="button">
+            <div class="preset__name">Tuỳ chỉnh</div>
+            <div class="preset__hint">đang chỉnh tay…</div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Knob 1: Tick interval -->
+      <div class="knob">
+        <div class="knob__label-row">
+          <span class="knob__label">Chu kỳ sinh vitals (tick)</span>
+          <span class="knob__hint-icon" tabindex="0" aria-label="Giải thích tick interval">?
+            <span class="knob__tooltip">
+              <strong>Tick interval</strong> là khoảng thời gian giữa hai mẫu vitals do simulator sinh ra cho mỗi watch.
+              Giá trị thấp = nhiều mẫu/phút, ăn CPU và bandwidth. Khuyến nghị 0.5–10 giây.
+              <br/><br/>
+              Field BE: <code>tickIntervalSeconds</code>.
+            </span>
+          </span>
+          <span class="knob__bounds" style="margin-left: auto;">khuyến nghị 0.5–10 s</span>
+        </div>
+        <div class="knob__input-row">
+          <div class="knob__input-wrap">
+            <input class="knob__input" type="number" value="1.0" step="0.1" min="0.1" max="60" />
+            <span class="knob__suffix">giây</span>
+          </div>
+        </div>
+        <div class="knob__helper">
+          Sinh <strong>1 mẫu / 1.0 s</strong> ≈ <strong>60 mẫu / phút</strong> cho mỗi watch.
+        </div>
+      </div>
+
+      <!-- Knob 2: Push interval -->
+      <div class="knob">
+        <div class="knob__label-row">
+          <span class="knob__label">Chu kỳ đẩy lên backend (push)</span>
+          <span class="knob__hint-icon" tabindex="0">?
+            <span class="knob__tooltip">
+              <strong>Push interval</strong> là khoảng thời gian giữa hai lần simulator gom batch vitals
+              gửi lên <code>health_system</code>. Giá trị thấp = realtime hơn nhưng nhiều request.
+              Phải <strong>≥ tick interval</strong> (không thể đẩy nhanh hơn lúc sinh).
+              <br/><br/>
+              Field BE: <code>pushIntervalSeconds</code>.
+            </span>
+          </span>
+          <span class="knob__bounds" style="margin-left: auto;">khuyến nghị 1–60 s</span>
+        </div>
+        <div class="knob__input-row">
+          <div class="knob__input-wrap">
+            <input class="knob__input" type="number" value="5" step="1" min="1" max="300" />
+            <span class="knob__suffix">giây</span>
+          </div>
+        </div>
+        <div class="knob__helper">
+          Đẩy <strong>1 batch / 5 s</strong> ≈ <strong>12 batch / phút</strong> · gom <strong>5 mẫu</strong> mỗi batch.
+        </div>
+      </div>
+
+      <!-- Knob 3: Sleep speed factor -->
+      <div class="knob">
+        <div class="knob__label-row">
+          <span class="knob__label">Hệ số tăng tốc giấc ngủ</span>
+          <span class="knob__hint-icon" tabindex="0">?
+            <span class="knob__tooltip">
+              <strong>Sleep speed factor</strong> là hệ số nhân thời gian khi simulator chạy session ngủ.
+              Giá trị 60 = mỗi 1 phút thực trôi qua bằng 1 giờ giấc ngủ ảo, dùng để test 8h ngủ trong 8 phút.
+              Đặt 1× để chạy realtime.
+              <br/><br/>
+              Field BE: <code>sleepSpeedFactor</code>.
+            </span>
+          </span>
+          <span class="knob__bounds" style="margin-left: auto;">khuyến nghị 1–600 ×</span>
+        </div>
+        <div class="knob__input-row">
+          <div class="knob__input-wrap">
+            <input class="knob__input" type="number" value="60" step="1" min="1" max="3600" />
+            <span class="knob__suffix">lần</span>
+          </div>
+        </div>
+        <div class="knob__helper">
+          1 phút thực = <strong>60 phút</strong> giấc ngủ mô phỏng · 8h giấc ngủ chạy trong <strong>8 phút</strong>.
+        </div>
+      </div>
+
+      <!-- Footer actions -->
+      <div class="footer-actions">
+        <button class="btn btn--primary" type="button">💾 Lưu thay đổi</button>
+        <button class="btn btn--ghost" type="button">↺ Khôi phục mặc định</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VARIANT B — SOFT WARNING (tick=20s, ngoài khuyến nghị)
+       ============================================================ -->
+  <div class="section-label" id="variant-warning">B · Soft warning — tick ngoài khoảng khuyến nghị (vẫn cho lưu)</div>
+
+  <div class="card">
+    <div class="card-head"><strong>Simulator runtime — variant warning</strong></div>
+    <div class="card-body">
+
+      <div class="knob is-warning">
+        <div class="knob__label-row">
+          <span class="knob__label">Chu kỳ sinh vitals (tick)</span>
+          <span class="knob__hint-icon" tabindex="0">?<span class="knob__tooltip"><strong>Tick interval</strong>… (xem variant A)</span></span>
+          <span class="knob__bounds" style="margin-left: auto;">khuyến nghị 0.5–10 s</span>
+        </div>
+        <div class="knob__input-row">
+          <div class="knob__input-wrap">
+            <input class="knob__input" type="number" value="20" />
+            <span class="knob__suffix">giây</span>
+          </div>
+        </div>
+        <div class="knob__helper">
+          ⚠ <strong>20 s</strong> ngoài khoảng khuyến nghị (0.5–10 s) — chỉ <strong>3 mẫu / phút</strong>, có thể trễ phát hiện sự cố. Vẫn cho phép lưu.
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VARIANT C — CROSS-FIELD ERROR (push < tick)
+       ============================================================ -->
+  <div class="section-label" id="variant-error">C · Cross-field error — push &lt; tick (chặn lưu)</div>
+
+  <div class="card">
+    <div class="card-head"><strong>Simulator runtime — variant error</strong></div>
+    <div class="card-body">
+
+      <div class="form-error">
+        ⛔ <span><strong>Push interval (2 s)</strong> phải lớn hơn hoặc bằng <strong>tick interval (5 s)</strong>. Không thể đẩy batch nhanh hơn lúc sinh vitals.</span>
+      </div>
+
+      <div class="knob">
+        <div class="knob__label-row">
+          <span class="knob__label">Chu kỳ sinh vitals (tick)</span>
+          <span class="knob__bounds" style="margin-left: auto;">khuyến nghị 0.5–10 s</span>
+        </div>
+        <div class="knob__input-row">
+          <div class="knob__input-wrap">
+            <input class="knob__input" type="number" value="5" />
+            <span class="knob__suffix">giây</span>
+          </div>
+        </div>
+        <div class="knob__helper">Sinh <strong>1 mẫu / 5 s</strong> ≈ <strong>12 mẫu / phút</strong>.</div>
+      </div>
+
+      <div class="knob is-error">
+        <div class="knob__label-row">
+          <span class="knob__label">Chu kỳ đẩy lên backend (push)</span>
+          <span class="knob__bounds" style="margin-left: auto;">khuyến nghị 1–60 s</span>
+        </div>
+        <div class="knob__input-row">
+          <div class="knob__input-wrap">
+            <input class="knob__input" type="number" value="2" />
+            <span class="knob__suffix">giây</span>
+          </div>
+        </div>
+        <div class="knob__helper">⛔ Phải ≥ tick (5 s).</div>
+      </div>
+
+      <div class="footer-actions">
+        <button class="btn btn--primary" type="button" disabled>💾 Lưu thay đổi</button>
+        <button class="btn btn--ghost" type="button">↺ Khôi phục mặc định</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VARIANT D — PENDING SAVE
+       ============================================================ -->
+  <div class="section-label" id="variant-pending">D · Đang lưu (pending)</div>
+
+  <div class="card">
+    <div class="card-head"><strong>Simulator runtime — variant pending</strong></div>
+    <div class="card-body">
+      <div class="persistence persistence--pending">
+        <div class="persistence__dot"></div>
+        <div>
+          <div class="persistence__title">Đang lưu vào runtime.json…</div>
+          <div class="persistence__body">Đang ghi cấu hình mới ra đĩa, sẽ áp dụng ngay sau khi xong.</div>
+        </div>
+      </div>
+      <div class="footer-actions">
+        <button class="btn btn--primary" type="button" disabled>💾 Đang lưu…</button>
+        <button class="btn btn--ghost" type="button" disabled>↺ Khôi phục mặc định</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Persistence — defaults state (chưa có runtime.json) -->
+  <div class="card">
+    <div class="card-head"><strong>Simulator runtime — variant defaults (chưa lưu)</strong></div>
+    <div class="card-body">
+      <div class="persistence persistence--default">
+        <div class="persistence__dot"></div>
+        <div>
+          <div class="persistence__title">Đang dùng cấu hình mặc định</div>
+          <div class="persistence__body">
+            Cấu hình đến từ <code>runtime_defaults.json</code>. Bấm <strong>Lưu thay đổi</strong> để tạo
+            <code>runtime.json</code> riêng cho máy này (giữ nguyên sau khởi động lại).
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       VARIANT E — FEATURE FLAGS (collapse mặc định)
+       ============================================================ -->
+  <div class="section-label" id="variant-flags">E · Feature flags — collapse mặc định</div>
+
+  <details class="flags">
+    <summary>
+      <strong>Feature flags</strong>
+      <span class="muted" style="font-size: 12px;">(chỉ đọc · đổi bằng env var hoặc Diagnostics)</span>
+      <span class="badge badge--info badge--dot" style="margin-left: auto;">Trigger mode: shadow</span>
+    </summary>
+    <div class="flags-body">
+      <div style="padding: 12px; border-radius: var(--radius-md); border: 1px solid var(--severity-info-border); background: var(--severity-info-bg);">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="muted" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;">Trigger mode</span>
+          <span class="badge badge--info">SHADOW</span>
+          <small class="muted">enable_model_calls = <code>false</code></small>
+        </div>
+        <small class="secondary" style="display: block; margin-top: 6px; line-height: 1.5;">
+          Pre-trigger chạy nhưng KHÔNG gọi model AI. Rule + fall detection chỉ chạy local — phù hợp để
+          quan sát trigger hoạt động trước khi bật model.
+        </small>
+      </div>
+
+      <div class="flag-row">
+        <span class="badge badge--normal">ON</span>
+        <div>
+          <code>PRE_MODEL_TRIGGER_ENABLED</code>
+          <div class="hint">Bật. Quyết định mode shadow vs active dựa vào enable_model_calls.</div>
+        </div>
+      </div>
+
+      <div class="flag-row">
+        <span class="badge badge--offline">OFF</span>
+        <div>
+          <code>USE_DB_THRESHOLDS</code>
+          <div class="hint">Đang dùng ngưỡng dự phòng từ vitals_service. Bật cờ này + đảm bảo DB sẵn sàng để chuyển sang DB thresholds.</div>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <!-- Diagnostics pointer (giữ nguyên) -->
+  <div class="card">
+    <div class="card-body" style="display: flex; gap: 12px; align-items: center;">
+      <span style="font-size: 18px; color: var(--severity-info);">ⓘ</span>
+      <div style="font-size: 12.5px; color: var(--text-secondary);">
+        Ngưỡng vitals (chỉ đọc) và rule/fall config xem ở
+        <a href="#" style="color: var(--accent-cyan); text-decoration: underline;">trang Diagnostics</a>.
+        <code>Health Backend URL</code> là env config, không nằm ở runtime config.
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
