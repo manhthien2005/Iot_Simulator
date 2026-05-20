@@ -66,13 +66,6 @@ export interface RiskScoreResponse {
   history: RiskHistoryPoint[];
 }
 
-export interface RiskInjectPayload {
-  device_id: string;
-  risk_type: RiskType;
-  risk_level: RiskLevel;
-  score: number;
-}
-
 export interface BackfillSleepRequest {
   device_id: string;
   days_behind: number;

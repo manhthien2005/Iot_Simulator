@@ -5,7 +5,6 @@ import type {
   DbSleepHistoryRow,
   PushSleepDateRequest,
   PushSleepDateResponse,
-  RiskInjectPayload,
   RiskScoreResponse,
   SleepSessionResponse,
 } from "../types/analytics";
@@ -36,16 +35,6 @@ export async function getRiskScore(deviceId: string): Promise<RiskScoreResponse>
     params: { deviceId },
   });
   return response.data;
-}
-
-export async function injectRiskScore(payload: RiskInjectPayload): Promise<void> {
-  await apiClient.post("/api/v1/sim/events/risk-inject", payload);
-}
-
-export async function triggerRiskCalculation(deviceId: string): Promise<void> {
-  await apiClient.post("/api/v1/sim/analytics/risk/trigger", {
-    device_id: deviceId,
-  });
 }
 
 export async function backfillSleep(
