@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { DevicePicker } from "../components/domain/session/DevicePicker";
 import { ScenarioSelector } from "../components/domain/session/ScenarioSelector";
 import { UserProfileCard } from "../components/domain/session/UserProfileCard";
+import { PersonalizationStatusCard } from "../components/domain/session/PersonalizationStatusCard";
 import { SessionVitalsPanel } from "../components/domain/SessionVitalsPanel";
 import { PageHeader } from "../components/ui/PageHeader";
 import { SequenceDiagramLive } from "../components/sequence_diagram/SequenceDiagramLive";
@@ -262,6 +263,7 @@ export function SessionRunnerPage() {
           ) : (
             <UserProfileCard profile={undefined} isLoading={false} error={null} />
           )}
+          <PersonalizationStatusCard userId={selectedDbDevice?.user_id ?? null} />
         </div>
       ) : null}
 

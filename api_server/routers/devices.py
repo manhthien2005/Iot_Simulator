@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os as _os
 import time as _time
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -293,6 +295,83 @@ def get_user_caregivers(user_id: int, db: Session = Depends(get_db)) -> LinkedCa
 
     caregivers = [LinkedCaregiverItem(**dict(row)) for row in rows]
     return LinkedCaregiversResponse(patient_id=user_id, caregivers=caregivers)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 Personalization proxy
+# ---------------------------------------------------------------------------
+# Sim web cần xem trạng thái cá nhân hóa của user để demo viên đối chiếu
+# input (sim sinh) vs output (backend personalization). Endpoint này KHÔNG
+# tự tính — chỉ proxy sang health_system FastAPI ở
+# ``HEALTH_SYSTEM_BASE_URL`` (default http://127.0.0.1:8002). Trả 502 nếu
+# backend không reachable, 404 nếu user không có data.
+
+_HEALTH_SYSTEM_BASE_URL = _os.environ.get(
+    "HEALTH_SYSTEM_BASE_URL", "http://127.0.0.1:8002"
+).rstrip("/")
+
+
+@_admin_router.get("/admin/users/{user_id}/personalization")
+def get_user_personalization(user_id: int) -> dict:
+    """Read-only proxy to health_system personalization snapshot.
+
+    Sim web hiển thị baseline + adaptive thresholds + NEWS2-Lite + trend
+    slopes để đối chiếu input vs output cá nhân hóa.
+
+    Phase 1 minimal: tải latest detail report của user, extract field
+    ``personalization``. Ổn định cho demo (3 user Bảo/Mai/Phúc đã seed).
+    """
+    upstream = (
+        f"{_HEALTH_SYSTEM_BASE_URL}/api/v1/mobile/analysis/risk-reports?limit=1"
+    )
+    headers = {"X-Target-Profile-Id": str(user_id)}
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            list_resp = client.get(upstream, headers=headers)
+        if list_resp.status_code == 404:
+            raise HTTPException(status_code=404, detail="No risk report yet for user")
+        if list_resp.status_code >= 500:
+            raise HTTPException(
+                status_code=502,
+                detail=f"health_system upstream {list_resp.status_code}",
+            )
+        items = list_resp.json() if list_resp.status_code == 200 else []
+        if not isinstance(items, list) or not items:
+            raise HTTPException(status_code=404, detail="No risk report yet for user")
+        report_id = items[0].get("id")
+        if report_id is None:
+            raise HTTPException(status_code=404, detail="Latest report has no id")
+
+        detail_url = (
+            f"{_HEALTH_SYSTEM_BASE_URL}/api/v1/mobile/analysis/risk-reports/"
+            f"{report_id}"
+        )
+        with httpx.Client(timeout=5.0) as client:
+            detail_resp = client.get(detail_url, headers=headers)
+        if detail_resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"health_system detail {detail_resp.status_code}",
+            )
+        detail_json = detail_resp.json()
+        personalization = detail_json.get("personalization")
+        if personalization is None:
+            return {
+                "enabled": False,
+                "baseline_status": "disabled",
+                "baselines": {},
+                "adaptive_thresholds": {},
+                "news2_lite": None,
+                "trend_slopes": {},
+                "hard_floor_violations": [],
+                "personal_context_message": None,
+            }
+        return personalization
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"health_system unreachable: {exc}",
+        ) from exc
 
 
 # Merge admin sub-router into main router so all routes are exposed together
