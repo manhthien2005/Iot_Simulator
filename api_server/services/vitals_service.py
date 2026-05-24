@@ -13,19 +13,11 @@ from threading import RLock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 
-# Dual import path: supports both package-level execution
-#   (`python -m Iot_Simulator.api_server.main`)
-# and direct execution from the project root
-#   (`uvicorn api_server.main:app`).
-try:
-    from Iot_Simulator.api_server.schemas import VitalsSample
-    from Iot_Simulator.api_server.utils import _utc_now_iso, _safe_float, _is_sleeping_state
-except ModuleNotFoundError:
-    from api_server.schemas import VitalsSample
-    from api_server.utils import _utc_now_iso, _safe_float, _is_sleeping_state
+from api_server.schemas import VitalsSample
+from api_server.utils import _utc_now_iso, _safe_float, _is_sleeping_state
 
 if TYPE_CHECKING:
-    from api_server.dependencies import DeviceRecord, SessionRecord
+    from api_server.models import DeviceRecord, SessionRecord
 
 
 # ── Threshold constants ──────────────────────────────────────────────────

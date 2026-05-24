@@ -20,158 +20,77 @@ from uuid import uuid4
 import httpx
 from sqlalchemy import text
 
-# Dual import path: supports both package-level execution
-#   (`python -m Iot_Simulator.api_server.main`)
-# and direct execution from the project root
-#   (`uvicorn api_server.main:app`).
-try:
-    from Iot_Simulator.api_server.config import load_sleep_scenarios
-    from Iot_Simulator.api_server.backend_admin_client import BackendAdminClient
-    from Iot_Simulator.api_server.db import session_scope
-    from Iot_Simulator.api_server.runtime_state import HealthRuntimeState
-    from Iot_Simulator.api_server.runtime_persistence import (
-        RUNTIME_PATH,
-        PersistenceState,
-        RuntimeConfigValues,
-        load_runtime_config,
-        save_runtime_config,
-        reset_runtime_config,
-    )
-    from Iot_Simulator.api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state
-    from Iot_Simulator.api_server.schemas import (
-        AIPrediction,
-        AITopFeature,
-        AlertEvent,
-        CountdownPolicy,
-        CreateDeviceRequest,
-        DataBindingConfig,
-        DashboardSummary,
-        DbSleepHistoryRow,
-        FallEventEntry,
-        FallState,
-        FallStateValue,
-        MotionLatest,
-        MotionWindowRef,
-        PipelineStage,
-        PipelineStageStatusValue,
-        PreTriggerEvidence,
-        RiskContribution,
-        RiskHistoryPoint,
-        RiskInjectRequest,
-        RiskScoreResponse,
-        SimulatedDevice,
-        SleepHistoryRow,
-        SleepSessionResponse,
-        SleepStageSegment,
-        VerificationResult,
-        VitalsSample,
-    )
-    from Iot_Simulator.api_server.sim_admin_service import SimAdminService
-    from Iot_Simulator.api_server.services.device_service import DeviceService
-    from Iot_Simulator.api_server.services.vitals_service import VitalsService
-    from Iot_Simulator.api_server.services.alert_service import AlertService
-    from Iot_Simulator.api_server.services.session_service import SessionService
-    from Iot_Simulator.api_server.services.sleep_service import SleepService
-    from Iot_Simulator.pre_model_trigger import (
-        FallPreTrigger,
-        HealthGuardAPIClient,
-        PersonaProfile,
-        ResponseHandler,
-        RuleEngine,
-        SystemSettingsProvider,
-        TriggerOrchestrator,
-        VitalsHistoryBuffer,
-    )
-    from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
-    # ADR-019 Phase 7 S9: ``FallAIClient`` no longer used by the runtime —
-    # the fall flow now posts the IMU window to the mobile BE which
-    # forwards to the model-api. ``motion_window_to_samples`` +
-    # ``FALL_VARIANT_CONTEXT`` stay because they shape the payload for
-    # the new ``MobileTelemetryClient.submit_imu_window`` call. The
-    # client class file ``simulator_core/fall_ai_client.py`` is retained
-    # as a diagnostic utility until S18 cleanup.
-    from Iot_Simulator.simulator_core.fall_ai_client import (
-        FALL_VARIANT_CONTEXT,
-        FALL_VARIANT_DEFAULT_CONTEXT,
-        motion_window_to_samples as _motion_window_to_samples,
-    )
-    from Iot_Simulator.pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient
-    from Iot_Simulator.pre_model_trigger.sleep_dispatch import SleepRiskDispatcher
-    from Iot_Simulator.simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
-    from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
-    from Iot_Simulator.simulator_core.sleep_vitals_enricher import enrich_sleep_record
-    from Iot_Simulator.transport import HttpPublisher, MqttPublisher, TransportRouter
-except ModuleNotFoundError:
-    from api_server.config import load_sleep_scenarios
-    from api_server.backend_admin_client import BackendAdminClient
-    from api_server.db import session_scope
-    from api_server.runtime_state import HealthRuntimeState  # noqa: F811
-    from api_server.runtime_persistence import (  # noqa: F811
-        RUNTIME_PATH,
-        PersistenceState,
-        RuntimeConfigValues,
-        load_runtime_config,
-        save_runtime_config,
-        reset_runtime_config,
-    )
-    from api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state  # noqa: F811
-    from api_server.schemas import (
-        AIPrediction,
-        AITopFeature,
-        AlertEvent,
-        CountdownPolicy,
-        CreateDeviceRequest,
-        DataBindingConfig,
-        DashboardSummary,
-        DbSleepHistoryRow,
-        FallEventEntry,
-        FallState,
-        FallStateValue,
-        MotionLatest,
-        MotionWindowRef,
-        PipelineStage,
-        PipelineStageStatusValue,
-        PreTriggerEvidence,
-        RiskContribution,
-        RiskHistoryPoint,
-        RiskInjectRequest,
-        RiskScoreResponse,
-        SimulatedDevice,
-        SleepHistoryRow,
-        SleepSessionResponse,
-        SleepStageSegment,
-        VerificationResult,
-        VitalsSample,
-    )
-    from api_server.sim_admin_service import SimAdminService
-    from api_server.services.device_service import DeviceService
-    from api_server.services.vitals_service import VitalsService
-    from api_server.services.alert_service import AlertService
-    from api_server.services.session_service import SessionService
-    from api_server.services.sleep_service import SleepService
-    from pre_model_trigger import (  # noqa: F811
-        FallPreTrigger,
-        HealthGuardAPIClient,
-        PersonaProfile,
-        ResponseHandler,
-        RuleEngine,
-        SystemSettingsProvider,
-        TriggerOrchestrator,
-        VitalsHistoryBuffer,
-    )
-    from simulator_core.dataset_registry import DatasetRegistry
-    # ADR-019 Phase 7 S9: see Iot_Simulator-prefixed import block above.
-    from simulator_core.fall_ai_client import (  # noqa: F811
-        FALL_VARIANT_CONTEXT,
-        FALL_VARIANT_DEFAULT_CONTEXT,
-        motion_window_to_samples as _motion_window_to_samples,  # noqa: F811
-    )
-    from pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient  # noqa: F811
-    from pre_model_trigger.sleep_dispatch import SleepRiskDispatcher  # noqa: F811
-    from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
-    from simulator_core.sleep_ai_client import SleepAIClient
-    from simulator_core.sleep_vitals_enricher import enrich_sleep_record
-    from transport import HttpPublisher, MqttPublisher, TransportRouter
+from api_server.config import load_sleep_scenarios
+from api_server.backend_admin_client import BackendAdminClient
+from api_server.db import session_scope
+from api_server.runtime_state import HealthRuntimeState
+from api_server.runtime_persistence import (
+    RUNTIME_PATH,
+    PersistenceState,
+    RuntimeConfigValues,
+    load_runtime_config,
+    save_runtime_config,
+    reset_runtime_config,
+)
+from api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender, _is_sleeping_state
+from api_server.schemas import (
+    AIPrediction,
+    AITopFeature,
+    AlertEvent,
+    CountdownPolicy,
+    CreateDeviceRequest,
+    DataBindingConfig,
+    DashboardSummary,
+    DbSleepHistoryRow,
+    FallEventEntry,
+    FallState,
+    FallStateValue,
+    MotionLatest,
+    MotionWindowRef,
+    PipelineStage,
+    PipelineStageStatusValue,
+    PreTriggerEvidence,
+    RiskContribution,
+    RiskHistoryPoint,
+    RiskInjectRequest,
+    RiskScoreResponse,
+    SimulatedDevice,
+    SleepHistoryRow,
+    SleepSessionResponse,
+    SleepStageSegment,
+    VerificationResult,
+    VitalsSample,
+)
+from api_server.sim_admin_service import SimAdminService
+from api_server.services.device_service import DeviceService
+from api_server.services.vitals_service import VitalsService
+from api_server.services.alert_service import AlertService
+from api_server.services.session_service import SessionService
+from api_server.services.sleep_service import SleepService
+from pre_model_trigger import (
+    FallPreTrigger,
+    HealthGuardAPIClient,
+    PersonaProfile,
+    ResponseHandler,
+    RuleEngine,
+    SystemSettingsProvider,
+    TriggerOrchestrator,
+    VitalsHistoryBuffer,
+)
+from simulator_core.dataset_registry import DatasetRegistry
+# ADR-019 Phase 7 S9: FallAIClient no longer used by the runtime —
+# motion_window_to_samples + FALL_VARIANT_CONTEXT shape the IMU payload.
+from simulator_core.fall_ai_client import (
+    FALL_VARIANT_CONTEXT,
+    FALL_VARIANT_DEFAULT_CONTEXT,
+    motion_window_to_samples as _motion_window_to_samples,
+)
+from pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient
+from pre_model_trigger.sleep_dispatch import SleepRiskDispatcher
+from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
+from simulator_core.sleep_ai_client import SleepAIClient
+from simulator_core.sleep_vitals_enricher import enrich_sleep_record
+from transport import HttpPublisher, MqttPublisher, TransportRouter
 
 
 logger = logging.getLogger(__name__)
@@ -547,10 +466,7 @@ SLEEP_SCENARIO_PHASES, SLEEP_SCENARIO_PROFILES = load_sleep_scenarios()
 
 # MEDIUM #8: Threshold constants centralised in vitals_service.py
 # Import them here for backward compatibility.
-try:
-    from Iot_Simulator.api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
-except ModuleNotFoundError:
-    from api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
+from api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
 
 
 
@@ -800,20 +716,21 @@ class SimulatorRuntime:
 
     def __init__(self) -> None:
         self.registry = DatasetRegistry(self._resolve_artifacts_dir())
-        # ── Health observability state (Phase 0.2) ───────────────────────
         self._health_state = HealthRuntimeState()
-        # ── Mutable runtime config persistence (Module F.1) ──────────────
-        # Resolve the persisted runtime knobs *before* any subsystem reads
-        # them.  ``load_runtime_config()`` never raises — it falls back to
-        # ``runtime_defaults.json`` and finally to hard-coded values, so
-        # the simulator always boots.  We also mirror the result into the
-        # process env so legacy readers (``sleep_service`` reads
-        # ``SIM_SLEEP_SPEED_FACTOR`` on every call) keep seeing the same
-        # truth as ``/api/v1/sim/settings``.
         self._runtime_persistence: PersistenceState = load_runtime_config()
         self._sync_runtime_env_from_persistence()
         self._sleep_ai_client = SleepAIClient()
         self._last_sleep_score_source = "heuristic"
+        self._init_health_probes()
+        self._init_core_state()
+        self._init_transport()
+        self._init_pre_trigger()
+        self._init_services()
+
+    # ── Private init helpers ─────────────────────────────────────────────
+
+    def _init_health_probes(self) -> None:
+        """Check Sleep AI availability and update health probe state."""
         try:
             if self._sleep_ai_client.check_availability():
                 logger.info("Sleep AI model available at http://localhost:8001")
@@ -828,6 +745,8 @@ class SimulatorRuntime:
         except Exception:
             logger.warning("Sleep AI availability check failed", exc_info=True)
 
+    def _init_core_state(self) -> None:
+        """Initialise all per-device and per-session in-memory dictionaries."""
         # ── Fall AI dispatcher (Module FA — Fall Lab redesign, S9 rewire) ──
         # ADR-019 Phase 7 S9: per-device caches surfaced via
         # ``/sessions/{id}/fall-state``. The :class:`MobileTelemetryClient`
@@ -870,6 +789,9 @@ class SimulatorRuntime:
         self._device_buffers: dict[str, list[dict[str, Any]]] = {}
         self._last_push_time = 0.0
         self._device_in_flight: set[str] = set()
+
+    def _init_transport(self) -> None:
+        """Wire backend URLs, admin/mobile clients, and transport router."""
         self._health_backend_url = self._resolve_backend_base_url()
         self.backend_base_url = self._health_backend_url
         self.admin_client = BackendAdminClient(self._health_backend_url)
@@ -909,6 +831,9 @@ class SimulatorRuntime:
             headers={"X-Internal-Service": "iot-simulator"},
         )
         self.transport_router = TransportRouter(mqtt, http)
+
+    def _init_pre_trigger(self) -> None:
+        """Wire TriggerOrchestrator pipeline and auxiliary per-device trackers."""
         # ── Pre-model TriggerOrchestrator wiring (Phase 0.3) ─────────────
         # See plans/iot-sim-ux-refactor-backlog-75c8a6.md §4.5 task 0.3.
         # The orchestrator is what `routers/settings.py` reaches into for DB
@@ -965,6 +890,8 @@ class SimulatorRuntime:
         self._background_tick_stop = Event()
         self._background_tick_thread: Thread | None = None
 
+    def _init_services(self) -> None:
+        """Instantiate all domain service objects (Task 3.x service layer)."""
         # ── Service layer (Task 3.1) ─────────────────────────────────────
         self._dashboard_cache_ref: list = [None]
         self.device_service = DeviceService(

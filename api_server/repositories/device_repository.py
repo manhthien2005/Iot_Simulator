@@ -17,10 +17,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-try:
-    from Iot_Simulator.api_server.schemas import AdminDeviceResponse
-except ModuleNotFoundError:
-    from api_server.schemas import AdminDeviceResponse
+from api_server.schemas import AdminDeviceResponse
 
 logger = logging.getLogger(__name__)
 

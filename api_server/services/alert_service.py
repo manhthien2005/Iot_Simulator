@@ -19,18 +19,11 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from api_server.dependencies import DeviceRecord, PreparedAlertPush, EventRecord
+    from api_server.models import DeviceRecord, PreparedAlertPush, EventRecord
 
-# Dual import path: supports both package-level execution
-#   (`python -m Iot_Simulator.api_server.main`)
-# and direct execution from the project root
-#   (`uvicorn api_server.main:app`).
-try:
-    from Iot_Simulator.api_server.schemas import AlertEvent
-    from Iot_Simulator.api_server.utils import _utc_now_iso
-except ModuleNotFoundError:
-    from api_server.schemas import AlertEvent
-    from api_server.utils import _utc_now_iso
+from api_server.models import PreparedAlertPush, EventRecord
+from api_server.schemas import AlertEvent
+from api_server.utils import _utc_now_iso
 
 
 logger = logging.getLogger(__name__)
@@ -90,11 +83,6 @@ class AlertService:
         severity: str,
         metadata: dict[str, Any] | None = None,
     ) -> "PreparedAlertPush | None":
-        try:
-            from Iot_Simulator.api_server.dependencies import PreparedAlertPush
-        except ModuleNotFoundError:
-            from api_server.dependencies import PreparedAlertPush
-
         device = self.devices.get(sim_device_id)
         if device is None or device.bound_db_device_id is None:
             return None
@@ -236,11 +224,6 @@ class AlertService:
         message: str,
         metadata: dict[str, str] | None = None,
     ) -> None:
-        try:
-            from Iot_Simulator.api_server.dependencies import EventRecord
-        except ModuleNotFoundError:
-            from api_server.dependencies import EventRecord
-
         event = EventRecord(
             id=uuid4().hex,
             timestamp=_utc_now_iso(),

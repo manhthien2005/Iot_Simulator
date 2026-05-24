@@ -13,28 +13,15 @@ from __future__ import annotations
 import collections
 import time
 from threading import RLock
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
-# Dual import path: supports both package-level execution
-#   (`python -m Iot_Simulator.api_server.main`)
-# and direct execution from the project root
-#   (`uvicorn api_server.main:app`).
-try:
-    from Iot_Simulator.api_server.backend_admin_client import BackendAdminClient
-    from Iot_Simulator.api_server.db import session_scope
-    from Iot_Simulator.api_server.schemas import CreateDeviceRequest, SimulatedDevice
-    from Iot_Simulator.api_server.sim_admin_service import SimAdminService
-    from Iot_Simulator.api_server.utils import _utc_now_iso
-except ModuleNotFoundError:
-    from api_server.backend_admin_client import BackendAdminClient
-    from api_server.db import session_scope
-    from api_server.schemas import CreateDeviceRequest, SimulatedDevice
-    from api_server.sim_admin_service import SimAdminService
-    from api_server.utils import _utc_now_iso
-
-if TYPE_CHECKING:
-    from api_server.dependencies import DeviceRecord, EventRecord, SessionRecord
+from api_server.backend_admin_client import BackendAdminClient
+from api_server.db import session_scope
+from api_server.models import DeviceRecord, EventRecord, SessionRecord
+from api_server.schemas import CreateDeviceRequest, SimulatedDevice
+from api_server.sim_admin_service import SimAdminService
+from api_server.utils import _utc_now_iso, _safe_float, _normalize_gender, _derive_age
 
 
 # ---------------------------------------------------------------------------
@@ -51,13 +38,14 @@ class _RuntimeSessionOps(Protocol):
 
 
 def _build_db_device_persona(device_info: dict[str, Any], db_device_id: int) -> dict[str, Any]:
-    """Import and delegate to the module-level helper in dependencies."""
-    # Dual import path — see module-level comment above.
-    try:
-        from Iot_Simulator.api_server.dependencies import _build_db_device_persona as _helper
-    except ModuleNotFoundError:
-        from api_server.dependencies import _build_db_device_persona as _helper
-    return _helper(device_info, db_device_id)
+    """Build persona dict from DB device info."""
+    return {
+        "age": _derive_age(device_info.get("date_of_birth")),
+        "weight_kg": _safe_float(device_info.get("weight_kg"), 70.0),
+        "height_cm": _safe_float(device_info.get("height_cm"), 170.0),
+        "gender": _normalize_gender(device_info.get("gender")),
+        "seed": db_device_id % 97,
+    }
 
 
 
@@ -123,11 +111,6 @@ class DeviceService:
             ]
 
     def create_device(self, request: CreateDeviceRequest) -> SimulatedDevice:
-        try:
-            from Iot_Simulator.api_server.dependencies import DeviceRecord
-        except ModuleNotFoundError:
-            from api_server.dependencies import DeviceRecord
-
         with self._lock:
             device_id = uuid4().hex
             serial = f"SIM-{device_id[:8].upper()}"

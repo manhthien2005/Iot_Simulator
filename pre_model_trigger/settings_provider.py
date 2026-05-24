@@ -12,10 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-try:
-    from Iot_Simulator.api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
-except ModuleNotFoundError:
-    from api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
+from api_server.services.vitals_service import DAYTIME_THRESHOLDS, SLEEP_THRESHOLDS
 
 # ---------------------------------------------------------------------------
 # Fallback threshold dictionaries — single source of truth is vitals_service.py

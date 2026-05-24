@@ -19,38 +19,21 @@ for _env_path in _ENV_CANDIDATES:
         load_dotenv(_env_path, override=False)
         break
 
-try:
-    from Iot_Simulator.api_server.middleware.rate_limit import RateLimitMiddleware
-    from Iot_Simulator.api_server.schemas import HealthPayloadV2
-    from Iot_Simulator.api_server.dependencies import SimulatorRuntime, get_runtime, set_runtime
-    from Iot_Simulator.api_server.routers.analytics import router as analytics_router
-    from Iot_Simulator.api_server.routers.dashboard import router as dashboard_router
-    from Iot_Simulator.api_server.routers.devices import router as devices_router
-    from Iot_Simulator.api_server.routers.events import router as events_router
-    from Iot_Simulator.api_server.routers.registry import router as registry_router
-    from Iot_Simulator.api_server.routers.scenarios import router as scenarios_router
-    from Iot_Simulator.api_server.routers.sessions import router as sessions_router
-    from Iot_Simulator.api_server.routers.settings import router as settings_router
-    from Iot_Simulator.api_server.routers.verification import router as verification_router
-    from Iot_Simulator.api_server.routers.vitals import router as vitals_router
-    from Iot_Simulator.api_server.ws.log_stream import handle_ws_logs
-    from Iot_Simulator.api_server.ws.flow_stream import handle_ws_flow
-except ModuleNotFoundError:
-    from api_server.middleware.rate_limit import RateLimitMiddleware
-    from api_server.schemas import HealthPayloadV2
-    from api_server.dependencies import SimulatorRuntime, get_runtime, set_runtime
-    from api_server.routers.analytics import router as analytics_router
-    from api_server.routers.dashboard import router as dashboard_router
-    from api_server.routers.devices import router as devices_router
-    from api_server.routers.events import router as events_router
-    from api_server.routers.registry import router as registry_router
-    from api_server.routers.scenarios import router as scenarios_router
-    from api_server.routers.sessions import router as sessions_router
-    from api_server.routers.settings import router as settings_router
-    from api_server.routers.verification import router as verification_router
-    from api_server.routers.vitals import router as vitals_router
-    from api_server.ws.log_stream import handle_ws_logs
-    from api_server.ws.flow_stream import handle_ws_flow
+from api_server.middleware.rate_limit import RateLimitMiddleware
+from api_server.schemas import HealthPayloadV2
+from api_server.dependencies import SimulatorRuntime, get_runtime, set_runtime
+from api_server.routers.analytics import router as analytics_router
+from api_server.routers.dashboard import router as dashboard_router
+from api_server.routers.devices import router as devices_router
+from api_server.routers.events import router as events_router
+from api_server.routers.registry import router as registry_router
+from api_server.routers.scenarios import router as scenarios_router
+from api_server.routers.sessions import router as sessions_router
+from api_server.routers.settings import router as settings_router
+from api_server.routers.verification import router as verification_router
+from api_server.routers.vitals import router as vitals_router
+from api_server.ws.log_stream import handle_ws_logs
+from api_server.ws.flow_stream import handle_ws_flow
 
 
 logger = logging.getLogger(__name__)

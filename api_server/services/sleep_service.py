@@ -22,44 +22,21 @@ import httpx
 
 from sqlalchemy import text
 
-# Dual import path: supports both package-level execution
-#   (`python -m Iot_Simulator.api_server.main`)
-# and direct execution from the project root
-#   (`uvicorn api_server.main:app`).
-try:
-    from Iot_Simulator.api_server.db import session_scope
-    from Iot_Simulator.api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender
-    from Iot_Simulator.api_server.schemas import (
-        DbSleepHistoryRow,
-        SleepHistoryRow,
-        SleepSessionResponse,
-        SleepStageSegment,
-    )
-    from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
-    from Iot_Simulator.simulator_core.sleep_ai_client import SleepAIClient
-    from Iot_Simulator.simulator_core.sleep_vitals_enricher import enrich_sleep_record
-except ModuleNotFoundError:
-    from api_server.db import session_scope
-    from api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender
-    from api_server.schemas import (
-        DbSleepHistoryRow,
-        SleepHistoryRow,
-        SleepSessionResponse,
-        SleepStageSegment,
-    )
-    from simulator_core.dataset_registry import DatasetRegistry
-    from simulator_core.sleep_ai_client import SleepAIClient
-    from simulator_core.sleep_vitals_enricher import enrich_sleep_record
+from api_server.db import session_scope
+from api_server.utils import _utc_now_iso, _safe_float, _coerce_date, _normalize_gender
+from api_server.schemas import (
+    DbSleepHistoryRow,
+    SleepHistoryRow,
+    SleepSessionResponse,
+    SleepStageSegment,
+)
+from simulator_core.dataset_registry import DatasetRegistry
+from simulator_core.sleep_ai_client import SleepAIClient
+from simulator_core.sleep_vitals_enricher import enrich_sleep_record
 
 if TYPE_CHECKING:
-    from api_server.dependencies import DeviceRecord, SessionRecord
-    # ADR-019 Phase 7 S10: dispatcher type-only import (no runtime dep
-    # so the legacy ``Iot_Simulator``-prefixed test harness keeps working
-    # without the ``pre_model_trigger`` package on sys.path).
-    try:
-        from Iot_Simulator.pre_model_trigger.sleep_dispatch import SleepRiskDispatcher
-    except ModuleNotFoundError:
-        from pre_model_trigger.sleep_dispatch import SleepRiskDispatcher  # noqa: F401
+    from api_server.models import DeviceRecord, SessionRecord
+    from pre_model_trigger.sleep_dispatch import SleepRiskDispatcher  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

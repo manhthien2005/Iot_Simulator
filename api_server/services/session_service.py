@@ -16,31 +16,18 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
-# Dual import path: supports both package-level execution
-#   (`python -m Iot_Simulator.api_server.main`)
-# and direct execution from the project root
-#   (`uvicorn api_server.main:app`).
-try:
-    from Iot_Simulator.api_server.schemas import DataBindingConfig
-    from Iot_Simulator.api_server.utils import _utc_now_iso
-    from Iot_Simulator.simulator_core.dataset_registry import DatasetRegistry
-    from Iot_Simulator.simulator_core.session import (
-        DataBinding as SimDataBinding,
-        SimulatorSession,
-        build_device,
-    )
-except ModuleNotFoundError:
-    from api_server.schemas import DataBindingConfig
-    from api_server.utils import _utc_now_iso
-    from simulator_core.dataset_registry import DatasetRegistry
-    from simulator_core.session import (
-        DataBinding as SimDataBinding,
-        SimulatorSession,
-        build_device,
-    )
+from api_server.schemas import DataBindingConfig
+from api_server.utils import _utc_now_iso
+from api_server.models import SessionRecord
+from simulator_core.dataset_registry import DatasetRegistry
+from simulator_core.session import (
+    DataBinding as SimDataBinding,
+    SimulatorSession,
+    build_device,
+)
 
 if TYPE_CHECKING:
-    from api_server.dependencies import DeviceRecord, SessionRecord, SessionSideEffects
+    from api_server.models import DeviceRecord, SessionRecord, SessionSideEffects
 
 
 class SessionService:
@@ -96,11 +83,6 @@ class SessionService:
     # ------------------------------------------------------------------
 
     def create_session(self, device_ids: list[str], speed: int) -> dict[str, Any]:
-        try:
-            from Iot_Simulator.api_server.dependencies import SessionRecord
-        except ModuleNotFoundError:
-            from api_server.dependencies import SessionRecord
-
         with self._lock:
             missing = [device_id for device_id in device_ids if device_id not in self.devices]
             if missing:
@@ -168,11 +150,7 @@ class SessionService:
             }
 
     def start_session(self, session_id: str) -> None:
-        try:
-            from Iot_Simulator.api_server.dependencies import SessionSideEffects
-        except ModuleNotFoundError:
-            from api_server.dependencies import SessionSideEffects
-
+        from api_server.models import SessionSideEffects
         effects = SessionSideEffects()
         with self._lock:
             record = self._require_session(session_id)

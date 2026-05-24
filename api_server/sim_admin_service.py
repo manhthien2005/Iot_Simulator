@@ -9,10 +9,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-try:
-    from Iot_Simulator.api_server.repositories.device_repository import DeviceRepository
-except ModuleNotFoundError:
-    from api_server.repositories.device_repository import DeviceRepository
+from api_server.repositories.device_repository import DeviceRepository
 
 logger = logging.getLogger(__name__)
 

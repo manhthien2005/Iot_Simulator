@@ -59,3 +59,15 @@ def _normalize_gender(value: Any) -> str | None:
 def _is_sleeping_state(activity_state: Any) -> bool:
     """Return ``True`` when the activity state represents sleep."""
     return str(activity_state or "").strip().lower() == "sleeping"
+
+
+def _derive_age(value: Any, default: int = 35) -> int:
+    """Derive age in years from a date-of-birth value, falling back to *default*."""
+    dob = _coerce_date(value)
+    if dob is None:
+        return default
+    today = datetime.now(timezone.utc).date()
+    years = today.year - dob.year
+    if (today.month, today.day) < (dob.month, dob.day):
+        years -= 1
+    return max(years, 0)
