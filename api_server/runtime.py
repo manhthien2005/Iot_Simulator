@@ -78,7 +78,8 @@ from api_server.services.risk_service import (
     _severity_from_risk_level,
 )
 from api_server.services.verification_service import VerificationService
-from api_server.services.fall_service import FallService, _normalise_imu_window_response, _coerce_float_list
+from api_server.services.fall_service import FallService
+from api_server.imu_utils import _normalise_imu_window_response, _coerce_float_list
 from api_server.services.dashboard_service import DashboardService
 from api_server.services.publish_service import PublishService
 from pre_model_trigger import (
@@ -1394,7 +1395,7 @@ class SimulatorRuntime:
                 device.is_online = bool(state.get("is_online", True))
                 device.last_seen_at = payload.get("emitted_at")
                 if device.state not in {"fall_countdown", "offline"}:
-                    device.state = self._scenario_state_hint(scenario_id)
+                    device.state = _scenario_state_hint_fn(scenario_id)
                 if device.bound_db_device_id is not None:
                     effects.pending_heartbeats.append(
                         PendingHeartbeatUpdate(
