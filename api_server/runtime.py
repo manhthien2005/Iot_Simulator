@@ -71,6 +71,12 @@ from api_server.services.vitals_service import VitalsService
 from api_server.services.alert_service import AlertService
 from api_server.services.session_service import SessionService
 from api_server.services.sleep_service import SleepService
+from api_server.services.risk_service import (
+    RiskService,
+    _build_risk_history,
+    _risk_level_from_score,
+    _severity_from_risk_level,
+)
 from pre_model_trigger import (
     FallPreTrigger,
     HealthGuardAPIClient,
@@ -628,9 +634,18 @@ class SimulatorRuntime:
             publish_device_log_fn=self._publish_device_log,
             require_device_fn=self.device_service._require_device,
             internal_secret=os.getenv("INTERNAL_SERVICE_SECRET"),
-            # MEDIUM #9: pass pre-loaded scenario data to avoid double load
             sleep_scenario_phases=SLEEP_SCENARIO_PHASES,
             sleep_scenario_profiles=SLEEP_SCENARIO_PROFILES,
+        )
+
+        self.risk_service = RiskService(
+            devices=self.devices,
+            risk_snapshots=self.risk_snapshots,
+            risk_history=self.risk_history,
+            event_history=self.event_history,
+            lock=self._lock,
+            vitals_service=self.vitals_service,
+            record_event_fn=self._record_event,
         )
 
     # ── Runtime persistence helpers (Module F.1 / F.2) ───────────────────
@@ -2316,60 +2331,10 @@ class SimulatorRuntime:
         return self.sleep_service.push_sleep_session_for_date(device_id, target_date, scenario_id)
 
     def risk_score(self, device_id: str) -> RiskScoreResponse:
-        with self._lock:
-            self._require_device(device_id)
-            snapshot = self.risk_snapshots.get(device_id)
-            if snapshot is None:
-                score = self._calculate_dynamic_risk(device_id)
-                level = self._risk_level_from_score(score)
-                snapshot = self._upsert_risk_snapshot(
-                    device_id=device_id,
-                    score=score,
-                    risk_level=level,
-                    risk_type="general",
-                    explanation=self._build_risk_explanation(device_id=device_id, score=score, risk_type="general"),
-                    calculated_at=_utc_now_iso(),
-                )
-            history = self.risk_history.get(device_id)
-            if not history:
-                history = self._build_risk_history(device_id, snapshot.score)
-                self.risk_history[device_id] = history
-            return RiskScoreResponse(
-                deviceId=device_id,
-                score=snapshot.score,
-                riskLevel=snapshot.risk_level,  # type: ignore[arg-type]
-                model=snapshot.model,
-                algorithm=snapshot.algorithm,
-                calculatedAt=snapshot.calculated_at,
-                explanation=snapshot.explanation,
-                history=history,
-            )
+        return self.risk_service.risk_score(device_id)
 
     def inject_risk_score(self, request: RiskInjectRequest) -> None:
-        with self._lock:
-            self._require_device(request.device_id)
-            score = max(0.0, min(1.0, round(float(request.score), 3)))
-            explanation = self._build_risk_explanation(
-                device_id=request.device_id,
-                score=score,
-                risk_type=request.risk_type,
-            )
-            self._upsert_risk_snapshot(
-                device_id=request.device_id,
-                score=score,
-                risk_level=request.risk_level,
-                risk_type=request.risk_type,
-                explanation=explanation,
-                calculated_at=_utc_now_iso(),
-            )
-            self._append_risk_history(request.device_id, score)
-            self._record_event(
-                device_id=request.device_id,
-                event_type="risk_injected",
-                severity=self._severity_from_risk_level(request.risk_level),
-                message=f"Risk injected ({request.risk_type})",
-                metadata={"score": f"{score:.2f}", "risk_level": request.risk_level, "risk_type": request.risk_type},
-            )
+        return self.risk_service.inject_risk_score(request)
 
     # ADR-020 Phase 7 S7: ``trigger_risk_calculation`` disposed alongside
     # ``_trigger_risk_inference``. The router endpoint
@@ -3123,130 +3088,6 @@ class SimulatorRuntime:
 
     def _require_device(self, device_id: str) -> DeviceRecord:
         return self.device_service._require_device(device_id)
-
-
-    def _upsert_risk_snapshot(
-        self,
-        *,
-        device_id: str,
-        score: float,
-        risk_level: str,
-        risk_type: str,
-        explanation: list[RiskContribution],
-        calculated_at: str,
-    ) -> RiskSnapshot:
-        snapshot = RiskSnapshot(
-            device_id=device_id,
-            score=round(score, 3),
-            risk_level=risk_level,
-            risk_type=risk_type,
-            explanation=explanation,
-            calculated_at=calculated_at,
-        )
-        self.risk_snapshots[device_id] = snapshot
-        return snapshot
-
-    def _append_risk_history(self, device_id: str, score: float) -> None:
-        score = round(max(0.0, min(1.0, score)), 3)
-        today = datetime.now(timezone.utc).date().isoformat()
-        history = self.risk_history.get(device_id)
-        if history is None:
-            history = self._build_risk_history(device_id, score)
-        if history and history[-1].date == today:
-            history[-1] = RiskHistoryPoint(date=today, score=score)
-        else:
-            history.append(RiskHistoryPoint(date=today, score=score))
-        self.risk_history[device_id] = history[-30:]
-
-    @staticmethod
-    def _build_risk_history(device_id: str, baseline_score: float) -> list[RiskHistoryPoint]:
-        seed = int(device_id[:8], 16)
-        today = datetime.now(timezone.utc).date()
-        history: list[RiskHistoryPoint] = []
-        current = max(0.05, min(0.95, baseline_score))
-        for offset in range(29, -1, -1):
-            date_value = (today - timedelta(days=offset)).isoformat()
-            drift = ((seed + offset * 17) % 11 - 5) / 200
-            current = max(0.01, min(0.99, current + drift))
-            history.append(RiskHistoryPoint(date=date_value, score=round(current, 3)))
-        return history
-
-    def _calculate_dynamic_risk(self, device_id: str) -> float:
-        score = 0.18
-        try:
-            vitals = self.latest_vitals(device_id)
-            score += max(0.0, (vitals.heartRate - 72.0) / 220.0)
-            score += max(0.0, (96.0 - vitals.spo2) / 35.0)
-            score += max(0.0, (vitals.bloodPressureSys - 125.0) / 220.0)
-        except KeyError:
-            pass
-
-        device = self.devices[device_id]
-        if device.battery_level < 20:
-            score += 0.06
-        if device.state in {"warning", "critical", "fall_countdown", "sos_active"}:
-            score += 0.14
-
-        now = datetime.now(timezone.utc)
-        for event in reversed(self.event_history):
-            if event.device_id != device_id:
-                continue
-            age = now - datetime.fromisoformat(event.timestamp)
-            if age.total_seconds() > 3600:
-                break
-            if event.severity == "critical":
-                score += 0.1
-            elif event.severity == "warning":
-                score += 0.05
-        return round(max(0.0, min(1.0, score)), 3)
-
-    def _build_risk_explanation(self, *, device_id: str, score: float, risk_type: str) -> list[RiskContribution]:
-        try:
-            vitals = self.latest_vitals(device_id)
-            hr = f"{round(vitals.heartRate)} bpm"
-            spo2 = f"{round(vitals.spo2)}%"
-            bp_sys = f"{round(vitals.bloodPressureSys)} mmHg"
-        except KeyError:
-            hr = "72 bpm"
-            spo2 = "98%"
-            bp_sys = "120 mmHg"
-
-        type_weight = {
-            "general": 0.08,
-            "stroke": 0.11,
-            "cardiac": 0.13,
-        }.get(risk_type, 0.08)
-        baseline_age = 65 if risk_type != "general" else 58
-
-        return [
-            RiskContribution(feature="heart_rate", value=hr, weight=0.18, direction="up"),
-            RiskContribution(feature="spo2", value=spo2, weight=0.12, direction="up"),
-            RiskContribution(feature="blood_pressure_sys", value=bp_sys, weight=0.1, direction="up"),
-            RiskContribution(feature="risk_type_bias", value=risk_type, weight=type_weight, direction="up"),
-            RiskContribution(feature="age", value=f"{baseline_age} years", weight=0.07, direction="up"),
-            RiskContribution(feature="sleep_efficiency", value="~estimated", weight=-0.04, direction="down"),
-            RiskContribution(feature="stability_guard", value=f"{score:.2f}", weight=0.03, direction="flat"),
-        ]
-
-    @staticmethod
-    def _risk_level_from_score(score: float) -> str:
-        if score >= 0.85:
-            return "CRITICAL"
-        if score >= 0.65:
-            return "HIGH"
-        if score >= 0.4:
-            return "MEDIUM"
-        return "LOW"
-
-    @staticmethod
-    def _severity_from_risk_level(level: str) -> str:
-        mapping = {
-            "LOW": "normal",
-            "MEDIUM": "warning",
-            "HIGH": "warning",
-            "CRITICAL": "critical",
-        }
-        return mapping.get(level.upper(), "warning")
 
     def _record_event(
         self,
