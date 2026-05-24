@@ -89,6 +89,11 @@ from simulator_core.fall_ai_client import (
     FALL_VARIANT_DEFAULT_CONTEXT,
     motion_window_to_samples as _motion_window_to_samples,
 )
+from simulator_core.tick_pipeline import (
+    apply_scenario_overrides as _apply_scenario_overrides_fn,
+    annotate_scenario_replay as _annotate_scenario_replay_fn,
+    scenario_state_hint as _scenario_state_hint_fn,
+)
 from pre_model_trigger.mobile_telemetry_client import MobileTelemetryClient
 from pre_model_trigger.sleep_dispatch import SleepRiskDispatcher
 from simulator_core.session import DataBinding as SimDataBinding, SimulatorSession, build_device
@@ -1443,7 +1448,7 @@ class SimulatorRuntime:
                             _device.engine.transition_to("walking")
                             break
             if self.devices[device_id].state not in {"offline"}:
-                self.devices[device_id].state = self._scenario_state_hint(scenario_id)
+                self.devices[device_id].state = _scenario_state_hint_fn(scenario_id)
             for record in self.sessions.values():
                 if record.status == "running" and device_id in record.device_ids:
                     effects.extend(self._tick_session_locked(record, force=True))
@@ -2844,9 +2849,9 @@ class SimulatorRuntime:
             scenario_id = self.device_scenarios.get(device_id, "normal_rest")
             device_source_mode = str(record.source_modes.get(device_id, "synthetic") or "synthetic").strip().lower()
             if device_source_mode == "replay":
-                self._annotate_scenario_replay(payload, scenario_id)
+                _annotate_scenario_replay_fn(payload, scenario_id)
             else:
-                self._apply_scenario_overrides(payload, scenario_id)
+                _apply_scenario_overrides_fn(payload, scenario_id)
         for payload in outputs:
             device_id = str(payload.get("device_id") or "")
             if device_id in self.devices:
@@ -3088,186 +3093,6 @@ class SimulatorRuntime:
 
     def _refresh_pending_sync_flags(self) -> None:
         self.device_service._refresh_pending_sync_flags()
-
-    @staticmethod
-    def _scenario_state_hint(scenario_id: str) -> str:
-        if scenario_id in {"hypoxia_critical", "high_risk_cardiac", "fall_no_response", "sleep_apnea_severe"}:
-            return "critical"
-        if scenario_id in {
-            "tachycardia_warning", "hypertension_moderate", "fragmented_sleep",
-            "medium_risk_general", "fall_false_alarm",
-            # HIGH #3 fix: new sleep scenarios mapped to appropriate state hints
-            "sleep_apnea_mild", "insomnia_pattern",
-        }:
-            return "warning"
-        if scenario_id == "fall_high_confidence":
-            return "fall_countdown"
-        if scenario_id in {"normal_rest", "normal_walking", "good_sleep_night", "elderly_normal"}:
-            return "streaming"
-        return "streaming"
-
-    @staticmethod
-    def _annotate_scenario_replay(payload: dict[str, Any], scenario_id: str) -> None:
-        """Replay mode may annotate scenario context but must not rewrite real vitals."""
-        annotation = payload.get("scenario_annotation")
-        if not isinstance(annotation, dict):
-            annotation = {}
-            payload["scenario_annotation"] = annotation
-        annotation["scenario_id"] = scenario_id
-        annotation["overlay_blocked"] = True
-        annotation["state_hint"] = SimulatorRuntime._scenario_state_hint(scenario_id)
-        if scenario_id.startswith("fall_"):
-            annotation["event_hint"] = "fall_detected"
-
-    @staticmethod
-    def _apply_scenario_overrides(payload: dict[str, Any], scenario_id: str) -> None:
-        vitals = payload.get("vitals") or {}
-        emitted_at = str(payload.get("emitted_at") or _utc_now_iso())
-        try:
-            phase = datetime.fromisoformat(emitted_at).timestamp()
-        except ValueError:
-            phase = monotonic()
-
-        device_id_str = str(payload.get("device_id") or "")
-        device_offset = float(hash(device_id_str) % 97)
-
-        def wave(scale: float, shift: float = 0.0) -> float:
-            return (math.sin((phase + shift + device_offset) / 9.0) * scale
-                    + math.cos((phase + shift + device_offset) / 13.0) * (scale * 0.4))
-
-        def clamp(value: float, lower: float, upper: float) -> float:
-            return max(lower, min(upper, value))
-
-        profiles: dict[str, tuple[float, ...]] = {
-            # AHA resting adult. HR 60-100, BP <120/80, SpO2 95-100%
-            "normal_rest": (65.0, 4.0, 97.5, 0.7, 36.6, 0.15, 115.0, 75.0, 5.0, 3.5, 15.0),
-            # AHA tachycardia >100bpm. SNS activation.
-            "tachycardia_warning": (108.0, 7.0, 96.0, 0.8, 37.1, 0.20, 130.0, 84.0, 6.5, 4.5, 20.0),
-            # WHO SpO2 <90% = hypoxia. Compensatory tachycardia, tachypnea.
-            "hypoxia_critical": (118.0, 10.0, 88.0, 1.5, 37.5, 0.25, 148.0, 94.0, 9.0, 6.0, 26.0),
-            # ACC/AHA Stage 2 HTN. bp_dia_base=100 keeps DBP above warning threshold
-            # even after wave trough and current persona adjustments.
-            "hypertension_moderate": (80.0, 5.5, 96.5, 0.7, 37.0, 0.18, 138.0, 100.0, 8.0, 5.5, 16.0),
-            # AASM deep NREM: HR 50-60, BP dips 10-20%, RR 12-14.
-            "good_sleep_night": (55.0, 3.0, 96.5, 1.0, 36.3, 0.15, 105.0, 65.0, 4.0, 3.0, 13.0),
-            # AASM fragmented: arousals, SpO2 dips, HR spikes.
-            "fragmented_sleep": (76.0, 7.0, 93.0, 1.5, 36.8, 0.22, 126.0, 82.0, 7.5, 5.0, 17.0),
-            # ACC/AHA ACS/STEMI: severe ischemia, HR++, BP++, SpO2 drop.
-            "high_risk_cardiac": (128.0, 12.0, 91.0, 1.8, 38.0, 0.30, 165.0, 104.0, 12.0, 8.0, 24.0),
-            # Pre-HTN + mild tachycardia. Composite medium-risk.
-            "medium_risk_general": (94.0, 7.0, 94.5, 1.0, 37.3, 0.22, 142.0, 90.0, 8.5, 5.5, 18.0),
-            # WHO/AHA: moderate walking adult. HR 80-100, BP slightly elevated, SpO2 normal.
-            "normal_walking": (88.0, 5.0, 97.0, 0.5, 37.1, 0.15, 126.0, 82.0, 6.0, 4.0, 18.0),
-            # AASM elderly normal: less deep sleep, HR 55-65, mild BP elevation (age-adjusted).
-            "elderly_normal": (60.0, 4.0, 96.0, 0.8, 36.4, 0.15, 118.0, 75.0, 5.0, 3.5, 14.0),
-            # NOTE: fall_* scenarios intentionally absent. Fall vitals = surge (Phase 3).
-        }
-        (hr_base, hr_amp, spo2_base, spo2_amp, temp_base, temp_amp,
-         bp_sys_base, bp_dia_base, bp_sys_amp, bp_dia_amp, rr_base) = profiles.get(
-            scenario_id, profiles["normal_rest"]
-        )
-
-        heart_rate = clamp(hr_base + wave(hr_amp, 0.0), 40, 190)
-        spo2 = clamp(spo2_base + wave(spo2_amp, 3.0), 78, 100)
-        temperature = clamp(temp_base + wave(temp_amp, 7.0), 34.5, 41.5)
-        blood_pressure_sys = clamp(bp_sys_base + wave(bp_sys_amp, 11.0), 85, 225)
-        blood_pressure_dia = clamp(bp_dia_base + wave(bp_dia_amp, 15.0), 50, 140)
-        respiratory_rate = clamp(rr_base + wave(1.5, 5.0), 4.0, 35.0)
-
-        # Fall physiological response — variant-dependent (ATLS 10th ed.)
-        _fall_activity = str((payload.get("state") or {}).get("activity_state") or "")
-        _fall_variant  = str((payload.get("state") or {}).get("fall_variant") or "fall_generic")
-
-        if _fall_activity == "fall":
-            if _fall_variant == "fall_no_response":
-                # Neurogenic shock / vagal syncope: parasympathetic dominance.
-                # NO catecholamine surge. Bradycardia + hypotension + hypoxia + agonal breathing.
-                # Source: ATLS 10th ed. ch.3; Guyton & Hall ch.18 (vasovagal).
-                heart_rate         = clamp(heart_rate - 10.0, 40, 220)
-                spo2               = clamp(spo2 - 14.0, 78, 100)
-                blood_pressure_sys = clamp(blood_pressure_sys - 22.0, 85, 225)
-                blood_pressure_dia = clamp(blood_pressure_dia - 12.0, 50, 140)
-                respiratory_rate   = clamp(respiratory_rate - 8.0, 4, 35)
-            elif _fall_variant == "fall_brief":
-                # Minor fall — small sympathetic response, quick recovery expected.
-                heart_rate         = clamp(heart_rate + 15.0, 40, 220)
-                spo2               = clamp(spo2 - 2.0, 78, 100)
-                blood_pressure_sys = clamp(blood_pressure_sys + 8.0, 85, 225)
-            else:
-                # fall_1, fall_generic, fall_high_confidence — catecholamine surge (ATLS).
-                heart_rate         = clamp(heart_rate + 32.0, 40, 220)
-                spo2               = clamp(spo2 - 6.0, 78, 100)
-                blood_pressure_sys = clamp(blood_pressure_sys + 22.0, 85, 225)
-        elif _fall_activity == "recovery":
-            heart_rate         = clamp(heart_rate + 15.0, 40, 220)
-            spo2               = clamp(spo2 - 3.0, 78, 100)
-            blood_pressure_sys = clamp(blood_pressure_sys + 10.0, 85, 225)
-
-        # Stress state: cortisol/adrenaline surge -> HR+, BP+, Temp+ (slight)
-        # Source: APA 2023 stress physiology; cortisol cardiovascular effects
-        _stress = str((payload.get("state") or {}).get("stress_state") or "")
-        if _stress == "stress":
-            heart_rate         = clamp(heart_rate + 12.0, 40, 220)
-            blood_pressure_sys = clamp(blood_pressure_sys + 10.0, 85, 225)
-            blood_pressure_dia = clamp(blood_pressure_dia + 7.0, 50, 140)
-            temperature        = clamp(temperature + 0.2, 34.5, 41.5)
-
-        # ── Persona-aware adjustments ────────────────────────────────────────────
-        _pcfg    = payload.get("persona_config") or {}
-        _age     = float(_pcfg.get("age", 70.0))
-        _wkg     = float(_pcfg.get("weight_kg", 65.0))
-        _hm      = float(_pcfg.get("height_cm", 165.0)) / 100.0
-        _bmi     = max(10.0, min(70.0, _wkg / (_hm ** 2) if _hm > 0 else 22.0))
-
-        # Age: AHA 2023 (HR), Framingham 2022 (BP), J Appl Physiol (SpO2), ATS 2019 (RR)
-        _hr_age   = max(0.0, (_age - 40.0)) * 0.25
-        _spo2_age = -(max(0.0, _age - 50.0) * 0.03)
-        _sys_age  = max(0.0, (_age - 30.0)) * 0.6
-        _dia_age  = (min(_age, 55.0) - 30.0) * 0.3 - max(0.0, _age - 55.0) * 0.2
-        _tmp_age  = -(max(0.0, _age - 40.0) * 0.01)
-        _rr_age   = max(0.0, (_age - 50.0) * 0.1)
-
-        # BMI: NHANES III (HR/BP), Obesity Reviews 2020 (SpO2)
-        if _bmi > 25.0:
-            _ex = _bmi - 25.0
-            _hr_bmi, _sys_bmi, _dia_bmi = _ex*0.5, _ex*1.0, _ex*0.6
-            _spo2_bmi, _tmp_bmi = -(_ex*0.08), _ex*0.015
-        elif _bmi < 18.5:
-            _df = 18.5 - _bmi
-            _hr_bmi, _sys_bmi, _dia_bmi = _df*0.4, -(_df*0.7), -(_df*0.4)
-            _spo2_bmi, _tmp_bmi = 0.0, -(_df*0.01)
-        else:
-            _hr_bmi = _sys_bmi = _dia_bmi = _spo2_bmi = _tmp_bmi = 0.0
-
-        heart_rate         = clamp(heart_rate + _hr_age + _hr_bmi,           40, 220)
-        spo2               = clamp(spo2 + _spo2_age + _spo2_bmi,             78, 100)
-        temperature        = clamp(temperature + _tmp_age + _tmp_bmi,        34.5, 41.5)
-        blood_pressure_sys = clamp(blood_pressure_sys + _sys_age + _sys_bmi, 85, 225)
-        blood_pressure_dia = clamp(blood_pressure_dia + _dia_age + _dia_bmi, 50, 140)
-        respiratory_rate   = clamp(respiratory_rate + _rr_age,               4, 35)
-        # ── Inter-signal coupling ────────────────────────────────────────────────
-        # SpO2 → RR: carotid body chemoreceptor reflex (Guyton & Hall, Ch. 42)
-        # When SpO2 < 95%, peripheral chemoreceptors fire → ventilatory drive increases.
-        # Rate: approximately 0.5 breath/min per % SpO2 drop below 95%.
-        if spo2 < 95.0:
-            _rr_hypoxia = (95.0 - spo2) * 0.5
-            respiratory_rate = clamp(respiratory_rate + _rr_hypoxia, 4, 35)
-        # ─────────────────────────────────────────────────────────────────────────
-
-        # Temperature → HR: fever-induced tachycardia (Wunderlich 1851; Mackowiak JAMA 1992)
-        # Every 1°C above 37.5°C (fever threshold) adds ~10 bpm.
-        # This is additive on top of scenario profile and persona adjustments.
-        if temperature > 37.5:
-            _hr_fever = (temperature - 37.5) * 10.0
-            heart_rate = clamp(heart_rate + _hr_fever, 40, 220)
-
-        vitals["heart_rate"] = round(heart_rate, 2)
-        vitals["spo2"] = round(spo2, 2)
-        vitals["temperature"] = round(temperature, 2)
-        vitals["blood_pressure_sys"] = round(blood_pressure_sys, 2)
-        vitals["blood_pressure_dia"] = round(blood_pressure_dia, 2)
-        vitals["respiratory_rate"] = round(respiratory_rate, 1)
-        payload["vitals"] = vitals
 
     @staticmethod
     def _to_vitals(
