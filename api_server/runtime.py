@@ -78,6 +78,9 @@ from api_server.services.risk_service import (
     _severity_from_risk_level,
 )
 from api_server.services.verification_service import VerificationService
+from api_server.services.fall_service import FallService, _normalise_imu_window_response, _coerce_float_list
+from api_server.services.dashboard_service import DashboardService
+from api_server.services.publish_service import PublishService
 from pre_model_trigger import (
     FallPreTrigger,
     HealthGuardAPIClient,
@@ -173,191 +176,10 @@ def _safe_float_db(value: Any) -> float | None:
     return _safe_float(value, None)
 
 
-# ADR-019 Phase 7 S9: BE compact response -> simulator AIPrediction.
-# Replaces the model-api raw normaliser (``normalise_verdict``) for the
-# fall path. The compact response carries fewer fields than the
-# model-api response (no SHAP top_features, no Vietnamese explanation
-# string, no separate confidence) so we synthesise a generic Vietnamese
-# explanation from probability + band. The richer XAI surface can be
-# restored later by widening the BE response shape (out of S9 scope).
-
-_BAND_TO_RISK_BAND: dict[str, str] = {
-    "critical": "critical",
-    "critical_fall": "critical",
-    "warning": "warning",
-    "possible_fall": "warning",
-    "likely_fall": "warning",
-    "normal": "normal",
-    "unknown": "normal",
-}
-
-_BAND_TO_LABEL: dict[str, str] = {
-    "critical": "critical_fall",
-    "critical_fall": "critical_fall",
-    "warning": "likely_fall",
-    "likely_fall": "likely_fall",
-    "possible_fall": "possible_fall",
-    "normal": "normal",
-    "unknown": "normal",
-}
-
-
-def _normalise_imu_window_response(
-    response: dict[str, Any] | None,
-    *,
-    predicted_at: str,
-) -> "AIPrediction":
-    """Project ``ImuWindowResponse`` into the simulator's :class:`AIPrediction`.
-
-    Returns an offline-shaped prediction when the response is missing
-    or the backend reported ``status="model_unavailable"`` so the FE
-    always has a deterministic envelope to render.
-    """
-    if not isinstance(response, dict):
-        return AIPrediction(
-            label="normal",
-            probability=0.0,
-            confidence=0.0,
-            riskBand="normal",
-            requiresAttention=False,
-            highPriorityAlert=False,
-            explanationSummary=(
-                "Mobile BE không trả phản hồi — đang dùng ngưỡng pre-trigger."
-            ),
-            topFeatures=[],
-            predictedAt=predicted_at,
-            modelStatus="offline",
-            failureReason="transport_error",
-        )
-
-    status = str(response.get("status") or "").strip().lower()
-    if status != "ok":
-        return AIPrediction(
-            label="normal",
-            probability=0.0,
-            confidence=0.0,
-            riskBand="normal",
-            requiresAttention=False,
-            highPriorityAlert=False,
-            explanationSummary=(
-                "AI model offline — đang dùng ngưỡng pre-trigger để quyết định cảnh báo."
-            ),
-            topFeatures=[],
-            predictedAt=predicted_at,
-            modelStatus="offline",
-            failureReason=(
-                "model_unavailable" if status == "model_unavailable" else "validation_422"
-            ),
-        )
-
-    probability = _safe_float(response.get("fall_probability"), 0.0) or 0.0
-    probability = max(0.0, min(1.0, probability))
-    band_raw = str(response.get("prediction_band") or "unknown").strip().lower()
-    risk_band = _BAND_TO_RISK_BAND.get(band_raw, "normal")
-    label = _BAND_TO_LABEL.get(band_raw, "normal")
-    requires_attention = bool(response.get("requires_attention"))
-    predicted_fall = bool(response.get("predicted_fall"))
-    # ``highPriorityAlert`` keeps the same semantics as the legacy
-    # model-api flag: critical band + high probability.
-    high_priority_alert = (risk_band == "critical") and (probability >= 0.8 or predicted_fall)
-
-    # P0-4 (2026-05-18): propagate BE-side IDs so a follow-up
-    # /telemetry/alert can dedup against the existing FallEvent row
-    # instead of inserting a duplicate.
-    raw_fall_event_id = response.get("fall_event_id")
-    fall_event_id: int | None = None
-    if isinstance(raw_fall_event_id, int):
-        fall_event_id = raw_fall_event_id
-    elif isinstance(raw_fall_event_id, str) and raw_fall_event_id.strip().isdigit():
-        fall_event_id = int(raw_fall_event_id.strip())
-
-    raw_request_id = response.get("model_request_id")
-    model_request_id: str | None = None
-    if isinstance(raw_request_id, str) and raw_request_id.strip():
-        model_request_id = raw_request_id.strip()
-
-    explanation = _build_synthetic_fall_explanation(
-        risk_band=risk_band,
-        probability=probability,
-        predicted_fall=predicted_fall,
-        model_request_id=model_request_id,
-    )
-    return AIPrediction(
-        label=label,  # type: ignore[arg-type]
-        probability=probability,
-        # No separate confidence channel from the BE compact response —
-        # mirror probability so downstream metadata (S2 confidence
-        # bridge) stays meaningful.
-        confidence=probability,
-        riskBand=risk_band,  # type: ignore[arg-type]
-        requiresAttention=requires_attention,
-        highPriorityAlert=high_priority_alert,
-        explanationSummary=explanation,
-        topFeatures=[],
-        predictedAt=predicted_at,
-        modelStatus="ok",
-        fallEventId=fall_event_id,
-        modelRequestId=model_request_id,
-    )
-
-
-_BAND_PHRASE_VI: dict[str, str] = {
-    "critical": "té ngã nghiêm trọng",
-    "warning": "khả năng té ngã",
-    "normal": "không có dấu hiệu té ngã",
-}
-
-
-def _build_synthetic_fall_explanation(
-    *,
-    risk_band: str,
-    probability: float,
-    predicted_fall: bool,
-    model_request_id: Any,
-) -> str:
-    """Compose a short Vietnamese sentence from the BE compact response.
-
-    Replaces the model-api SHAP-driven Vietnamese sentence with a
-    deterministic synthesis so the operator UI keeps a useful caption
-    even though the rich XAI fields are not on the BE response shape.
-    """
-    phrase = _BAND_PHRASE_VI.get(risk_band, _BAND_PHRASE_VI["normal"])
-    pct = int(round(probability * 100))
-    base = f"AI đánh giá: {phrase} (xác suất {pct}%)."
-    if predicted_fall and risk_band != "critical":
-        base += " Mức xác suất chưa đủ cao để escalate SOS."
-    request_id = str(model_request_id or "").strip()
-    if request_id:
-        base += f" Trace: {request_id[:8]}…"
-    return base
-
-
 def _safe_int(value: Any) -> int | None:
     cast = _safe_float(value, None)
     return int(round(cast)) if cast is not None else None
 
-
-def _coerce_float_list(value: Any) -> list[float]:
-    """Best-effort conversion of *value* to a ``list[float]``.
-
-    Designed for the motion arrays emitted by ``MotionGenerator``: numpy
-    arrays, plain lists, tuples — anything iterable.  Non-numeric entries
-    are skipped silently so a partial dataset row does not crash the
-    response (we'd rather return what we can than 500 the operator).
-    """
-    if value is None:
-        return []
-    try:
-        iterator = iter(value)  # type: ignore[arg-type]
-    except TypeError:
-        cast = _safe_float(value, None)
-        return [cast] if cast is not None else []
-    out: list[float] = []
-    for item in iterator:
-        cast = _safe_float(item, None)
-        if cast is not None:
-            out.append(cast)
-    return out
 
 
 # Sleep scenario data loaded from external YAML config (see api_server/config/sleep_scenarios.yaml)
@@ -436,10 +258,13 @@ class SimulatorRuntime:
         self.event_history: collections.deque[EventRecord] = collections.deque(maxlen=2000)
         self.risk_snapshots: dict[str, RiskSnapshot] = {}
         # Removed dead attribute: self._dashboard_cache (actual cache uses _dashboard_cache_ref[0])
-        self._dashboard_cache_ts: float = 0.0
+        # Mutable single-element lists so DashboardService / PublishService can
+        # share them by reference without taking ownership.
+        self._dashboard_cache_ts_ref: list[float] = [0.0]
         # HIGH #1 fix: pre-computed alert counter so dashboard_summary()
         # does not need to iterate event_history under lock.
         self._alert_count_1h: int = 0
+        self._alert_count_1h_ref: list[int] = [0]
         self._alert_timestamps_1h: collections.deque[float] = collections.deque()
         self.risk_history: dict[str, list[RiskHistoryPoint]] = {}
         self.logs = LogHub()
@@ -459,6 +284,7 @@ class SimulatorRuntime:
         # device fail/retry không kéo cả fleet đứng cùng lúc.
         self._device_buffers: dict[str, list[dict[str, Any]]] = {}
         self._last_push_time = 0.0
+        self._last_push_time_ref: list[float] = [0.0]
         self._device_in_flight: set[str] = set()
 
     def _init_transport(self) -> None:
@@ -661,6 +487,67 @@ class SimulatorRuntime:
             push_interval=self._push_interval,
             alert_timestamps_1h=self._alert_timestamps_1h,
         )
+
+        self.fall_service = FallService(
+            devices=self.devices,
+            sessions=self.sessions,
+            device_scenarios=self.device_scenarios,
+            event_history=self.event_history,
+            lock=self._lock,
+            fall_predictions=self._fall_predictions,
+            fall_motion_refs=self._fall_motion_refs,
+            fall_countdown_policies=self._fall_countdown_policies,
+            fall_pre_trigger_results=self._fall_pre_trigger_results,
+            health_backend_url=self._health_backend_url,
+            mobile_telemetry_client=self._mobile_telemetry_client,
+            fall_pre_trigger=getattr(self, '_fall_pre_trigger', None),
+            settings_provider=getattr(self, '_settings_provider', None),
+            http_sender_fn=self._http_sender,
+            publish_device_log_fn=self._publish_device_log,
+            record_event_fn=self._record_event,
+            run_session_side_effects_fn=self._run_session_side_effects,
+            publish_flow_event_fn=self.publish_flow_event,
+            tick_session_locked_fn=self._tick_session_locked,
+            require_session_fn=self._require_session,
+            internal_secret=os.environ.get("INTERNAL_SERVICE_SECRET"),
+        )
+
+        # ── DashboardService (Task 3.6) ──────────────────────────────────
+        self.dashboard_service = DashboardService(
+            devices=self.devices,
+            sessions=self.sessions,
+            event_history=self.event_history,
+            alert_count_1h_ref=self._alert_count_1h_ref,
+            alert_timestamps_1h=self._alert_timestamps_1h,
+            health_state=self._health_state,
+            admin_client=self.admin_client,
+            trigger_orchestrator=self._trigger_orchestrator,
+            dashboard_cache_ref=self._dashboard_cache_ref,
+            dashboard_cache_ts_ref=self._dashboard_cache_ts_ref,
+            lock=self._lock,
+            health_backend_url=self._health_backend_url,
+            sleep_ai_client=self._sleep_ai_client,
+            compute_pre_trigger_block_fn=self._compute_pre_trigger_block,
+            compute_telemetry_block_fn=self._compute_telemetry_block,
+            measure_database_health_fn=self._measure_database_health,
+        )
+
+        # ── PublishService (Task 3.7) ────────────────────────────────────
+        self.publish_service = PublishService(
+            sessions=self.sessions,
+            devices=self.devices,
+            device_buffers=self._device_buffers,
+            device_in_flight=self._device_in_flight,
+            lock=self._lock,
+            health_backend_url=self._health_backend_url,
+            push_interval=self._push_interval,
+            last_push_time_ref=self._last_push_time_ref,
+            http_sender_fn=self._http_sender,
+            publish_flow_event_fn=self.publish_flow_event,
+            push_alert_fn=self._push_alert_to_backend,
+            logs=self.logs,
+        )
+        self.publish_service.set_refresh_fn(self._refresh_pending_sync_flags)
 
     # ── Runtime persistence helpers (Module F.1 / F.2) ───────────────────
 
@@ -925,246 +812,27 @@ class SimulatorRuntime:
                 })
 
     def _update_device_heartbeat(self, db_device_id: int, battery_level: int) -> None:
-        try:
-            with session_scope() as db:
-                SimAdminService.update_heartbeat(
-                    db_device_id,
-                    db,
-                    battery_level=battery_level,
-                    signal_strength=None,
-                )
-        except Exception:
-            logger.warning("Failed to update device heartbeat for db_device_id=%s", db_device_id, exc_info=True)
-            return
+        self.publish_service.update_device_heartbeat(db_device_id, battery_level)
 
     def _publish_vitals_http(
         self, pending_publish: PendingDevicePublish
     ) -> tuple[int, set[int], str | None]:
-        """ADR-020 S6 — push vitals batch over HTTP to the mobile BE.
-
-        Returns ``(ack_count, synced_device_ids, error_detail)``:
-
-        * ``ack_count`` mirrors ``response.ingested`` so the existing
-          ``publish_ok`` / ``last_publish_ack_count`` tracking semantics
-          stay intact (publish_ok = ack==count).
-        * ``synced_device_ids`` is ``response.risk_evaluated_devices``
-          so the dashboard can surface which devices the BE
-          auto-trigger fanned out for (OQ5 visibility).
-        * ``error_detail`` is a short tag suitable for the dashboard
-          error column on the non-2xx / exception path.
-
-        Payload matches the S5 ``VitalIngestRequest`` schema
-        (``extra="forbid"`` rejects unknown keys), so only the 9
-        canonical vital fields are forwarded — motion + metadata stay
-        sim-local.
-        """
-        canonical_vital_keys = (
-            "heart_rate",
-            "spo2",
-            "temperature",
-            "hrv",
-            "respiratory_rate",
-            "blood_pressure_sys",
-            "blood_pressure_dia",
-            "signal_quality",
-            "motion_artifact",
-        )
-
-        messages: list[dict[str, Any]] = []
-        for msg in pending_publish.messages:
-            db_device_id = msg.get("db_device_id")
-            if db_device_id is None:
-                continue
-            emitted_at = msg.get("emitted_at") or _utc_now_iso()
-            vitals_raw = msg.get("vitals") or {}
-            vitals_payload: dict[str, Any] = {}
-            for key in canonical_vital_keys:
-                value = vitals_raw.get(key)
-                if value is None:
-                    continue
-                vitals_payload[key] = value
-            messages.append(
-                {
-                    "db_device_id": int(db_device_id),
-                    "emitted_at": emitted_at,
-                    "vitals": vitals_payload,
-                }
-            )
-
-        if not messages:
-            return 0, set(), "no_valid_messages"
-
-        payload_json = _json.dumps({"messages": messages})
-        endpoint = self._telemetry_ingest_endpoint(self._health_backend_url)
-        request_headers = {
-            "Content-Type": "application/json",
-            "X-Internal-Service": "iot-simulator",
-        }
-        secret = os.environ.get("INTERNAL_SERVICE_SECRET")
-        if secret:
-            request_headers["X-Internal-Secret"] = secret
-
-        try:
-            response = httpx.post(
-                endpoint,
-                content=payload_json.encode("utf-8"),
-                headers=request_headers,
-                timeout=10,
-            )
-        except Exception as exc:
-            logger.warning("HTTP vitals publish failed", exc_info=True)
-            return 0, set(), f"http_error:{type(exc).__name__}"
-
-        status_code = int(response.status_code)
-        if not (200 <= status_code < 300):
-            return 0, set(), f"http_status_{status_code}"
-
-        try:
-            body = response.json()
-        except Exception:
-            logger.warning("HTTP vitals publish returned invalid JSON body")
-            return 0, set(), "invalid_response_body"
-
-        try:
-            ingested = int(body.get("ingested") or 0)
-        except (TypeError, ValueError):
-            ingested = 0
-
-        synced_device_ids: set[int] = set()
-        for raw_device in body.get("risk_evaluated_devices") or []:
-            try:
-                synced_device_ids.add(int(raw_device))
-            except (TypeError, ValueError):
-                continue
-
-        return ingested, synced_device_ids, None
+        return self.publish_service.publish_vitals_http(pending_publish)
 
     def _execute_pending_tick_publish(
         self, pending_publishes: list[PendingDevicePublish] | None
     ) -> None:
-        if not pending_publishes:
-            return
-        for pending_publish in pending_publishes:
-            self._execute_single_device_publish(pending_publish)
+        self.publish_service.execute_pending_tick_publish(pending_publishes)
 
     def _execute_single_device_publish(
         self,
         pending_publish: PendingDevicePublish,
     ) -> None:
-        """Publish 1 device's buffer via HTTP; isolate state update per device."""
-        device_id = pending_publish.device_id
-        publish_started = monotonic()
-        message_count = len(pending_publish.messages)
-
-        ack_count, synced_device_ids, publish_error_detail = (
-            self._publish_vitals_http(pending_publish)
-        )
-
-        publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
-        publish_ok = ack_count == message_count if message_count > 0 else False
-        attempt_at = _utc_now_iso()
-        publish_error: str | None = None
-        if message_count == 0:
-            publish_error = "Không có message nào để publish"
-        elif not publish_ok:
-            base_msg = (
-                f"Backend ack {ack_count}/{message_count} message — "
-                f"kiểm tra MQTT/HTTP downstream"
-            )
-            publish_error = (
-                f"{base_msg} ({publish_error_detail})"
-                if publish_error_detail
-                else base_msg
-            )
-
-        with self._lock:
-            self._device_in_flight.discard(device_id)
-            for session in self.sessions.values():
-                if session.status != "running":
-                    continue
-                if device_id not in session.device_ids:
-                    continue
-                status = session.device_publish_status.get(device_id)
-                if status is None:
-                    status = DevicePublishStatus()
-                    session.device_publish_status[device_id] = status
-                status.ok = publish_ok
-                status.ack_count = ack_count
-                status.message_count = message_count
-                status.latency_ms = publish_latency_ms
-                status.attempt_at = attempt_at
-                status.attempt_count += 1
-                status.ack_count_total += ack_count
-                if publish_ok:
-                    status.last_ok_at = attempt_at
-                    status.error = None
-                else:
-                    status.error = publish_error
-                # Aggregate flat fields for backward-compat dashboards.
-                self._refresh_session_publish_aggregate_locked(session)
-            if publish_ok:
-                buffer = self._device_buffers.get(device_id)
-                if buffer is not None:
-                    del buffer[: pending_publish.clear_count]
-                self._last_push_time = monotonic()
-                self._refresh_pending_sync_flags()
-
-        # ADR-024 S14: emit vitals_ingest flow event for every running session
-        # that owns this device (per-device granularity).
-        running_session_ids = [
-            sid
-            for sid, s in self.sessions.items()
-            if s.status == "running" and device_id in s.device_ids
-        ]
-        for sid in running_session_ids:
-            self.publish_flow_event(
-                sid,
-                {
-                    "step": "vitals_ingest",
-                    "status": "done" if publish_ok else "error",
-                    "device_id": device_id,
-                    "payload": {
-                        "ack_count": ack_count,
-                        "message_count": message_count,
-                        "latency_ms": publish_latency_ms,
-                    },
-                },
-            )
+        self.publish_service.execute_single_device_publish(pending_publish)
 
     @staticmethod
     def _refresh_session_publish_aggregate_locked(session: SessionRecord) -> None:
-        """Recompute flat ``last_publish_*`` from per-device map.
-
-        Backward-compat: dashboard, health-check, evidence center vẫn đọc
-        các field flat này. Aggregate semantic:
-        - ``last_publish_ok`` = AND của mọi device có status (vẫn yêu cầu
-          tất cả device ack thành công để session "khoẻ").
-        - ``ack_count`` / ``count`` / ``ack_count_total`` / ``attempt_count``
-          = tổng cộng dồn từ map.
-        - ``latency_ms`` = max của các device (worst-case observability).
-        - ``last_error`` / ``last_attempt_at`` / ``last_ok_at`` = giá trị
-          mới nhất theo timestamp.
-        """
-        statuses = list(session.device_publish_status.values())
-        if not statuses:
-            return
-        session.last_publish_ack_count = sum(s.ack_count for s in statuses)
-        session.last_publish_count = sum(s.message_count for s in statuses)
-        session.publish_ack_count_total = sum(
-            s.ack_count_total for s in statuses
-        )
-        session.publish_attempt_count = sum(s.attempt_count for s in statuses)
-        session.last_publish_ok = all(
-            s.ok for s in statuses if s.message_count > 0
-        ) and any(s.message_count > 0 for s in statuses)
-        latencies = [s.latency_ms for s in statuses if s.latency_ms is not None]
-        session.last_publish_latency_ms = max(latencies) if latencies else None
-        attempts = [s.attempt_at for s in statuses if s.attempt_at is not None]
-        session.last_publish_attempt_at = max(attempts) if attempts else None
-        ok_times = [s.last_ok_at for s in statuses if s.last_ok_at is not None]
-        session.last_publish_ok_at = max(ok_times) if ok_times else None
-        errors = [s.error for s in statuses if s.error]
-        session.last_publish_error = errors[-1] if errors else None
+        PublishService.refresh_session_publish_aggregate_locked(session)
 
     @staticmethod
     def _local_database_healthy() -> bool:
@@ -1205,76 +873,14 @@ class SimulatorRuntime:
 
     def _probe_backend_cached(self) -> None:
         """Refresh ``_health_state.backend_probe`` if its TTL has expired."""
-        probe = self._health_state.backend_probe
-        now_mono = self._health_state.now_monotonic()
-        if now_mono < probe.next_eligible_at:
-            return
-        endpoint = f"{self._health_backend_url.rstrip('/')}/api/v1/mobile/health"
-        start = monotonic()
-        latency_ms: int | None = None
-        try:
-            with urlopen(Request(endpoint, method="GET"), timeout=3.0) as response:
-                latency_ms = int((monotonic() - start) * 1000)
-                ok = int(response.getcode() or 0) == 200
-            with self._health_state.lock:
-                if not ok:
-                    probe.state = "down"
-                    probe.last_error = f"HTTP {response.getcode()}"
-                elif latency_ms is not None and latency_ms > self._HEALTH_BACKEND_SLOW_LATENCY_MS:
-                    probe.state = "slow"
-                    probe.last_error = None
-                else:
-                    probe.state = "connected"
-                    probe.last_error = None
-                probe.latency_ms = latency_ms
-                probe.checked_at = _utc_now_iso()
-                probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
-        except Exception as exc:
-            with self._health_state.lock:
-                probe.state = "down"
-                probe.latency_ms = None
-                probe.last_error = f"{type(exc).__name__}: {exc}"
-                probe.checked_at = _utc_now_iso()
-                probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
+        self.dashboard_service.probe_backend_cached()
 
     def _probe_model_api_cached(self) -> None:
         """Refresh ``_health_state.model_api_probe`` via ``SleepAIClient``."""
-        probe = self._health_state.model_api_probe
-        now_mono = self._health_state.now_monotonic()
-        if now_mono < probe.next_eligible_at:
-            return
-        try:
-            available = self._sleep_ai_client.check_availability()
-        except Exception as exc:
-            with self._health_state.lock:
-                probe.state = "unavailable"
-                probe.last_error = f"{type(exc).__name__}: {exc}"
-                probe.checked_at = _utc_now_iso()
-                probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
-            return
-        with self._health_state.lock:
-            probe.state = "ready" if available else "unavailable"
-            probe.last_error = None if available else "check_availability returned False"
-            probe.checked_at = _utc_now_iso()
-            probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
+        self.dashboard_service.probe_model_api_cached()
 
     def _run_session_side_effects(self, effects: SessionSideEffects) -> None:
-        self._execute_pending_tick_publish(effects.pending_publishes)
-
-        if effects.pending_heartbeats:
-            latest_heartbeats: dict[int, int] = {}
-            for item in effects.pending_heartbeats:
-                latest_heartbeats[item.db_device_id] = item.battery_level
-            for db_device_id, battery_level in latest_heartbeats.items():
-                self._update_device_heartbeat(db_device_id, battery_level)
-
-        for alert in effects.pending_alerts:
-            self._push_alert_to_backend(
-                alert.sim_device_id,
-                event_type=alert.event_type,
-                severity=alert.severity,
-                metadata=alert.metadata,
-            )
+        self.publish_service.run_session_side_effects(effects)
 
 
     # ── Sleep — delegated to SleepService (Task 3.4) ─────────────────────
@@ -1545,40 +1151,13 @@ class SimulatorRuntime:
     def _has_recent_fall_event_locked(
         self, device_id: str, *, seconds: float = 5.0
     ) -> bool:
-        """Return True if a ``fall_detected`` event fired for this device recently.
-
-        Used by the tick loop to dedupe its "fall via dataset annotation"
-        recording against the canonical ``inject_event`` recording. The
-        check walks ``event_history`` from newest to oldest and stops as
-        soon as it finds an event older than ``seconds`` for the target
-        device — bounded latency under the operating maxlen=2000 deque.
-        """
-        for event in reversed(self.event_history):
-            if event.device_id != device_id:
-                continue
-            if event.event_type != "fall_detected":
-                continue
-            if self._iso_age_seconds(event.timestamp) <= seconds:
-                return True
-            return False
-        return False
+        return self.fall_service._has_recent_fall_event_locked(device_id, seconds=seconds)
 
     @staticmethod
     def _resolve_fall_variant_policy(
         fe_variant: str | None,
     ) -> tuple[_FallVariantPolicy, str]:
-        """Return ``(policy, persona_variant)`` for an operator-supplied variant.
-
-        Falls back to ``confirmed`` policy + ``fall_1`` persona for any
-        unknown variant string so legacy callers keep working.  The
-        persona variant is what the PersonaEngine + signal generator key
-        off for vitals/motion deltas; the FE-facing variant is what
-        appears in events + recent_fall_events.
-        """
-        key = (fe_variant or "confirmed").strip().lower()
-        policy = _FALL_VARIANT_POLICIES.get(key, _FALL_VARIANT_DEFAULT_POLICY)
-        persona = _FALL_VARIANT_TO_PERSONA.get(key, "fall_1")
-        return policy, persona
+        return FallService._resolve_fall_variant_policy(fe_variant)
 
     def _call_fall_ai_locked(
         self,
@@ -1586,522 +1165,30 @@ class SimulatorRuntime:
         device_id: str,
         fe_variant: str,
     ) -> AIPrediction:
-        """Post the most recent IMU window to the mobile BE for fall inference.
-
-        ADR-019 Phase 7 S9: the simulator used to call the model-api
-        directly via :class:`FallAIClient`. It now dispatches through
-        :class:`MobileTelemetryClient` so the backend can persist the
-        raw window (``imu_windows``), the fall event (``fall_events``),
-        auto-trigger risk, and fan FCM out — same trust boundary as a
-        production smartwatch -> phone -> BE -> model-api path.
-
-        Returns an ``AIPrediction`` even on failure so the FE always has
-        a deterministic shape: ``modelStatus`` distinguishes ``ok`` from
-        ``offline`` from ``no_window`` from ``skipped`` (no bound DB
-        device). No exception escapes.
-        """
-        predicted_at = _utc_now_iso()
-        sample_count = 0
-        if isinstance(motion, dict):
-            # NOTE: motion arrays may be numpy ndarrays so `arr or []`
-            # raises "truth value ambiguous".  Coerce via explicit None
-            # checks + len() — same pattern as fall_ai_client._coerce.
-            ax = motion.get("accel_x")
-            ay = motion.get("accel_y")
-            az = motion.get("accel_z")
-            sample_count = min(
-                len(ax) if ax is not None else 0,
-                len(ay) if ay is not None else 0,
-                len(az) if az is not None else 0,
-            )
-        if sample_count < 50:
-            return AIPrediction(
-                label="normal",
-                probability=0.0,
-                confidence=0.0,
-                riskBand="normal",
-                requiresAttention=False,
-                highPriorityAlert=False,
-                explanationSummary=(
-                    f"Không đủ mẫu chuyển động để đánh giá (có {sample_count}, cần 50). "
-                    "Hệ thống đang dùng pre-trigger fallback."
-                ),
-                topFeatures=[],
-                predictedAt=predicted_at,
-                modelStatus="no_window",
-            )
-
-        # Resolve the backend device PK — the BE rejects ``/imu-window``
-        # without it because the persistence path needs a ``devices.id``
-        # to attach the row to. Unbound simulator devices skip the call
-        # entirely and surface ``modelStatus=skipped``.
-        device = self.devices.get(device_id)
-        bound_db_device_id = device.bound_db_device_id if device is not None else None
-        if bound_db_device_id is None:
-            return AIPrediction(
-                label="normal",
-                probability=0.0,
-                confidence=0.0,
-                riskBand="normal",
-                requiresAttention=False,
-                highPriorityAlert=False,
-                explanationSummary=(
-                    "Thiết bị mô phỏng chưa bind backend — bỏ qua dispatch IMU window."
-                ),
-                topFeatures=[],
-                predictedAt=predicted_at,
-                modelStatus="skipped",
-                failureReason="device_unbound",
-            )
-
-        fall_context = FALL_VARIANT_CONTEXT.get(fe_variant, FALL_VARIANT_DEFAULT_CONTEXT)
-        samples = _motion_window_to_samples(motion, fall_context=fall_context)
-        if len(samples) < 50:
-            return AIPrediction(
-                label="normal",
-                probability=0.0,
-                confidence=0.0,
-                riskBand="normal",
-                requiresAttention=False,
-                highPriorityAlert=False,
-                explanationSummary=(
-                    "Không đủ mẫu sau khi chuyển đổi window — pre-trigger fallback."
-                ),
-                topFeatures=[],
-                predictedAt=predicted_at,
-                modelStatus="no_window",
-                failureReason="insufficient_samples",
-            )
-
-        logger.info(
-            "submit_imu_window → device=%s db_device=%s samples=%d url=%s",
-            device_id,
-            bound_db_device_id,
-            len(samples),
-            getattr(self._mobile_telemetry_client, "_base_url", "?"),
-        )
-        try:
-            response = self._mobile_telemetry_client.submit_imu_window(
-                device_id=device_id,
-                db_device_id=int(bound_db_device_id),
-                window_data=samples,
-            )
-        except Exception:  # pragma: no cover — defensive
-            logger.warning(
-                "Mobile telemetry IMU window submit raised unexpectedly",
-                exc_info=True,
-            )
-            response = None
-        logger.info(
-            "submit_imu_window ← response=%s",
-            None if response is None else {k: v for k, v in response.items() if k in ("status", "fall_event_id", "fall_probability")},
-        )
-
-        return _normalise_imu_window_response(
-            response,
-            predicted_at=predicted_at,
-        )
+        return self.fall_service._call_fall_ai_locked(motion, device_id, fe_variant)
 
     def _build_motion_window_ref(
         self,
         payload: dict[str, Any] | None,
         fe_variant: str,
     ) -> MotionWindowRef | None:
-        """Capture a ref to the motion window the AI was called on."""
-        if not payload:
-            return None
-        motion = payload.get("motion") or {}
-        # NOTE: numpy arrays — see _call_fall_ai_locked for context.
-        ax = motion.get("accel_x")
-        ay = motion.get("accel_y")
-        az = motion.get("accel_z")
-        sample_count = min(
-            len(ax) if ax is not None else 0,
-            len(ay) if ay is not None else 0,
-            len(az) if az is not None else 0,
-        )
-        if sample_count == 0:
-            return None
-        return MotionWindowRef(
-            emittedAt=str(payload.get("emitted_at") or _utc_now_iso()),
-            sampleCount=sample_count,
-            sampleRate=_safe_float(motion.get("sample_rate"), None),
-            fallVariant=fe_variant or None,
-        )
+        return self.fall_service._build_motion_window_ref(payload, fe_variant)
 
     def _compute_pre_trigger_evidence(
         self,
         motion: dict[str, Any] | None,
     ) -> PreTriggerEvidence | None:
-        """Run pre-trigger evaluation against the inject-time motion window.
-
-        Phase 2 wiring — exposes the BE's hard/soft trigger reasoning
-        to the FE Fall Lab pipeline strip (Section B stage 2).  We
-        adapt the column-array motion shape from MotionGenerator into
-        the per-sample dict that :class:`FallPreTrigger` consumes by
-        reading the most recent sample's accel/gyro values, plus the
-        precomputed peak / posture / low-motion fields the persona
-        engine attaches to the window metadata.
-
-        Returns ``None`` only when the runtime has no FallPreTrigger
-        configured (pre-trigger disabled at startup).  In that case the
-        FE strip falls back to its FE-derived peak-vs-threshold view.
-        """
-        if not motion:
-            return None
-        # Late import to avoid circular Iot_Simulator -> pre_model_trigger
-        # at module load time.  The instance is created at __init__ time
-        # via the TriggerOrchestrator wiring; if startup failed we have
-        # no pre-trigger to query and return None so the FE strip falls
-        # back to its FE-derived peak-vs-threshold view.
-        pre_trigger = getattr(self, "_fall_pre_trigger", None)
-        if pre_trigger is None:
-            return None
-
-        # Build the per-sample dict the evaluator expects.  Use the LAST
-        # sample (impact tail) for accel/gyro instantaneous values and
-        # forward the window-level peak/posture/low-motion metadata
-        # MotionGenerator already attaches.
-        # NOTE: motion arrays are numpy ndarrays from MotionGenerator's
-        # parquet pipeline so we MUST avoid `arr or []` and `not arr`
-        # which both raise `ValueError: truth value of an array is
-        # ambiguous`.  Mirrors the same pattern in
-        # ``simulator_core.fall_ai_client.motion_window_to_samples``.
-        def _coerce(value: Any) -> list[Any]:
-            if value is None:
-                return []
-            try:
-                return list(value)
-            except TypeError:
-                return []
-
-        ax_arr = _coerce(motion.get("accel_x"))
-        ay_arr = _coerce(motion.get("accel_y"))
-        az_arr = _coerce(motion.get("accel_z"))
-        gx_arr = _coerce(motion.get("gyro_x"))
-        gy_arr = _coerce(motion.get("gyro_y"))
-        gz_arr = _coerce(motion.get("gyro_z"))
-
-        def _last(arr: Any) -> float | None:
-            try:
-                length = len(arr)
-            except TypeError:
-                return None
-            if length == 0:
-                return None
-            try:
-                return float(arr[length - 1])
-            except (TypeError, ValueError):
-                return None
-
-        # Phase 3 fix — derive window-level peaks ourselves so the
-        # evaluator does not fall back to the LAST-sample magnitude.
-        # Accel raw values are in m/s²; convert to g to match the
-        # 3.0g / 2.5g thresholds on `FallPreTrigger`.  Gyro is already
-        # in dps so passes through unchanged.
-        #
-        # Without this fix, when the source motion window does not carry
-        # an `accel_mag_peak_g` metadata key, the evaluator computed
-        # sqrt(x²+y²+z²) of the LAST sample (~22 m/s² typical) and
-        # compared to 3.0g — falsely tripping the HARD trigger for every
-        # variant.
-        _G_TO_MS2 = 9.80665
-
-        def _peak_g_from_arrays(ax: list[Any], ay: list[Any], az: list[Any]) -> float | None:
-            n = min(len(ax), len(ay), len(az))
-            if n == 0:
-                return None
-            peak_ms2 = 0.0
-            for i in range(n):
-                try:
-                    x = float(ax[i]); y = float(ay[i]); z = float(az[i])
-                except (TypeError, ValueError):
-                    continue
-                mag = math.sqrt(x * x + y * y + z * z)
-                if mag > peak_ms2:
-                    peak_ms2 = mag
-            return peak_ms2 / _G_TO_MS2 if peak_ms2 > 0 else 0.0
-
-        def _peak_dps_from_arrays(gx: list[Any], gy: list[Any], gz: list[Any]) -> float | None:
-            n = min(len(gx), len(gy), len(gz))
-            if n == 0:
-                return None
-            peak = 0.0
-            for i in range(n):
-                try:
-                    x = float(gx[i]); y = float(gy[i]); z = float(gz[i])
-                except (TypeError, ValueError):
-                    continue
-                mag = math.sqrt(x * x + y * y + z * z)
-                if mag > peak:
-                    peak = mag
-            return peak
-
-        # Prefer metadata when present (some parquet windows already carry
-        # the correctly-scaled peak), else compute from arrays.
-        accel_peak_g = motion.get("accel_mag_peak_g")
-        if accel_peak_g is None:
-            accel_peak_g = _peak_g_from_arrays(ax_arr, ay_arr, az_arr)
-        gyro_peak_dps = motion.get("gyro_mag_peak_dps")
-        if gyro_peak_dps is None:
-            gyro_peak_dps = _peak_dps_from_arrays(gx_arr, gy_arr, gz_arr)
-
-        sample = {
-            "accel": {
-                "x": _last(ax_arr) or 0.0,
-                "y": _last(ay_arr) or 0.0,
-                "z": _last(az_arr) or 0.0,
-            },
-            "gyro": {
-                "x": _last(gx_arr) or 0.0,
-                "y": _last(gy_arr) or 0.0,
-                "z": _last(gz_arr) or 0.0,
-            },
-            "accel_mag_peak_g": accel_peak_g,
-            "gyro_mag_peak_dps": gyro_peak_dps,
-            "posture_change_angle_deg": motion.get("posture_change_angle_deg"),
-            "post_impact_low_motion_duration_s": motion.get(
-                "post_impact_low_motion_duration_s"
-            ),
-        }
-        evidence_dict = pre_trigger.evaluate_with_evidence(sample)
-        return PreTriggerEvidence(**evidence_dict)
+        return self.fall_service._compute_pre_trigger_evidence(motion)
 
     def _override_severity_from_verdict(
         self,
         policy: _FallVariantPolicy,
         verdict: AIPrediction,
     ) -> str:
-        """Decide alert severity from policy default + AI verdict band.
-
-        AI "critical" always escalates; AI "normal" downgrades a
-        ``warning`` policy default to "warning" still (don't suppress
-        alerts entirely without operator decision); ``critical`` policy
-        defaults stay critical regardless of AI band so the worst-case
-        path (``fall_no_response``) is preserved.
-        """
-        if policy.default_severity == "critical":
-            return "critical"
-        if verdict.riskBand == "critical":
-            return "critical"
-        if verdict.riskBand == "warning":
-            return "warning"
-        return policy.default_severity
+        return self.fall_service._override_severity_from_verdict(policy, verdict)
 
     def inject_event(self, device_id: str, event_type: str, variant: str | None) -> None:
-        effects = SessionSideEffects()
-        with self._lock:
-            for record in self.sessions.values():
-                if device_id not in record.device_ids:
-                    continue
-
-                # ---- Module FA — fall_detected ordering ------------------------
-                # The tick loop has its own "if activity_state==fall: record"
-                # branch (it's the canonical recorder for replay-mode falls
-                # where activity arrives from the dataset).  To avoid
-                # duplicating the event for operator-injected falls we have
-                # to record the canonical event *before* ticking, so the
-                # tick loop's `_has_recent_fall_event_locked` dedupe sees
-                # it and skips.  AI verdict metadata is then merged into
-                # that same event via in-place mutation after the tick +
-                # AI call complete.
-                #
-                # For non-fall events the original pre-tick inject + post-
-                # tick record order is preserved.
-                policy: _FallVariantPolicy | None = None
-                persona_variant: str | None = None
-                canonical_fall_event: EventRecord | None = None
-
-                if event_type == "fall_detected":
-                    policy, persona_variant = self._resolve_fall_variant_policy(variant)
-                    record.simulator.inject_event(device_id, event_type, persona_variant)
-                    record.alert_received = True
-                    # Pre-record with provisional severity (policy default).
-                    # We mutate severity + metadata after AI verdict below.
-                    self._record_event(
-                        device_id=device_id,
-                        event_type="fall_detected",
-                        severity=policy.default_severity,
-                        message="Injected event fall_detected",
-                        metadata={
-                            "variant": variant or "",
-                            "persona_variant": persona_variant or "",
-                            "source": "inject_event",
-                        },
-                    )
-                    canonical_fall_event = self.event_history[-1]
-                elif event_type == "sos_cancel":
-                    # Module C: runtime-only event — PersonaEngine has no
-                    # concept of it, so we handle the FSM transition here.
-                    if device_id in self.devices and self.devices[device_id].state in {
-                        "fall_countdown",
-                        "sos_active",
-                    }:
-                        self.devices[device_id].state = "streaming"
-                    for sim_device in record.simulator.devices:
-                        if sim_device.device_id == device_id:
-                            if sim_device.engine.state.activity_state == "fall":
-                                sim_device.engine.transition_to("recovery")
-                            break
-                    # Drop any stale AI verdict + countdown policy now that
-                    # the operator dismissed the SOS — keeps the FE clean.
-                    self._fall_predictions.pop(device_id, None)
-                    self._fall_motion_refs.pop(device_id, None)
-                    self._fall_countdown_policies.pop(device_id, None)
-                    self._fall_pre_trigger_results.pop(device_id, None)
-                else:
-                    record.simulator.inject_event(device_id, event_type, variant)
-
-                if event_type == "device_offline" and device_id in self.devices:
-                    self.devices[device_id].state = "offline"
-                    self.devices[device_id].is_online = False
-                if event_type == "device_online" and device_id in self.devices:
-                    self.devices[device_id].state = "streaming"
-                    self.devices[device_id].is_online = True
-
-                # ---- Tick to generate motion (and vitals) for this event ----
-                if record.status == "running":
-                    effects.extend(self._tick_session_locked(record, force=True))
-
-                # ---- AI verdict + variant policy application (fall only) ----
-                ai_verdict: AIPrediction | None = None
-                motion_ref: MotionWindowRef | None = None
-                pre_trigger_evidence: PreTriggerEvidence | None = None
-                severity = "warning"
-                if event_type == "fall_detected" and policy is not None:
-                    payload = self._latest_motion_payload_locked(record, device_id)
-                    motion = (payload or {}).get("motion") or {}
-                    # Phase 2 — capture pre-trigger evidence on the same
-                    # motion window the AI sees, so the FE Fall Lab
-                    # pipeline strip (Section B stage 2) renders BE truth.
-                    pre_trigger_evidence = self._compute_pre_trigger_evidence(motion)
-                    if pre_trigger_evidence is not None:
-                        self._fall_pre_trigger_results[device_id] = pre_trigger_evidence
-                    ai_verdict = self._call_fall_ai_locked(
-                        motion, device_id, variant or ""
-                    )
-                    motion_ref = self._build_motion_window_ref(payload, variant or "")
-                    self._fall_predictions[device_id] = ai_verdict
-                    if motion_ref is not None:
-                        self._fall_motion_refs[device_id] = motion_ref
-                    self._fall_countdown_policies[device_id] = CountdownPolicy(
-                        totalSec=int(policy.countdown_sec),
-                        autoResolve=bool(policy.auto_resolve),
-                        allowsCancel=bool(policy.allows_cancel),
-                    )
-                    if device_id in self.devices:
-                        self.devices[device_id].state = policy.device_state_on_inject  # type: ignore[assignment]
-                    severity = self._override_severity_from_verdict(policy, ai_verdict)
-                    # Mutate the canonical event we pre-recorded with the
-                    # final severity + AI metadata so the FE / Recent Events
-                    # feed shows a single coherent record.
-                    if canonical_fall_event is not None:
-                        canonical_fall_event.severity = severity
-                        canonical_fall_event.metadata["ai_label"] = ai_verdict.label
-                        canonical_fall_event.metadata["ai_probability"] = (
-                            f"{ai_verdict.probability:.4f}"
-                        )
-                        canonical_fall_event.metadata["ai_band"] = ai_verdict.riskBand
-                        canonical_fall_event.metadata["ai_status"] = (
-                            ai_verdict.modelStatus
-                        )
-                    # ADR-024 S14: emit imu_predict flow event.
-                    self.publish_flow_event(record.id, {
-                        "step": "imu_predict",
-                        "device_id": device_id,
-                        "status": "done" if ai_verdict.modelStatus == "ok" else "error",
-                        "payload": {
-                            "label": ai_verdict.label,
-                            "confidence": round(ai_verdict.confidence, 3),
-                            "model_status": ai_verdict.modelStatus,
-                        },
-                    })
-
-                # ---- Non-fall event recording (single source of truth) ----
-                if event_type != "fall_detected":
-                    severity = "warning"
-                    if event_type == "sos_cancel":
-                        severity = "normal"
-                    elif event_type == "device_offline":
-                        severity = "offline"
-                    elif event_type == "device_online":
-                        severity = "normal"
-                    self._record_event(
-                        device_id=device_id,
-                        event_type=event_type,
-                        severity=severity,
-                        message=(
-                            "Operator cancelled SOS countdown"
-                            if event_type == "sos_cancel"
-                            else f"Injected event {event_type}"
-                        ),
-                        metadata={"variant": variant or ""},
-                    )
-
-                # ---- Backend alert webhook (conditional on policy + AI) ----
-                if event_type == "fall_detected" and policy is not None:
-                    should_push = policy.push_alert
-                    if ai_verdict is not None and ai_verdict.highPriorityAlert:
-                        # AI escalation overrides a non-pushing policy.
-                        should_push = True
-                    if should_push:
-                        # Confidence bridge (Module FA-2 fix): the BE's
-                        # `_pick_float(metadata, "confidence")` gate keys
-                        # off this single field.  We send
-                        # ``max(ai_probability, simulated_confidence)``
-                        # so:
-                        #   - The AI verdict is honoured when it's high
-                        #     enough to clear the BE threshold (0.7),
-                        #   - Each variant has a deterministic floor so
-                        #     test scenarios reach the right BE branch
-                        #     (soft-alert / SOS / SOS-no-cancel)
-                        #     regardless of the model's mood that day.
-                        ai_prob = (
-                            float(ai_verdict.probability) if ai_verdict else 0.0
-                        )
-                        confidence_value = max(
-                            ai_prob, float(policy.simulated_confidence)
-                        )
-                        effects.pending_alerts.append(
-                            PendingAlertCall(
-                                sim_device_id=device_id,
-                                event_type="fall_detected",
-                                severity=severity,
-                                metadata={
-                                    "variant": variant or "",
-                                    "persona_variant": persona_variant or "",
-                                    "source": "inject_event",
-                                    "timestamp": _utc_now_iso(),
-                                    "ai_label": ai_verdict.label if ai_verdict else "unknown",
-                                    "ai_probability": (
-                                        f"{ai_verdict.probability:.4f}" if ai_verdict else "0.0"
-                                    ),
-                                    "ai_band": ai_verdict.riskBand if ai_verdict else "normal",
-                                    # The canonical field the BE reads.
-                                    "confidence": f"{confidence_value:.4f}",
-                                    "simulated_confidence": (
-                                        f"{policy.simulated_confidence:.4f}"
-                                    ),
-                                    # P0-4: forward BE-side IDs so /telemetry/alert
-                                    # dedups against the row /imu-window already
-                                    # persisted instead of inserting a duplicate.
-                                    **(
-                                        {"fall_event_id": str(ai_verdict.fallEventId)}
-                                        if ai_verdict and ai_verdict.fallEventId is not None
-                                        else {}
-                                    ),
-                                    **(
-                                        {"model_request_id": ai_verdict.modelRequestId}
-                                        if ai_verdict and ai_verdict.modelRequestId
-                                        else {}
-                                    ),
-                                },
-                            )
-                        )
-                break
-            else:
-                raise KeyError(f"Device not found in active sessions: {device_id}")
-        self._run_session_side_effects(effects)
+        return self.fall_service.inject_event(device_id, event_type, variant)
 
     def recent_events(self, limit: int = 10) -> list[AlertEvent]:
         return self.alert_service.recent_events(limit=limit)
@@ -2121,40 +1208,7 @@ class SimulatorRuntime:
         self._alert_count_1h = len(self._alert_timestamps_1h)
 
     def dashboard_summary(self) -> DashboardSummary:
-        _DASHBOARD_CACHE_TTL = 5.0  # seconds
-        with self._lock:
-            now_mono = monotonic()
-            cached = self._dashboard_cache_ref[0]
-            if cached is not None and (now_mono - self._dashboard_cache_ts) < _DASHBOARD_CACHE_TTL:
-                return cached
-
-            total = len(self.devices)
-            active = len([device for device in self.devices.values() if device.state == "streaming"])
-
-            # HIGH #1 fix: prune stale entries then read counter directly,
-            # instead of iterating the full event_history and parsing ISO timestamps.
-            now_ts = time.time()
-            cutoff = now_ts - 3600
-            while self._alert_timestamps_1h and self._alert_timestamps_1h[0] < cutoff:
-                self._alert_timestamps_1h.popleft()
-            self._alert_count_1h = len(self._alert_timestamps_1h)
-            alerts = self._alert_count_1h
-
-            latencies = [
-                session.last_publish_latency_ms
-                for session in self.sessions.values()
-                if session.last_publish_count > 0 and session.last_publish_latency_ms is not None
-            ]
-            avg_latency = int(round(sum(latencies) / len(latencies))) if latencies else 0
-            result = DashboardSummary(
-                totalDevices=total,
-                activeDevices=active,
-                alertsLastHour=alerts,
-                avgLatencyMs=avg_latency,
-            )
-            self._dashboard_cache_ref[0] = result
-            self._dashboard_cache_ts = now_mono
-            return result
+        return self.dashboard_service.dashboard_summary()
 
     # ── Health payload v2 (Phase 0.6) ────────────────────────────────────
     # Returns a structured payload for the new dashboard hero plus the
@@ -2172,103 +1226,10 @@ class SimulatorRuntime:
     def health_payload(self) -> dict[str, Any]:
         """Return the v2 health payload merged with legacy flat keys.
 
-        v2 callers (Module A dashboard hero) read the nested blocks; legacy
-        callers (current ``HealthStatusPanel``) keep using the flat keys for
-        one release cycle before they are removed.
+        Delegates to :class:`DashboardService` which owns probe state and
+        payload construction.
         """
-        # Refresh probes (TTL-gated, so cheap when called often).
-        self._probe_backend_cached()
-        self._probe_model_api_cached()
-        db_ok, db_latency_ms = self._measure_database_health()
-
-        with self._lock:
-            session_count = len(self.sessions)
-            running_sessions = sum(
-                1 for session in self.sessions.values() if session.status == "running"
-            )
-        with self._health_state.lock:
-            backend_state = self._health_state.backend_probe.state
-            backend_latency = self._health_state.backend_probe.latency_ms
-            backend_error = self._health_state.backend_probe.last_error
-            model_state = self._health_state.model_api_probe.state
-            model_checked_at = self._health_state.model_api_probe.checked_at
-            model_error = self._health_state.model_api_probe.last_error
-            last_score_source = self._health_state.last_score_source
-            uptime_seconds = self._health_state.uptime_seconds()
-
-        # Runtime state derivation
-        if not db_ok:
-            runtime_state: str = "degraded"
-        elif backend_state == "down" or model_state == "unavailable":
-            runtime_state = "degraded"
-        elif running_sessions == 0:
-            runtime_state = "idle"
-        else:
-            runtime_state = "running"
-
-        # MQTT status — legacy view: idle when no sessions, otherwise connected
-        mqtt_status = "idle" if session_count == 0 else "connected"
-
-        pre_trigger_block = self._compute_pre_trigger_block()
-        telemetry_block = self._compute_telemetry_block()
-
-        degraded_reasons: list[str] = []
-        if not db_ok:
-            degraded_reasons.append("database_down")
-        if backend_state == "down":
-            degraded_reasons.append("backend_unreachable")
-        elif backend_state == "slow":
-            degraded_reasons.append("backend_slow")
-        if model_state == "unavailable":
-            degraded_reasons.append("model_api_unavailable")
-        if pre_trigger_block["mode"] == "off" and _PRE_MODEL_TRIGGER_ENABLED and self._trigger_orchestrator is None:
-            degraded_reasons.append("pre_trigger_misconfigured")
-
-        v2_payload: dict[str, Any] = {
-            "schemaVersion": "2.0",
-            "runtime": {
-                "state": runtime_state,
-                "version": self._SIMULATOR_VERSION,
-                "uptimeSeconds": uptime_seconds,
-            },
-            "database": {
-                "state": "connected" if db_ok else "down",
-                "lastCheckMs": db_latency_ms,
-            },
-            "backend": {
-                "state": backend_state,
-                "url": self._health_backend_url,
-                "lastLatencyMs": backend_latency,
-                "lastError": backend_error,
-            },
-            "modelApi": {
-                "state": model_state,
-                "url": getattr(self._sleep_ai_client, "base_url", "http://localhost:8001"),
-                "lastCheckedAt": model_checked_at,
-                "lastScoreSource": last_score_source,
-                "lastError": model_error,
-            },
-            "preTrigger": pre_trigger_block,
-            "telemetry": telemetry_block,
-            "degradedReasons": degraded_reasons,
-        }
-
-        # Legacy keys (kept for one release cycle while consumers migrate).
-        # NOTE: the legacy key was previously named "backend" (a flat string
-        # like "connected"/"down") which collided with the v2 "backend" field
-        # (HealthBackendBlock dict) when the dicts were merged — causing a
-        # ResponseValidationError on the /api/v1/sim/health endpoint.  Renamed
-        # to "backendStatus" to avoid the collision.
-        legacy_keys: dict[str, Any] = {
-            "status": runtime_state if runtime_state != "idle" else "running",
-            "api": "running",
-            "backendStatus": "connected" if backend_state == "connected" else "down",
-            "mqtt": mqtt_status,
-            "db": "healthy" if db_ok else "down",
-            "version": self._SIMULATOR_VERSION,
-        }
-
-        return {**v2_payload, **legacy_keys}
+        return self.dashboard_service.health_payload()
 
 
     def sleep_session(self, device_id: str) -> SleepSessionResponse:
@@ -2313,145 +1274,20 @@ class SimulatorRuntime:
     # ── Module C — Sessions / Fall Lab evidence surface ──────────────────
 
     def motion_latest(self, session_id: str, device_id: str) -> MotionLatest:
-        """Return the most recent motion window emitted for `device_id`.
-
-        We pull straight from `record.last_tick_outputs` so the FE can
-        render the same arrays the dataset registry produced — no
-        synthetic preview, no client-side fabrication.
-        """
-        with self._lock:
-            record = self._require_session(session_id)
-            if device_id not in record.device_ids:
-                raise KeyError(f"Device {device_id} not in session {session_id}")
-            payload = self._latest_motion_payload_locked(record, device_id)
-            state = (payload or {}).get("state") or {}
-            motion = (payload or {}).get("motion") or {}
-            return MotionLatest(
-                deviceId=device_id,
-                sessionId=session_id,
-                emittedAt=str((payload or {}).get("emitted_at") or _utc_now_iso()),
-                activityState=str(state.get("activity_state") or "unknown"),
-                fallVariant=(str(state.get("fall_variant")) if state.get("fall_variant") else None),
-                sampleRate=_safe_float(motion.get("sample_rate"), None),
-                accelX=_coerce_float_list(motion.get("accel_x")),
-                accelY=_coerce_float_list(motion.get("accel_y")),
-                accelZ=_coerce_float_list(motion.get("accel_z")),
-                accelMag=_coerce_float_list(motion.get("accel_mag")),
-                gyroX=_coerce_float_list(motion.get("gyro_x")),
-                gyroY=_coerce_float_list(motion.get("gyro_y")),
-                gyroZ=_coerce_float_list(motion.get("gyro_z")),
-            )
+        return self.fall_service.motion_latest(session_id, device_id)
 
     def fall_state(self, session_id: str, device_id: str) -> FallState:
-        """Operator-visible fall pipeline state derived from runtime truth.
-
-        Sources:
-          * `device.state` — canonical FSM (`fall_countdown` / `sos_active`).
-          * Most recent `fall_detected` event in `event_history`.
-          * `record.last_tick_outputs[i].state.{activity_state,fall_variant}`.
-        """
-        with self._lock:
-            record = self._require_session(session_id)
-            if device_id not in record.device_ids:
-                raise KeyError(f"Device {device_id} not in session {session_id}")
-            device = self.devices.get(device_id)
-            tick_state = (
-                (self._latest_motion_payload_locked(record, device_id) or {}).get("state") or {}
-            )
-            recent_fall_events = [
-                event
-                for event in reversed(self.event_history)
-                if event.device_id == device_id
-                and event.event_type in {"fall_detected", "sos_cancel", "fall_no_response"}
-            ][:5]
-            last_fall_event = next(
-                (event for event in recent_fall_events if event.event_type == "fall_detected"),
-                None,
-            )
-            last_cancel_event = next(
-                (event for event in recent_fall_events if event.event_type == "sos_cancel"),
-                None,
-            )
-
-            # Module FA: countdown total is now variant-aware.  Falls back
-            # to the legacy 30s constant when no policy was cached (e.g.
-            # legacy event injected before the runtime started caching).
-            cached_policy = self._fall_countdown_policies.get(device_id)
-            countdown_total = (
-                cached_policy.totalSec if cached_policy else int(self._SOS_COUNTDOWN_SECONDS)
-            )
-            countdown_remaining = 0
-            countdown_started_at: str | None = None
-            sos_active = False
-            if device is not None and device.state in {"fall_countdown", "sos_active"} and last_fall_event:
-                countdown_started_at = last_fall_event.timestamp
-                # If the operator already cancelled after this fall event,
-                # the countdown is logically zero even if the FSM hasn't
-                # advanced yet (it will on the next tick).
-                cancelled_after_fall = (
-                    last_cancel_event is not None
-                    and last_cancel_event.timestamp >= last_fall_event.timestamp
-                )
-                if not cancelled_after_fall:
-                    elapsed = self._iso_age_seconds(last_fall_event.timestamp)
-                    countdown_remaining = max(
-                        0, int(round(countdown_total - elapsed))
-                    )
-                    sos_active = device.state == "sos_active" or countdown_remaining > 0
-
-            fall_state_value = self._fall_state_locked(
-                device_state=(device.state if device else "streaming"),
-                last_fall_event=last_fall_event,
-                last_cancel_event=last_cancel_event,
-                countdown_remaining=countdown_remaining,
-            )
-
-            return FallState(
-                deviceId=device_id,
-                sessionId=session_id,
-                deviceState=(device.state if device else "streaming"),  # type: ignore[arg-type]
-                activityState=str(tick_state.get("activity_state") or "unknown"),
-                fallVariant=(str(tick_state.get("fall_variant")) if tick_state.get("fall_variant") else None),
-                fallState=fall_state_value,  # type: ignore[arg-type]
-                lastFallEventAt=last_fall_event.timestamp if last_fall_event else None,
-                countdownStartedAt=countdown_started_at,
-                countdownRemainingSec=countdown_remaining,
-                countdownTotalSec=int(countdown_total),
-                sosActive=sos_active,
-                recentFallEvents=[
-                    FallEventEntry(
-                        id=event.id,
-                        timestamp=event.timestamp,
-                        eventType=event.event_type,
-                        severity=event.severity,  # type: ignore[arg-type]
-                        variant=event.metadata.get("variant") or None,
-                    )
-                    for event in recent_fall_events
-                ],
-                aiPrediction=self._fall_predictions.get(device_id),
-                motionWindowRef=self._fall_motion_refs.get(device_id),
-                countdownPolicy=cached_policy,
-                preTriggerResult=self._fall_pre_trigger_results.get(device_id),
-            )
+        return self.fall_service.fall_state(session_id, device_id)
 
     @staticmethod
     def _latest_motion_payload_locked(
         record: SessionRecord, device_id: str
     ) -> dict[str, Any] | None:
-        """Return the most recent tick payload for `device_id`, if any."""
-        for payload in reversed(record.last_tick_outputs):
-            if payload.get("device_id") == device_id:
-                return payload
-        return None
+        return FallService._latest_motion_payload_locked(record, device_id)
 
     @staticmethod
     def _iso_age_seconds(iso_ts: str) -> float:
-        """Seconds between now (UTC) and `iso_ts` — robust to ``Z`` suffix."""
-        try:
-            ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
-        except ValueError:
-            return 0.0
-        return (datetime.now(timezone.utc) - ts).total_seconds()
+        return FallService._iso_age_seconds(iso_ts)
 
     @staticmethod
     def _fall_state_locked(
@@ -2461,29 +1297,12 @@ class SimulatorRuntime:
         last_cancel_event: EventRecord | None,
         countdown_remaining: int,
     ) -> FallStateValue:
-        """Reduce runtime signals into the FE-friendly fall lifecycle.
-
-        ``idle``           — no recent fall events.
-        ``fall_detected``  — fall event recorded but FSM has cleared (e.g.
-                             a brief or false-alarm variant that didn't
-                             escalate).
-        ``fall_countdown`` — FSM is in `fall_countdown` and the SOS
-                             window has not elapsed.
-        ``sos_active``     — FSM is in `sos_active` (operator did not
-                             respond and the device escalated).
-        ``fall_resolved``  — operator pressed "Tôi ổn" after a fall event.
-        """
-        if last_cancel_event is not None and (
-            last_fall_event is None or last_cancel_event.timestamp >= last_fall_event.timestamp
-        ):
-            return "fall_resolved"
-        if device_state == "sos_active":
-            return "sos_active"
-        if device_state == "fall_countdown" and countdown_remaining > 0:
-            return "fall_countdown"
-        if last_fall_event is not None:
-            return "fall_detected"
-        return "idle"
+        return FallService._fall_state_locked(
+            device_state=device_state,
+            last_fall_event=last_fall_event,
+            last_cancel_event=last_cancel_event,
+            countdown_remaining=countdown_remaining,
+        )
 
     def verification(self, session_id: str) -> VerificationResult:
         return self.verification_service.verification(session_id)
@@ -2504,54 +1323,7 @@ class SimulatorRuntime:
         )
 
     def _auto_resolve_fall_countdowns_locked(self, record: SessionRecord) -> None:
-        """Module FA: clear ``fall_countdown`` devices whose policy auto-resolves.
-
-        ``fall_brief`` is the canonical case: a 10s countdown that ends
-        without operator intervention.  We synthesise a ``sos_cancel``
-        event so the recent-events feed + FE banner show the resolution
-        consistently with the operator-driven cancel path.
-        """
-        for device_id in list(record.device_ids):
-            policy = self._fall_countdown_policies.get(device_id)
-            if policy is None or not policy.autoResolve:
-                continue
-            device = self.devices.get(device_id)
-            if device is None or device.state not in {"fall_countdown", "sos_active"}:
-                continue
-            # Find the most recent fall_detected to compute elapsed time.
-            last_fall_event = next(
-                (
-                    event
-                    for event in reversed(self.event_history)
-                    if event.device_id == device_id and event.event_type == "fall_detected"
-                ),
-                None,
-            )
-            if last_fall_event is None:
-                continue
-            elapsed = self._iso_age_seconds(last_fall_event.timestamp)
-            if elapsed < float(policy.totalSec):
-                continue
-            # Auto-resolve: revert FSM + persona + emit a synthetic cancel.
-            device.state = "streaming"
-            for sim_device in record.simulator.devices:
-                if sim_device.device_id == device_id:
-                    if sim_device.engine.state.activity_state == "fall":
-                        sim_device.engine.transition_to("recovery")
-                    break
-            self._record_event(
-                device_id=device_id,
-                event_type="sos_cancel",
-                severity="normal",
-                message="Auto-resolved short fall (variant policy)",
-                metadata={"variant": "auto_resolve", "source": "tick_auto_resolve"},
-            )
-            # Drop AI verdict + policy so the FE doesn't keep rendering the
-            # countdown card after auto-resolve.
-            self._fall_predictions.pop(device_id, None)
-            self._fall_motion_refs.pop(device_id, None)
-            self._fall_countdown_policies.pop(device_id, None)
-            self._fall_pre_trigger_results.pop(device_id, None)
+        return self.fall_service._auto_resolve_fall_countdowns_locked(record)
 
     def _tick_session_locked(self, record: SessionRecord, force: bool) -> SessionSideEffects:
         effects = SessionSideEffects()
@@ -2806,32 +1578,9 @@ class SimulatorRuntime:
                 )
 
     def _publish_tick_buffer_locked(
-        self, now: float, force: bool
+        self, *, now: float, force: bool
     ) -> list[PendingDevicePublish]:
-        """Build per-device publish units (fix bug "dữ liệu đi cùng qua 1 API").
-
-        Mỗi device có buffer riêng → 1 device đang in-flight không block
-        device khác. Trả empty list nếu chưa tới window hoặc không có
-        buffered message nào eligible.
-        """
-        if not force and now - self._last_push_time < float(self._push_interval):
-            return []
-        pending: list[PendingDevicePublish] = []
-        for device_id, buffer in self._device_buffers.items():
-            if not buffer:
-                continue
-            if device_id in self._device_in_flight:
-                continue
-            messages = list(buffer)
-            self._device_in_flight.add(device_id)
-            pending.append(
-                PendingDevicePublish(
-                    device_id=device_id,
-                    messages=messages,
-                    clear_count=len(messages),
-                )
-            )
-        return pending
+        return self.publish_service.publish_tick_buffer_locked(now=now, force=force)
 
     def _refresh_pending_sync_flags(self) -> None:
         self.device_service._refresh_pending_sync_flags()
