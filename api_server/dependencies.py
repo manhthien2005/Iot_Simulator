@@ -611,6 +611,10 @@ class SessionRecord:
     last_publish_error: str | None = None
     publish_attempt_count: int = 0
     publish_ack_count_total: int = 0
+    # Per-device publish bookkeeping (fix bug "dữ liệu đi cùng qua 1 API").
+    # ``last_publish_*`` aggregate ở trên giữ lại cho dashboard/health-check
+    # backward-compat, nhưng UI cần per-device thì đọc map dưới.
+    device_publish_status: dict[str, DevicePublishStatus] = field(default_factory=dict)
     alert_received: bool = False
     last_tick_monotonic: float = field(default_factory=monotonic)
     source_modes: dict[str, str] = field(default_factory=dict)
@@ -651,9 +655,30 @@ class RiskSnapshot:
 
 
 @dataclass
-class PendingTickPublish:
+class PendingDevicePublish:
+    """Per-device publish unit (fix bug "dữ liệu đi cùng qua 1 API").
+
+    Mỗi device được đóng gói riêng → 1 device fail không kéo cả batch.
+    """
+
+    device_id: str
     messages: list[dict[str, Any]]
     clear_count: int
+
+
+@dataclass
+class DevicePublishStatus:
+    """Per-device publish bookkeeping (fix bug all-or-nothing ack)."""
+
+    ok: bool = False
+    ack_count: int = 0
+    message_count: int = 0
+    latency_ms: int | None = None
+    attempt_at: str | None = None
+    last_ok_at: str | None = None
+    error: str | None = None
+    attempt_count: int = 0
+    ack_count_total: int = 0
 
 
 @dataclass
@@ -682,13 +707,12 @@ class PreparedAlertPush:
 
 @dataclass
 class SessionSideEffects:
-    pending_publish: PendingTickPublish | None = None
+    pending_publishes: list[PendingDevicePublish] = field(default_factory=list)
     pending_heartbeats: list[PendingHeartbeatUpdate] = field(default_factory=list)
     pending_alerts: list[PendingAlertCall] = field(default_factory=list)
 
     def extend(self, other: "SessionSideEffects") -> None:
-        if self.pending_publish is None and other.pending_publish is not None:
-            self.pending_publish = other.pending_publish
+        self.pending_publishes.extend(other.pending_publishes)
         self.pending_heartbeats.extend(other.pending_heartbeats)
         self.pending_alerts.extend(other.pending_alerts)
 
@@ -840,9 +864,12 @@ class SimulatorRuntime:
         # ``push_interval`` now sourced from the persistence layer; the env
         # var is kept in sync for downstream readers (Module F.1).
         self._push_interval = max(1, int(self._runtime_persistence.values.push_interval_seconds))
-        self._tick_buffer: list[dict[str, Any]] = []
+        # Per-device buffer + in-flight flag (fix bug "dữ liệu đi cùng qua 1
+        # API"). Mỗi device có buffer riêng và flag in-flight riêng → 1
+        # device fail/retry không kéo cả fleet đứng cùng lúc.
+        self._device_buffers: dict[str, list[dict[str, Any]]] = {}
         self._last_push_time = 0.0
-        self._publish_in_flight = False
+        self._device_in_flight: set[str] = set()
         self._health_backend_url = self._resolve_backend_base_url()
         self.backend_base_url = self._health_backend_url
         self.admin_client = BackendAdminClient(self._health_backend_url)
@@ -946,7 +973,7 @@ class SimulatorRuntime:
             device_scenarios=self.device_scenarios,
             risk_snapshots=self.risk_snapshots,
             risk_history=self.risk_history,
-            tick_buffer=self._tick_buffer,
+            tick_buffer=self._device_buffers,
             event_history=self.event_history,
             dashboard_cache_ref=self._dashboard_cache_ref,
             db_device_active_cache=self._db_device_active_cache,
@@ -1305,7 +1332,7 @@ class SimulatorRuntime:
         return raw.strip().lower() in {"1", "true", "yes", "on"}
 
     def _publish_vitals_http(
-        self, pending_publish: PendingTickPublish
+        self, pending_publish: PendingDevicePublish
     ) -> tuple[int, set[int], str | None]:
         """ADR-020 S6 — push vitals batch over HTTP to the mobile BE.
 
@@ -1407,7 +1434,7 @@ class SimulatorRuntime:
         return ingested, synced_device_ids, None
 
     def _publish_vitals_db_direct(
-        self, pending_publish: PendingTickPublish
+        self, pending_publish: PendingDevicePublish
     ) -> tuple[int, set[int], str | None]:
         """Legacy DB-direct path — kept as ADR-020 transitional fallback.
 
@@ -1466,20 +1493,40 @@ class SimulatorRuntime:
             return 0, set(), "db_direct_failed"
         return ack_count, synced_device_ids, None
 
-    def _execute_pending_tick_publish(self, pending_publish: PendingTickPublish | None) -> None:
+    def _execute_pending_tick_publish(
+        self, pending_publishes: list[PendingDevicePublish] | None
+    ) -> None:
         # ADR-020 part 1 / Phase 7 S6: branch on feature flag. HTTP path
         # is the new default (matches production smartwatch flow + lets
         # the BE auto-trigger pipeline at ``/telemetry/ingest`` fire).
         # The DB-direct branch stays as a transitional fallback so an
         # operator can toggle off HTTP without redeploying the sim;
         # dispose tracked in S7 cleanup slice.
-        if pending_publish is None:
+        if not pending_publishes:
             return
 
+        use_http = self._use_http_vitals_publish()
+
+        for pending_publish in pending_publishes:
+            self._execute_single_device_publish(pending_publish, use_http=use_http)
+
+    def _execute_single_device_publish(
+        self,
+        pending_publish: PendingDevicePublish,
+        *,
+        use_http: bool,
+    ) -> None:
+        """Publish 1 device's buffer; isolate state update per device.
+
+        Fix bug "dữ liệu đi cùng qua 1 API": failure ở 1 device không kéo
+        device khác xuống — trạng thái cập nhật theo device map riêng,
+        buffer xóa riêng, in-flight flag clear riêng.
+        """
+        device_id = pending_publish.device_id
         publish_started = monotonic()
         message_count = len(pending_publish.messages)
 
-        if self._use_http_vitals_publish():
+        if use_http:
             ack_count, synced_device_ids, publish_error_detail = (
                 self._publish_vitals_http(pending_publish)
             )
@@ -1489,7 +1536,6 @@ class SimulatorRuntime:
             )
 
         publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
-
         publish_ok = ack_count == message_count if message_count > 0 else False
         attempt_at = _utc_now_iso()
         publish_error: str | None = None
@@ -1497,47 +1543,103 @@ class SimulatorRuntime:
             publish_error = "Không có message nào để publish"
         elif not publish_ok:
             base_msg = (
-                f"Backend ack {ack_count}/{message_count} message — kiểm tra MQTT/HTTP downstream"
+                f"Backend ack {ack_count}/{message_count} message — "
+                f"kiểm tra MQTT/HTTP downstream"
             )
             publish_error = (
-                f"{base_msg} ({publish_error_detail})" if publish_error_detail else base_msg
+                f"{base_msg} ({publish_error_detail})"
+                if publish_error_detail
+                else base_msg
             )
 
         with self._lock:
-            self._publish_in_flight = False
+            self._device_in_flight.discard(device_id)
             for session in self.sessions.values():
-                if session.status == "running":
-                    session.last_publish_ok = publish_ok
-                    session.last_publish_ack_count = ack_count
-                    session.last_publish_count = message_count
-                    session.last_publish_latency_ms = publish_latency_ms
-                    session.last_publish_attempt_at = attempt_at
-                    session.publish_attempt_count += 1
-                    session.publish_ack_count_total += ack_count
-                    if publish_ok:
-                        session.last_publish_ok_at = attempt_at
-                        session.last_publish_error = None
-                    else:
-                        session.last_publish_error = publish_error
+                if session.status != "running":
+                    continue
+                if device_id not in session.device_ids:
+                    continue
+                status = session.device_publish_status.get(device_id)
+                if status is None:
+                    status = DevicePublishStatus()
+                    session.device_publish_status[device_id] = status
+                status.ok = publish_ok
+                status.ack_count = ack_count
+                status.message_count = message_count
+                status.latency_ms = publish_latency_ms
+                status.attempt_at = attempt_at
+                status.attempt_count += 1
+                status.ack_count_total += ack_count
+                if publish_ok:
+                    status.last_ok_at = attempt_at
+                    status.error = None
+                else:
+                    status.error = publish_error
+                # Aggregate flat fields for backward-compat dashboards.
+                self._refresh_session_publish_aggregate_locked(session)
             if publish_ok:
-                del self._tick_buffer[: pending_publish.clear_count]
+                buffer = self._device_buffers.get(device_id)
+                if buffer is not None:
+                    del buffer[: pending_publish.clear_count]
                 self._last_push_time = monotonic()
                 self._refresh_pending_sync_flags()
 
-        # ADR-024 S14: emit vitals_ingest flow event for every running session.
+        # ADR-024 S14: emit vitals_ingest flow event for every running session
+        # that owns this device (per-device granularity).
         running_session_ids = [
-            sid for sid, s in self.sessions.items() if s.status == "running"
+            sid
+            for sid, s in self.sessions.items()
+            if s.status == "running" and device_id in s.device_ids
         ]
         for sid in running_session_ids:
-            self.publish_flow_event(sid, {
-                "step": "vitals_ingest",
-                "status": "done" if publish_ok else "error",
-                "payload": {
-                    "ack_count": ack_count,
-                    "message_count": message_count,
-                    "latency_ms": publish_latency_ms,
+            self.publish_flow_event(
+                sid,
+                {
+                    "step": "vitals_ingest",
+                    "status": "done" if publish_ok else "error",
+                    "device_id": device_id,
+                    "payload": {
+                        "ack_count": ack_count,
+                        "message_count": message_count,
+                        "latency_ms": publish_latency_ms,
+                    },
                 },
-            })
+            )
+
+    @staticmethod
+    def _refresh_session_publish_aggregate_locked(session: SessionRecord) -> None:
+        """Recompute flat ``last_publish_*`` from per-device map.
+
+        Backward-compat: dashboard, health-check, evidence center vẫn đọc
+        các field flat này. Aggregate semantic:
+        - ``last_publish_ok`` = AND của mọi device có status (vẫn yêu cầu
+          tất cả device ack thành công để session "khoẻ").
+        - ``ack_count`` / ``count`` / ``ack_count_total`` / ``attempt_count``
+          = tổng cộng dồn từ map.
+        - ``latency_ms`` = max của các device (worst-case observability).
+        - ``last_error`` / ``last_attempt_at`` / ``last_ok_at`` = giá trị
+          mới nhất theo timestamp.
+        """
+        statuses = list(session.device_publish_status.values())
+        if not statuses:
+            return
+        session.last_publish_ack_count = sum(s.ack_count for s in statuses)
+        session.last_publish_count = sum(s.message_count for s in statuses)
+        session.publish_ack_count_total = sum(
+            s.ack_count_total for s in statuses
+        )
+        session.publish_attempt_count = sum(s.attempt_count for s in statuses)
+        session.last_publish_ok = all(
+            s.ok for s in statuses if s.message_count > 0
+        ) and any(s.message_count > 0 for s in statuses)
+        latencies = [s.latency_ms for s in statuses if s.latency_ms is not None]
+        session.last_publish_latency_ms = max(latencies) if latencies else None
+        attempts = [s.attempt_at for s in statuses if s.attempt_at is not None]
+        session.last_publish_attempt_at = max(attempts) if attempts else None
+        ok_times = [s.last_ok_at for s in statuses if s.last_ok_at is not None]
+        session.last_publish_ok_at = max(ok_times) if ok_times else None
+        errors = [s.error for s in statuses if s.error]
+        session.last_publish_error = errors[-1] if errors else None
 
     @staticmethod
     def _local_database_healthy() -> bool:
@@ -1632,7 +1734,7 @@ class SimulatorRuntime:
             probe.next_eligible_at = now_mono + self._HEALTH_PROBE_TTL_SECONDS
 
     def _run_session_side_effects(self, effects: SessionSideEffects) -> None:
-        self._execute_pending_tick_publish(effects.pending_publish)
+        self._execute_pending_tick_publish(effects.pending_publishes)
 
         if effects.pending_heartbeats:
             latest_heartbeats: dict[int, int] = {}
@@ -3248,9 +3350,13 @@ class SimulatorRuntime:
         record.last_tick_outputs = outputs
         record.last_tick_at = _utc_now_iso()
         if buffered_messages:
-            self._tick_buffer.extend(buffered_messages)
+            for payload in buffered_messages:
+                device_id = str(payload.get("device_id") or "")
+                if not device_id:
+                    continue
+                self._device_buffers.setdefault(device_id, []).append(payload)
         self._refresh_pending_sync_flags()
-        effects.pending_publish = self._publish_tick_buffer_locked(now=now, force=force)
+        effects.pending_publishes = self._publish_tick_buffer_locked(now=now, force=force)
         for payload in outputs:
             device_id = payload.get("device_id")
             if device_id in self.devices:
@@ -3444,16 +3550,33 @@ class SimulatorRuntime:
 
         return effects
 
-    def _publish_tick_buffer_locked(self, now: float, force: bool) -> PendingTickPublish | None:
-        if not self._tick_buffer:
-            return None
-        if self._publish_in_flight:
-            return None
+    def _publish_tick_buffer_locked(
+        self, now: float, force: bool
+    ) -> list[PendingDevicePublish]:
+        """Build per-device publish units (fix bug "dữ liệu đi cùng qua 1 API").
+
+        Mỗi device có buffer riêng → 1 device đang in-flight không block
+        device khác. Trả empty list nếu chưa tới window hoặc không có
+        buffered message nào eligible.
+        """
         if not force and now - self._last_push_time < float(self._push_interval):
-            return None
-        messages = list(self._tick_buffer)
-        self._publish_in_flight = True
-        return PendingTickPublish(messages=messages, clear_count=len(messages))
+            return []
+        pending: list[PendingDevicePublish] = []
+        for device_id, buffer in self._device_buffers.items():
+            if not buffer:
+                continue
+            if device_id in self._device_in_flight:
+                continue
+            messages = list(buffer)
+            self._device_in_flight.add(device_id)
+            pending.append(
+                PendingDevicePublish(
+                    device_id=device_id,
+                    messages=messages,
+                    clear_count=len(messages),
+                )
+            )
+        return pending
 
     def _refresh_pending_sync_flags(self) -> None:
         self.device_service._refresh_pending_sync_flags()

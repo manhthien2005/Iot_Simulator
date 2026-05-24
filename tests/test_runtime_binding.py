@@ -10,13 +10,13 @@ from threading import Event, Thread
 
 try:
     from Iot_Simulator.api_server import dependencies as dependencies_module
-    from Iot_Simulator.api_server.dependencies import PendingTickPublish, SessionSideEffects, SimulatorRuntime
+    from Iot_Simulator.api_server.dependencies import PendingDevicePublish, SessionSideEffects, SimulatorRuntime
     from Iot_Simulator.api_server.schemas import CreateDeviceRequest, DataBindingConfig
     from Iot_Simulator.transport import PublishResult
     from Iot_Simulator.transport.router import RoutedPublishResult
 except ModuleNotFoundError:
     from api_server import dependencies as dependencies_module
-    from api_server.dependencies import PendingTickPublish, SessionSideEffects, SimulatorRuntime
+    from api_server.dependencies import PendingDevicePublish, SessionSideEffects, SimulatorRuntime
     from api_server.schemas import CreateDeviceRequest, DataBindingConfig
     from transport import PublishResult
     from transport.router import RoutedPublishResult
@@ -147,17 +147,20 @@ class TestRuntimeBinding(unittest.TestCase):
 
             def fake_tick_session(_record: object, *, force: bool) -> SessionSideEffects:
                 return SessionSideEffects(
-                    pending_publish=PendingTickPublish(
-                        messages=[
-                            {
-                                "device_id": created.id,
-                                "db_device_id": 321,
-                                "emitted_at": "2026-01-01T00:00:00Z",
-                                "vitals": {"heart_rate": 72.0, "spo2": 98.0},
-                            }
-                        ],
-                        clear_count=1,
-                    )
+                    pending_publishes=[
+                        PendingDevicePublish(
+                            device_id=created.id,
+                            messages=[
+                                {
+                                    "device_id": created.id,
+                                    "db_device_id": 321,
+                                    "emitted_at": "2026-01-01T00:00:00Z",
+                                    "vitals": {"heart_rate": 72.0, "spo2": 98.0},
+                                }
+                            ],
+                            clear_count=1,
+                        )
+                    ]
                 )
 
             runtime._tick_session_locked = fake_tick_session  # type: ignore[method-assign]
@@ -395,7 +398,7 @@ class TestRuntimeBinding(unittest.TestCase):
     def test_tick_buffer_only_keeps_bound_device_vitals(self) -> None:
         runtime = SimulatorRuntime()
         runtime._push_interval = 999999
-        runtime._publish_tick_buffer_locked = lambda **kwargs: None  # type: ignore[method-assign]
+        runtime._publish_tick_buffer_locked = lambda **kwargs: []  # type: ignore[method-assign]
 
         bound = runtime.create_device(CreateDeviceRequest(name="Bound Watch", type="smartwatch"))
         unbound = runtime.create_device(CreateDeviceRequest(name="Unbound Watch", type="smartwatch"))
@@ -409,9 +412,14 @@ class TestRuntimeBinding(unittest.TestCase):
 
         runtime._tick_session_locked(record, force=False)
 
-        self.assertTrue(runtime._tick_buffer)
-        self.assertTrue(all(payload.get("db_device_id") == 101 for payload in runtime._tick_buffer))
-        self.assertEqual({payload.get("device_id") for payload in runtime._tick_buffer}, {bound.id})
+        # Per-device buffer (fix bug "dữ liệu đi cùng qua 1 API"): only the
+        # bound device gets a buffered payload; unbound device has no
+        # entry (or empty list).
+        bound_buffer = runtime._device_buffers.get(bound.id, [])
+        unbound_buffer = runtime._device_buffers.get(unbound.id, [])
+        self.assertTrue(bound_buffer)
+        self.assertTrue(all(payload.get("db_device_id") == 101 for payload in bound_buffer))
+        self.assertFalse(unbound_buffer)
         self.assertTrue(runtime.devices[bound.id].has_pending_sync)
         self.assertFalse(runtime.devices[unbound.id].has_pending_sync)
 
@@ -449,7 +457,8 @@ class TestRuntimeBinding(unittest.TestCase):
             def fake_scope():
                 yield fake_session
 
-            pending_publish = PendingTickPublish(
+            pending_publish = PendingDevicePublish(
+                device_id=created.id,
                 messages=[
                     {
                         "db_device_id": 303,
@@ -471,7 +480,7 @@ class TestRuntimeBinding(unittest.TestCase):
             original_scope = dependencies_module.session_scope
             dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
             try:
-                runtime._execute_pending_tick_publish(pending_publish)
+                runtime._execute_pending_tick_publish([pending_publish])
             finally:
                 dependencies_module.session_scope = original_scope  # type: ignore[assignment]
 
@@ -535,7 +544,8 @@ class TestRuntimeBinding(unittest.TestCase):
             def fake_scope():
                 yield FailingSession()
 
-            pending_publish = PendingTickPublish(
+            pending_publish = PendingDevicePublish(
+                device_id=created.id,
                 messages=[
                     {
                         "db_device_id": 404,
@@ -549,7 +559,7 @@ class TestRuntimeBinding(unittest.TestCase):
             original_scope = dependencies_module.session_scope
             dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
             try:
-                runtime._execute_pending_tick_publish(pending_publish)
+                runtime._execute_pending_tick_publish([pending_publish])
             finally:
                 dependencies_module.session_scope = original_scope  # type: ignore[assignment]
 

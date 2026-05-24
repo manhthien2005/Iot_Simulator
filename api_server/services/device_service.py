@@ -72,7 +72,7 @@ class DeviceService:
         device_scenarios: dict[str, str],
         risk_snapshots: dict[str, Any],
         risk_history: dict[str, list],
-        tick_buffer: list[dict[str, Any]],
+        tick_buffer: dict[str, list[dict[str, Any]]],
         event_history: collections.deque["EventRecord"],
         dashboard_cache_ref: list,  # mutable container: [DashboardSummary | None]
         db_device_active_cache: dict[int, bool],
@@ -91,7 +91,7 @@ class DeviceService:
         self.device_scenarios = device_scenarios
         self.risk_snapshots = risk_snapshots
         self.risk_history = risk_history
-        self._tick_buffer = tick_buffer
+        self._tick_buffer = tick_buffer  # type: ignore[assignment]  # now dict[device_id, list]
         self.event_history = event_history
         self._dashboard_cache_ref = dashboard_cache_ref
         self._db_device_active_cache = db_device_active_cache
@@ -163,10 +163,7 @@ class DeviceService:
             ]
             for key in stale_keys:
                 self._last_alert_pushes.pop(key, None)
-            self._tick_buffer[:] = [
-                payload for payload in self._tick_buffer
-                if payload.get("device_id") != device_id
-            ]
+            self._tick_buffer.pop(device_id, None)
             self._refresh_pending_sync_flags()
             for session in self.sessions.values():
                 if device_id in session.device_ids:
@@ -196,10 +193,7 @@ class DeviceService:
             device.bind_status = "unbound"
             if device.state == "bound":
                 device.state = "bindable"
-            self._tick_buffer[:] = [
-                payload for payload in self._tick_buffer
-                if payload.get("device_id") != sim_device_id
-            ]
+            self._tick_buffer.pop(sim_device_id, None)
             self._refresh_pending_sync_flags()
             self._rebuild_db_device_active_cache_locked()
             return device
@@ -239,11 +233,14 @@ class DeviceService:
         self._db_device_active_cache.update(active_db_device_ids)
 
     def _refresh_pending_sync_flags(self) -> None:
-        pending_ids = {
-            str(payload.get("device_id"))
-            for payload in self._tick_buffer
-            if payload.get("device_id") is not None and payload.get("db_device_id") is not None
-        }
+        pending_ids: set[str] = set()
+        for device_id, buffer in self._tick_buffer.items():
+            if not buffer:
+                continue
+            for payload in buffer:
+                if payload.get("db_device_id") is not None:
+                    pending_ids.add(device_id)
+                    break
         for device_id, device in self.devices.items():
             device.has_pending_sync = device_id in pending_ids
 

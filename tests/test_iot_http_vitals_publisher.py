@@ -24,11 +24,11 @@ from unittest.mock import MagicMock, patch
 
 try:
     from Iot_Simulator.api_server import dependencies as dependencies_module
-    from Iot_Simulator.api_server.dependencies import PendingTickPublish, SimulatorRuntime
+    from Iot_Simulator.api_server.dependencies import PendingDevicePublish, SimulatorRuntime
     from Iot_Simulator.api_server.schemas import CreateDeviceRequest
 except ModuleNotFoundError:
     from api_server import dependencies as dependencies_module
-    from api_server.dependencies import PendingTickPublish, SimulatorRuntime
+    from api_server.dependencies import PendingDevicePublish, SimulatorRuntime
     from api_server.schemas import CreateDeviceRequest
 
 
@@ -37,7 +37,7 @@ except ModuleNotFoundError:
 # ---------------------------------------------------------------------------
 
 
-def _runtime_with_running_session(device_db_id: int = 303) -> tuple[SimulatorRuntime, Any]:
+def _runtime_with_running_session(device_db_id: int = 303) -> tuple[SimulatorRuntime, Any, str]:
     runtime = SimulatorRuntime()
     created = runtime.create_device(
         CreateDeviceRequest(name="HTTP Watch", type="smartwatch")
@@ -46,10 +46,10 @@ def _runtime_with_running_session(device_db_id: int = 303) -> tuple[SimulatorRun
     session = runtime.create_session([created.id], speed=1)
     record = runtime.sessions[session["id"]]
     record.status = "running"
-    return runtime, record
+    return runtime, record, created.id
 
 
-def _pending_tick(*, device_db_id: int = 303, count: int = 1) -> PendingTickPublish:
+def _pending_tick(*, device_db_id: int = 303, count: int = 1, sim_device_id: str = "sim-dev") -> PendingDevicePublish:
     messages: list[dict[str, Any]] = []
     for i in range(count):
         messages.append(
@@ -67,7 +67,7 @@ def _pending_tick(*, device_db_id: int = 303, count: int = 1) -> PendingTickPubl
                 },
             }
         )
-    return PendingTickPublish(messages=messages, clear_count=count)
+    return PendingDevicePublish(device_id=sim_device_id, messages=messages, clear_count=count)
 
 
 def _mock_http_response(*, status_code: int, body: dict[str, Any]) -> MagicMock:
@@ -136,8 +136,8 @@ class TestHttpVitalsPublishHappyPath(unittest.TestCase):
             os.environ["USE_HTTP_VITALS_PUBLISH"] = self._original
 
     def test_sends_post_with_canonical_payload_shape(self) -> None:
-        runtime, _record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=1)
+        runtime, _record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=1, sim_device_id=device_id)
 
         with patch.object(dependencies_module.httpx, "post") as post_mock:
             post_mock.return_value = _mock_http_response(
@@ -149,7 +149,7 @@ class TestHttpVitalsPublishHappyPath(unittest.TestCase):
                     "risk_evaluated_devices": [303],
                 },
             )
-            runtime._execute_pending_tick_publish(pending)
+            runtime._execute_pending_tick_publish([pending])
 
         post_mock.assert_called_once()
         call = post_mock.call_args
@@ -172,8 +172,8 @@ class TestHttpVitalsPublishHappyPath(unittest.TestCase):
         self.assertEqual(msg["vitals"]["spo2"], 98.0)
 
     def test_acks_count_comes_from_response_ingested(self) -> None:
-        runtime, record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=3)
+        runtime, record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=3, sim_device_id=device_id)
 
         with patch.object(dependencies_module.httpx, "post") as post_mock:
             post_mock.return_value = _mock_http_response(
@@ -185,7 +185,7 @@ class TestHttpVitalsPublishHappyPath(unittest.TestCase):
                     "risk_evaluated_devices": [303, 304, 305],
                 },
             )
-            runtime._execute_pending_tick_publish(pending)
+            runtime._execute_pending_tick_publish([pending])
 
         self.assertTrue(record.last_publish_ok)
         self.assertEqual(record.last_publish_ack_count, 3)
@@ -193,8 +193,8 @@ class TestHttpVitalsPublishHappyPath(unittest.TestCase):
         self.assertIsNone(record.last_publish_error)
 
     def test_partial_ack_reports_publish_not_ok(self) -> None:
-        runtime, record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=3)
+        runtime, record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=3, sim_device_id=device_id)
 
         with patch.object(dependencies_module.httpx, "post") as post_mock:
             post_mock.return_value = _mock_http_response(
@@ -214,7 +214,7 @@ class TestHttpVitalsPublishHappyPath(unittest.TestCase):
                     "risk_evaluated_devices": [303, 304],
                 },
             )
-            runtime._execute_pending_tick_publish(pending)
+            runtime._execute_pending_tick_publish([pending])
 
         # publish_ok is True only when ack == count; partial = soft fail
         # so the sim can flag the failure in the dashboard.
@@ -227,8 +227,8 @@ class TestHttpVitalsPublishHappyPath(unittest.TestCase):
         # ADR-020 S6 dispose: HTTP path MUST NOT open a DB session for
         # the vitals INSERT path. If a future refactor accidentally
         # routes through ``session_scope``, this guard catches it.
-        runtime, _record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=1)
+        runtime, _record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=1, sim_device_id=device_id)
 
         @contextmanager
         def explode_scope():
@@ -246,7 +246,7 @@ class TestHttpVitalsPublishHappyPath(unittest.TestCase):
                     status_code=200,
                     body={"ingested": 1, "rejected": 0, "errors": [], "risk_evaluated_devices": [303]},
                 )
-                runtime._execute_pending_tick_publish(pending)
+                runtime._execute_pending_tick_publish([pending])
         finally:
             dependencies_module.session_scope = original_scope  # type: ignore[assignment]
 
@@ -268,15 +268,15 @@ class TestHttpVitalsPublishFailureModes(unittest.TestCase):
             os.environ["USE_HTTP_VITALS_PUBLISH"] = self._original
 
     def test_http_5xx_reports_zero_ack(self) -> None:
-        runtime, record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=2)
+        runtime, record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=2, sim_device_id=device_id)
 
         with patch.object(dependencies_module.httpx, "post") as post_mock:
             post_mock.return_value = _mock_http_response(
                 status_code=500,
                 body={"error": "internal"},
             )
-            runtime._execute_pending_tick_publish(pending)
+            runtime._execute_pending_tick_publish([pending])
 
         self.assertFalse(record.last_publish_ok)
         self.assertEqual(record.last_publish_ack_count, 0)
@@ -286,34 +286,34 @@ class TestHttpVitalsPublishFailureModes(unittest.TestCase):
     def test_http_422_reports_zero_ack(self) -> None:
         # Pydantic schema rejection at the BE boundary — entire batch
         # fails before any item is inserted.
-        runtime, record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=1)
+        runtime, record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=1, sim_device_id=device_id)
 
         with patch.object(dependencies_module.httpx, "post") as post_mock:
             post_mock.return_value = _mock_http_response(
                 status_code=422,
                 body={"detail": "validation error"},
             )
-            runtime._execute_pending_tick_publish(pending)
+            runtime._execute_pending_tick_publish([pending])
 
         self.assertFalse(record.last_publish_ok)
         self.assertEqual(record.last_publish_ack_count, 0)
 
     def test_network_exception_reports_zero_ack(self) -> None:
-        runtime, record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=1)
+        runtime, record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=1, sim_device_id=device_id)
 
         with patch.object(dependencies_module.httpx, "post") as post_mock:
             post_mock.side_effect = ConnectionError("backend down")
-            runtime._execute_pending_tick_publish(pending)
+            runtime._execute_pending_tick_publish([pending])
 
         self.assertFalse(record.last_publish_ok)
         self.assertEqual(record.last_publish_ack_count, 0)
         self.assertIsNotNone(record.last_publish_error)
 
     def test_invalid_response_body_reports_zero_ack(self) -> None:
-        runtime, record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=1)
+        runtime, record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=1, sim_device_id=device_id)
 
         response = MagicMock()
         response.status_code = 200
@@ -321,7 +321,7 @@ class TestHttpVitalsPublishFailureModes(unittest.TestCase):
 
         with patch.object(dependencies_module.httpx, "post") as post_mock:
             post_mock.return_value = response
-            runtime._execute_pending_tick_publish(pending)
+            runtime._execute_pending_tick_publish([pending])
 
         self.assertFalse(record.last_publish_ok)
         self.assertEqual(record.last_publish_ack_count, 0)
@@ -349,8 +349,8 @@ class TestFeatureFlagFallbackToDbDirect(unittest.TestCase):
             os.environ["USE_HTTP_VITALS_PUBLISH"] = self._original
 
     def test_http_not_called_when_flag_disabled(self) -> None:
-        runtime, _record = _runtime_with_running_session(device_db_id=303)
-        pending = _pending_tick(device_db_id=303, count=1)
+        runtime, _record, device_id = _runtime_with_running_session(device_db_id=303)
+        pending = _pending_tick(device_db_id=303, count=1, sim_device_id=device_id)
 
         class _RecordingSession:
             def __init__(self) -> None:
@@ -374,7 +374,7 @@ class TestFeatureFlagFallbackToDbDirect(unittest.TestCase):
         dependencies_module.session_scope = fake_scope  # type: ignore[assignment]
         try:
             with patch.object(dependencies_module.httpx, "post") as post_mock:
-                runtime._execute_pending_tick_publish(pending)
+                runtime._execute_pending_tick_publish([pending])
                 post_mock.assert_not_called()
         finally:
             dependencies_module.session_scope = original_scope  # type: ignore[assignment]
