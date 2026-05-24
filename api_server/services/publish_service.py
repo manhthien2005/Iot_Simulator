@@ -58,7 +58,8 @@ class PublishService:
         http_sender_fn: Callable,          # (endpoint, payload_json, headers) -> int
         publish_flow_event_fn: Callable,   # (session_id, event_dict) -> None
         push_alert_fn: Callable,           # (sim_device_id, event_type, severity, metadata) -> None
-        logs: "LogHub",
+        heartbeat_fn: Callable | None = None,  # (db_device_id, battery_level) -> None
+        logs: "LogHub" = None,  # type: ignore[assignment]
     ) -> None:
         self._sessions = sessions
         self._devices = devices
@@ -71,6 +72,7 @@ class PublishService:
         self._http_sender = http_sender_fn
         self._publish_flow_event = publish_flow_event_fn
         self._push_alert = push_alert_fn
+        self._heartbeat_fn = heartbeat_fn  # injectable; falls back to self.update_device_heartbeat
         self.logs = logs
 
     # ── Heartbeat ────────────────────────────────────────────────────────
@@ -356,7 +358,10 @@ class PublishService:
             for item in effects.pending_heartbeats:
                 latest_heartbeats[item.db_device_id] = item.battery_level
             for db_device_id, battery_level in latest_heartbeats.items():
-                self.update_device_heartbeat(db_device_id, battery_level)
+                if self._heartbeat_fn is not None:
+                    self._heartbeat_fn(db_device_id, battery_level)
+                else:
+                    self.update_device_heartbeat(db_device_id, battery_level)
 
         for alert in effects.pending_alerts:
             self._push_alert(

@@ -545,7 +545,8 @@ class SimulatorRuntime:
             last_push_time_ref=self._last_push_time_ref,
             http_sender_fn=self._http_sender,
             publish_flow_event_fn=self.publish_flow_event,
-            push_alert_fn=self._push_alert_to_backend,
+            push_alert_fn=lambda *a, **kw: self._push_alert_to_backend(*a, **kw),
+            heartbeat_fn=lambda *a, **kw: self._update_device_heartbeat(*a, **kw),
             logs=self.logs,
         )
         self.publish_service.set_refresh_fn(self._refresh_pending_sync_flags)
