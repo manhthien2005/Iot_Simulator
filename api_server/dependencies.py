@@ -1244,20 +1244,6 @@ class SimulatorRuntime:
             logger.warning("Failed to update device heartbeat for db_device_id=%s", db_device_id, exc_info=True)
             return
 
-    # ADR-020 part 1 / Phase 7 S6: feature flag controlling whether
-    # vitals tick batches go via HTTP POST to
-    # ``/api/v1/mobile/telemetry/ingest`` or through the legacy
-    # ``session_scope`` DB-direct INSERT path. HTTP default; DB direct
-    # is kept as the transitional fallback so an operator can toggle off
-    # HTTP without redeploying the simulator. S7 will dispose the DB
-    # path after the HTTP path is proven stable in dev topology.
-    @staticmethod
-    def _use_http_vitals_publish() -> bool:
-        raw = os.environ.get("USE_HTTP_VITALS_PUBLISH")
-        if raw is None:
-            return True
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
-
     def _publish_vitals_http(
         self, pending_publish: PendingDevicePublish
     ) -> tuple[int, set[int], str | None]:
@@ -1360,107 +1346,26 @@ class SimulatorRuntime:
 
         return ingested, synced_device_ids, None
 
-    def _publish_vitals_db_direct(
-        self, pending_publish: PendingDevicePublish
-    ) -> tuple[int, set[int], str | None]:
-        """Legacy DB-direct path — kept as ADR-020 transitional fallback.
-
-        Returns the same ``(ack_count, synced_device_ids, error_detail)``
-        shape as :meth:`_publish_vitals_http` so the caller branch logic
-        stays trivial. Scheduled for dispose in S7 after the HTTP path
-        is proven stable in the dev topology (single-replica uvicorn).
-        """
-        ack_count = 0
-        synced_device_ids: set[int] = set()
-        try:
-            with session_scope() as db:
-                for msg in pending_publish.messages:
-                    db_device_id = msg.get("db_device_id")
-                    if db_device_id is None:
-                        continue
-                    emitted_at = msg.get("emitted_at") or _utc_now_iso()
-                    vitals = msg.get("vitals") or {}
-                    db.execute(
-                        text(
-                            "INSERT INTO vitals "
-                            "(time, device_id, heart_rate, spo2, temperature, "
-                            "blood_pressure_sys, blood_pressure_dia, hrv, "
-                            "respiratory_rate, signal_quality, motion_artifact) "
-                            "VALUES (:ts, :dev, :hr, :spo2, :temp, :sys, :dia, "
-                            ":hrv, :rr, :sq, :ma)"
-                        ),
-                        {
-                            "ts": emitted_at,
-                            "dev": int(db_device_id),
-                            "hr": _safe_int(vitals.get("heart_rate")),
-                            "spo2": _safe_float_db(vitals.get("spo2")),
-                            "temp": _safe_float_db(vitals.get("temperature")),
-                            "sys": _safe_int(vitals.get("blood_pressure_sys")),
-                            "dia": _safe_int(vitals.get("blood_pressure_dia")),
-                            "hrv": _safe_int(vitals.get("hrv")),
-                            "rr": _safe_int(vitals.get("respiratory_rate")),
-                            "sq": None,
-                            "ma": None,
-                        },
-                    )
-                    synced_device_ids.add(int(db_device_id))
-                    ack_count += 1
-                for db_device_id in synced_device_ids:
-                    db.execute(
-                        text(
-                            "UPDATE devices "
-                            "SET last_sync_at = NOW(), updated_at = NOW() "
-                            "WHERE id = :device_id AND deleted_at IS NULL"
-                        ),
-                        {"device_id": db_device_id},
-                    )
-                db.commit()
-        except Exception:
-            logger.warning("Direct DB write failed for tick publish", exc_info=True)
-            return 0, set(), "db_direct_failed"
-        return ack_count, synced_device_ids, None
-
     def _execute_pending_tick_publish(
         self, pending_publishes: list[PendingDevicePublish] | None
     ) -> None:
-        # ADR-020 part 1 / Phase 7 S6: branch on feature flag. HTTP path
-        # is the new default (matches production smartwatch flow + lets
-        # the BE auto-trigger pipeline at ``/telemetry/ingest`` fire).
-        # The DB-direct branch stays as a transitional fallback so an
-        # operator can toggle off HTTP without redeploying the sim;
-        # dispose tracked in S7 cleanup slice.
         if not pending_publishes:
             return
-
-        use_http = self._use_http_vitals_publish()
-
         for pending_publish in pending_publishes:
-            self._execute_single_device_publish(pending_publish, use_http=use_http)
+            self._execute_single_device_publish(pending_publish)
 
     def _execute_single_device_publish(
         self,
         pending_publish: PendingDevicePublish,
-        *,
-        use_http: bool,
     ) -> None:
-        """Publish 1 device's buffer; isolate state update per device.
-
-        Fix bug "dữ liệu đi cùng qua 1 API": failure ở 1 device không kéo
-        device khác xuống — trạng thái cập nhật theo device map riêng,
-        buffer xóa riêng, in-flight flag clear riêng.
-        """
+        """Publish 1 device's buffer via HTTP; isolate state update per device."""
         device_id = pending_publish.device_id
         publish_started = monotonic()
         message_count = len(pending_publish.messages)
 
-        if use_http:
-            ack_count, synced_device_ids, publish_error_detail = (
-                self._publish_vitals_http(pending_publish)
-            )
-        else:
-            ack_count, synced_device_ids, publish_error_detail = (
-                self._publish_vitals_db_direct(pending_publish)
-            )
+        ack_count, synced_device_ids, publish_error_detail = (
+            self._publish_vitals_http(pending_publish)
+        )
 
         publish_latency_ms = max(0, int(round((monotonic() - publish_started) * 1000)))
         publish_ok = ack_count == message_count if message_count > 0 else False
@@ -3250,10 +3155,24 @@ class SimulatorRuntime:
         now = monotonic()
         if not force and now - record.last_tick_monotonic < target_interval:
             return effects
-        # Module FA: opportunistic auto-resolve for short-countdown variants.
-        # Runs every tick so the FE's polling sees the resolution promptly.
         self._auto_resolve_fall_countdowns_locked(record)
         outputs = record.simulator.tick()
+        self._enrich_and_buffer_outputs(outputs, record)
+        self._refresh_pending_sync_flags()
+        effects.pending_publishes = self._publish_tick_buffer_locked(now=now, force=force)
+        self._process_tick_outputs(outputs, record, effects)
+        if _PRE_MODEL_TRIGGER_ENABLED and self._trigger_orchestrator is not None:
+            self._run_shadow_orchestrator(outputs)
+        record.last_tick_monotonic = now
+        record.last_tick_outputs = outputs
+        record.last_tick_at = _utc_now_iso()
+        return effects
+
+    def _enrich_and_buffer_outputs(
+        self, outputs: list[dict], record: SessionRecord
+    ) -> None:
+        """Attach persona/db metadata, apply scenario overrides, advance sleep phase,
+        and push bound-device payloads into ``_device_buffers``."""
         buffered_messages: list[dict[str, Any]] = []
         for payload in outputs:
             device_id = str(payload.get("device_id") or "")
@@ -3273,17 +3192,20 @@ class SimulatorRuntime:
             device_id = str(payload.get("device_id") or "")
             if device_id in self.devices:
                 self.sleep_service._advance_sleep_phase_if_due(device_id)
-        record.last_tick_monotonic = now
-        record.last_tick_outputs = outputs
-        record.last_tick_at = _utc_now_iso()
         if buffered_messages:
             for payload in buffered_messages:
                 device_id = str(payload.get("device_id") or "")
                 if not device_id:
                     continue
                 self._device_buffers.setdefault(device_id, []).append(payload)
-        self._refresh_pending_sync_flags()
-        effects.pending_publishes = self._publish_tick_buffer_locked(now=now, force=force)
+
+    def _process_tick_outputs(
+        self,
+        outputs: list[dict],
+        record: SessionRecord,
+        effects: SessionSideEffects,
+    ) -> None:
+        """Update device state, emit log entries, and evaluate alerts for each payload."""
         for payload in outputs:
             device_id = payload.get("device_id")
             if device_id in self.devices:
@@ -3444,38 +3366,38 @@ class SimulatorRuntime:
                     )
                 )
 
-        # Shadow orchestrator evaluation (Fix R2/R5).
-        # Runs only when PRE_MODEL_TRIGGER_ENABLED=1 and the orchestrator was
-        # successfully wired at startup.  Results are logged only (shadow mode):
-        # they do NOT modify ``effects.pending_alerts`` so the existing alert
-        # flow is untouched. ADR-020 Phase 7 S7 disposed the active R3 wire;
-        # the BE auto-calls ``calculate_device_risk`` after every ingest.
-        if _PRE_MODEL_TRIGGER_ENABLED and self._trigger_orchestrator is not None:
-            for payload in outputs:
-                _orch_device_id = str(payload.get("device_id") or "")
-                if _orch_device_id not in self.devices:
-                    continue
-                try:
-                    _orch_actions = self._trigger_orchestrator.evaluate_tick(
-                        device_id=_orch_device_id,
-                        vitals=payload.get("vitals") or {},
-                        motion=payload.get("motion"),
-                        state=payload.get("state") or {},
-                        persona=self._build_trigger_persona(_orch_device_id),
-                    )
-                    if _orch_actions:
-                        logger.debug(
-                            "Orchestrator [shadow] device=%s actions=%s",
-                            _orch_device_id,
-                            [(a.action_type, a.severity) for a in _orch_actions],
-                        )
-                except Exception:
-                    logger.exception(
-                        "Orchestrator evaluation failed for device %s (non-fatal)",
-                        _orch_device_id,
-                    )
+    def _run_shadow_orchestrator(self, outputs: list[dict]) -> None:
+        """Shadow orchestrator evaluation (Fix R2/R5).
 
-        return effects
+        Runs only when PRE_MODEL_TRIGGER_ENABLED=1 and the orchestrator was
+        successfully wired at startup.  Results are logged only (shadow mode):
+        they do NOT modify ``effects.pending_alerts`` so the existing alert
+        flow is untouched. ADR-020 Phase 7 S7 disposed the active R3 wire;
+        the BE auto-calls ``calculate_device_risk`` after every ingest.
+        """
+        for payload in outputs:
+            _orch_device_id = str(payload.get("device_id") or "")
+            if _orch_device_id not in self.devices:
+                continue
+            try:
+                _orch_actions = self._trigger_orchestrator.evaluate_tick(
+                    device_id=_orch_device_id,
+                    vitals=payload.get("vitals") or {},
+                    motion=payload.get("motion"),
+                    state=payload.get("state") or {},
+                    persona=self._build_trigger_persona(_orch_device_id),
+                )
+                if _orch_actions:
+                    logger.debug(
+                        "Orchestrator [shadow] device=%s actions=%s",
+                        _orch_device_id,
+                        [(a.action_type, a.severity) for a in _orch_actions],
+                    )
+            except Exception:
+                logger.exception(
+                    "Orchestrator evaluation failed for device %s (non-fatal)",
+                    _orch_device_id,
+                )
 
     def _publish_tick_buffer_locked(
         self, now: float, force: bool
