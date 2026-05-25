@@ -657,67 +657,85 @@ class FallService:
             else:
                 raise KeyError(f"Device not found in active sessions: {device_id}")
 
-        # ── Phase 2: AI inference (OUTSIDE lock) ─────────────────────────
-        # HTTP call to mobile BE — can take 100ms-1s. Must NOT hold global lock.
+        # ── Phase 2: AI inference FULLY ASYNC (fire and forget) ──────────
+        # submit_imu_window HTTP can take 100ms-4s (timeout). Running it in
+        # a background thread lets inject_event return in ~200ms total.
+        # The AI verdict and alert push arrive asynchronously.
         if _p2_need_ai and _p2_policy is not None:
-            pre_trigger_evidence = self._compute_pre_trigger_evidence(_p2_motion)
-            ai_verdict = self._call_fall_ai_locked(_p2_motion, _p2_device_id, _p2_variant)
-            motion_ref = self._build_motion_window_ref(_p2_payload, _p2_variant)
+            import threading as _threading
+            _p2_snapshot = dict(
+                motion=_p2_motion, device_id=_p2_device_id, variant=_p2_variant,
+                payload=_p2_payload, policy=_p2_policy,
+                canonical_event=_p2_canonical_event, record_id=_p2_record_id,
+                persona_variant=_p2_persona_variant,
+                effects=effects,
+            )
 
-            # ── Phase 3: Store results (re-acquire lock) ──────────────────
-            with self._lock:
-                if pre_trigger_evidence is not None:
-                    self._fall_pre_trigger_results[_p2_device_id] = pre_trigger_evidence
-                self._fall_predictions[_p2_device_id] = ai_verdict
-                if motion_ref is not None:
-                    self._fall_motion_refs[_p2_device_id] = motion_ref
-                severity = self._override_severity_from_verdict(_p2_policy, ai_verdict)
-                if _p2_canonical_event is not None:
-                    _p2_canonical_event.severity = severity
-                    _p2_canonical_event.metadata["ai_label"] = ai_verdict.label
-                    _p2_canonical_event.metadata["ai_probability"] = f"{ai_verdict.probability:.4f}"
-                    _p2_canonical_event.metadata["ai_band"] = ai_verdict.riskBand
-                    _p2_canonical_event.metadata["ai_status"] = ai_verdict.modelStatus
-
-            if _p2_record_id:
-                self._publish_flow_event(_p2_record_id, {
-                    "step": "imu_predict",
-                    "device_id": _p2_device_id,
-                    "status": "done" if ai_verdict.modelStatus == "ok" else "error",
-                    "payload": {
-                        "label": ai_verdict.label,
-                        "confidence": round(ai_verdict.confidence, 3),
-                        "model_status": ai_verdict.modelStatus,
-                    },
-                })
-
-            # Build alert effects with AI verdict (outside lock — just list construction)
-            should_push = _p2_policy.push_alert
-            if ai_verdict.highPriorityAlert:
-                should_push = True
-            if should_push:
-                ai_prob = float(ai_verdict.probability) if ai_verdict else 0.0
-                confidence_value = max(ai_prob, float(_p2_policy.simulated_confidence))
-                effects.pending_alerts.append(
-                    PendingAlertCall(
-                        sim_device_id=_p2_device_id,
+            def _ai_and_store(snap: dict) -> None:
+                pre_trigger_evidence = self._compute_pre_trigger_evidence(snap["motion"])
+                ai_verdict = self._call_fall_ai_locked(
+                    snap["motion"], snap["device_id"], snap["variant"]
+                )
+                motion_ref = self._build_motion_window_ref(snap["payload"], snap["variant"])
+                with self._lock:
+                    if pre_trigger_evidence is not None:
+                        self._fall_pre_trigger_results[snap["device_id"]] = pre_trigger_evidence
+                    self._fall_predictions[snap["device_id"]] = ai_verdict
+                    if motion_ref is not None:
+                        self._fall_motion_refs[snap["device_id"]] = motion_ref
+                    severity = self._override_severity_from_verdict(snap["policy"], ai_verdict)
+                    if snap["canonical_event"] is not None:
+                        snap["canonical_event"].severity = severity
+                        snap["canonical_event"].metadata.update({
+                            "ai_label": ai_verdict.label,
+                            "ai_probability": f"{ai_verdict.probability:.4f}",
+                            "ai_band": ai_verdict.riskBand,
+                            "ai_status": ai_verdict.modelStatus,
+                        })
+                if snap["record_id"]:
+                    self._publish_flow_event(snap["record_id"], {
+                        "step": "imu_predict",
+                        "device_id": snap["device_id"],
+                        "status": "done" if ai_verdict.modelStatus == "ok" else "error",
+                        "payload": {
+                            "label": ai_verdict.label,
+                            "confidence": round(ai_verdict.confidence, 3),
+                            "model_status": ai_verdict.modelStatus,
+                        },
+                    })
+                # Build and dispatch alert
+                p = snap["policy"]
+                should_push = p.push_alert or ai_verdict.highPriorityAlert
+                if should_push:
+                    from api_server.models import PendingAlertCall, SessionSideEffects as SSE
+                    ai_prob = float(ai_verdict.probability)
+                    confidence = max(ai_prob, float(p.simulated_confidence))
+                    alert_effects = SSE(pending_alerts=[PendingAlertCall(
+                        sim_device_id=snap["device_id"],
                         event_type="fall_detected",
                         severity=severity,
                         metadata={
-                            "variant": _p2_variant,
-                            "persona_variant": _p2_persona_variant or "",
+                            "variant": snap["variant"],
+                            "persona_variant": snap["persona_variant"] or "",
                             "source": "inject_event",
                             "timestamp": _utc_now_iso(),
                             "ai_label": ai_verdict.label,
                             "ai_probability": f"{ai_verdict.probability:.4f}",
                             "ai_band": ai_verdict.riskBand,
-                            "confidence": f"{confidence_value:.4f}",
-                            "simulated_confidence": f"{_p2_policy.simulated_confidence:.4f}",
+                            "confidence": f"{confidence:.4f}",
+                            "simulated_confidence": f"{p.simulated_confidence:.4f}",
                             **({"fall_event_id": str(ai_verdict.fallEventId)} if ai_verdict.fallEventId else {}),
                             **({"model_request_id": ai_verdict.modelRequestId} if ai_verdict.modelRequestId else {}),
                         },
-                    )
-                )
+                    )])
+                    self._run_session_side_effects_async(alert_effects)
+
+            _threading.Thread(
+                target=_ai_and_store,
+                args=(_p2_snapshot,),
+                daemon=True,
+                name="sim-fall-ai",
+            ).start()
 
         # Use async (fire-and-forget) variant so inject_event returns
         # immediately after state mutation — HTTP publish/alerts run in
