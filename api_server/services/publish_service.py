@@ -380,6 +380,11 @@ class PublishService:
     # ── Side-effects dispatcher ───────────────────────────────────────────
 
     def run_session_side_effects(self, effects: SessionSideEffects) -> None:
+        """Dispatch publish, heartbeat, and alert effects synchronously.
+
+        Called by the background tick loop — blocking is OK because the
+        next tick waits for this to complete anyway.
+        """
         self.execute_pending_tick_publish(effects.pending_publishes)
 
         if effects.pending_heartbeats:
@@ -399,3 +404,45 @@ class PublishService:
                 severity=alert.severity,
                 metadata=alert.metadata,
             )
+
+    def run_session_side_effects_async(self, effects: SessionSideEffects) -> None:
+        """Fire-and-forget version for inject_event.
+
+        Dispatches HTTP publish and alerts in background threads so the
+        inject_event API call returns immediately after state mutation.
+        Heartbeats are still synchronous (lightweight DB update).
+        """
+        if effects.pending_publishes:
+            from threading import Thread
+            t = Thread(
+                target=self.execute_pending_tick_publish,
+                args=(effects.pending_publishes,),
+                daemon=True,
+                name="sim-inject-publish",
+            )
+            t.start()
+
+        if effects.pending_heartbeats:
+            latest_heartbeats: dict[int, int] = {}
+            for item in effects.pending_heartbeats:
+                latest_heartbeats[item.db_device_id] = item.battery_level
+            for db_device_id, battery_level in latest_heartbeats.items():
+                if self._heartbeat_fn is not None:
+                    self._heartbeat_fn(db_device_id, battery_level)
+                else:
+                    self.update_device_heartbeat(db_device_id, battery_level)
+
+        for alert in effects.pending_alerts:
+            from threading import Thread
+            t = Thread(
+                target=self._push_alert,
+                kwargs={
+                    "sim_device_id": alert.sim_device_id,
+                    "event_type": alert.event_type,
+                    "severity": alert.severity,
+                    "metadata": alert.metadata,
+                },
+                daemon=True,
+                name="sim-inject-alert",
+            )
+            t.start()

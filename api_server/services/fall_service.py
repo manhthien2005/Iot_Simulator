@@ -88,6 +88,7 @@ class FallService:
         publish_device_log_fn: Callable,
         record_event_fn: Callable,
         run_session_side_effects_fn: Callable,
+        run_session_side_effects_async_fn: Callable,
         publish_flow_event_fn: Callable,
         tick_session_locked_fn: Callable,
         require_session_fn: Callable,
@@ -110,6 +111,7 @@ class FallService:
         self._publish_device_log = publish_device_log_fn
         self._record_event = record_event_fn
         self._run_session_side_effects = run_session_side_effects_fn
+        self._run_session_side_effects_async = run_session_side_effects_async_fn
         self._publish_flow_event = publish_flow_event_fn
         self._tick_session_locked = tick_session_locked_fn
         self._require_session = require_session_fn
@@ -717,7 +719,10 @@ class FallService:
                     )
                 )
 
-        self._run_session_side_effects(effects)
+        # Use async (fire-and-forget) variant so inject_event returns
+        # immediately after state mutation — HTTP publish/alerts run in
+        # background threads without blocking the API response.
+        self._run_session_side_effects_async(effects)
 
     def fall_state(self, session_id: str, device_id: str) -> FallState:
         """Operator-visible fall pipeline state derived from runtime truth.

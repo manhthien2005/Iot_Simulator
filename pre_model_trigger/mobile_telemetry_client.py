@@ -57,7 +57,7 @@ _SLEEP_RISK_PATH = "/api/v1/mobile/telemetry/sleep-risk"
 #: external model-api call so allow generous margin; production
 #: ``ModelApiClient`` defaults to 5 s, the backend route adds maybe 100 ms
 #: of FastAPI overhead on top.
-DEFAULT_TIMEOUT_SECONDS: float = 8.0
+DEFAULT_TIMEOUT_SECONDS: float = 4.0  # Fail fast when backend is down
 
 
 # ---------------------------------------------------------------------------

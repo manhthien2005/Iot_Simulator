@@ -507,6 +507,7 @@ class SimulatorRuntime:
             publish_device_log_fn=self._publish_device_log,
             record_event_fn=self._record_event,
             run_session_side_effects_fn=self._run_session_side_effects,
+            run_session_side_effects_async_fn=lambda e: self.publish_service.run_session_side_effects_async(e),
             publish_flow_event_fn=self.publish_flow_event,
             tick_session_locked_fn=self._tick_session_locked,
             require_session_fn=self._require_session,
@@ -648,8 +649,12 @@ class SimulatorRuntime:
 
     @staticmethod
     def _resolve_backend_base_url() -> str:
-        base_url = os.environ.get("HEALTH_BACKEND_URL", "http://localhost:8000").strip()
-        return base_url.rstrip("/") or "http://localhost:8000"
+        # Default uses 127.0.0.1 (not localhost) to avoid Windows IPv6 fallback
+        # that adds ~2.5s per failed connection attempt.
+        base_url = os.environ.get("HEALTH_BACKEND_URL", "http://127.0.0.1:8002").strip()
+        # Normalize: replace localhost with 127.0.0.1 for the same reason
+        base_url = base_url.replace("localhost", "127.0.0.1")
+        return base_url.rstrip("/") or "http://127.0.0.1:8002"
 
     @staticmethod
     def _telemetry_ingest_endpoint(base_url: str) -> str:
@@ -678,7 +683,7 @@ class SimulatorRuntime:
                 endpoint,
                 content=payload.encode("utf-8"),
                 headers=request_headers,
-                timeout=10,
+                timeout=5,  # Fail fast — backend not available → don't block
             )
             return response.status_code
         except httpx.HTTPStatusError as exc:
@@ -708,7 +713,7 @@ class SimulatorRuntime:
                 endpoint,
                 content=payload.encode("utf-8"),
                 headers=request_headers,
-                timeout=timeout,
+                timeout=min(timeout, 5.0),  # Cap at 5s for fail-fast behavior
             )
             return response.status_code, response.text
         except httpx.HTTPStatusError as exc:
