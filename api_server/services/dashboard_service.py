@@ -15,6 +15,7 @@ import collections
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, wait as futures_wait
 from threading import RLock
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Callable
@@ -45,8 +46,9 @@ class DashboardService:
     of truth for all shared dicts/deques.
     """
 
-    _HEALTH_PROBE_TTL_SECONDS = 5.0
+    _HEALTH_PROBE_TTL_SECONDS = 15.0   # Probe every 15s (not on every health call)
     _HEALTH_BACKEND_SLOW_LATENCY_MS = 1500
+    _HEALTH_PROBE_TIMEOUT_S = 1.0      # Give up fast; health endpoint must be snappy
     _SIMULATOR_VERSION = "simulator-api-0.4.0"
 
     def __init__(
@@ -98,7 +100,7 @@ class DashboardService:
         start = monotonic()
         latency_ms: int | None = None
         try:
-            with urlopen(Request(endpoint, method="GET"), timeout=3.0) as response:
+            with urlopen(Request(endpoint, method="GET"), timeout=self._HEALTH_PROBE_TIMEOUT_S) as response:
                 latency_ms = int((monotonic() - start) * 1000)
                 ok = int(response.getcode() or 0) == 200
             with self._health_state.lock:
@@ -189,10 +191,18 @@ class DashboardService:
         callers (current ``HealthStatusPanel``) keep using the flat keys for
         one release cycle before they are removed.
         """
-        # Refresh probes (TTL-gated, so cheap when called often).
-        self.probe_backend_cached()
-        self.probe_model_api_cached()
-        db_ok, db_latency_ms = self._measure_database_health()
+        # Refresh probes in parallel (TTL-gated, so a no-op when still fresh).
+        # Run in a 1.5s-bounded thread pool so a slow/unreachable backend
+        # never makes the health endpoint hang.
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="sim-probe") as pool:
+            f_backend = pool.submit(self.probe_backend_cached)
+            f_model = pool.submit(self.probe_model_api_cached)
+            f_db = pool.submit(self._measure_database_health)
+            futures_wait([f_backend, f_model, f_db], timeout=1.5)
+        try:
+            db_ok, db_latency_ms = f_db.result(timeout=0)
+        except Exception:
+            db_ok, db_latency_ms = False, None
 
         with self._lock:
             session_count = len(self._sessions)

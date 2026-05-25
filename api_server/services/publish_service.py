@@ -19,9 +19,14 @@ from __future__ import annotations
 import json as _json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import RLock
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Callable
+
+# Max worker threads for parallel per-device HTTP publish.
+# Each device gets its own thread so N-device fleets publish in ~1× latency.
+_PUBLISH_WORKER_THREADS = int(os.environ.get("SIM_PUBLISH_WORKERS", "8"))
 
 import httpx
 
@@ -192,10 +197,34 @@ class PublishService:
     def execute_pending_tick_publish(
         self, pending_publishes: list[PendingDevicePublish] | None
     ) -> None:
+        """Publish all pending devices in parallel using a thread pool.
+
+        N devices publish in ~1× HTTP latency instead of N× latency.
+        Each device failure is isolated — one device error doesn't block others.
+        """
         if not pending_publishes:
             return
-        for pending_publish in pending_publishes:
-            self.execute_single_device_publish(pending_publish)
+        if len(pending_publishes) == 1:
+            self.execute_single_device_publish(pending_publishes[0])
+            return
+        with ThreadPoolExecutor(
+            max_workers=min(len(pending_publishes), _PUBLISH_WORKER_THREADS),
+            thread_name_prefix="sim-publish",
+        ) as pool:
+            futures = {
+                pool.submit(self.execute_single_device_publish, p): p.device_id
+                for p in pending_publishes
+            }
+            for future in as_completed(futures):
+                device_id = futures[future]
+                try:
+                    future.result()
+                except Exception:
+                    logger.warning(
+                        "Parallel publish failed for device %s",
+                        device_id,
+                        exc_info=True,
+                    )
 
     def execute_single_device_publish(
         self,

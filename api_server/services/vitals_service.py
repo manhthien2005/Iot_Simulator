@@ -71,41 +71,72 @@ class VitalsService:
         self.sessions = sessions
         self._bp_last_observed = bp_last_observed
         self._lock = lock
+        # Cache: device_id → VitalsSample, updated after each tick.
+        # Reads bypass the global lock entirely (dict read is GIL-safe for
+        # single-key lookup); writes use a lightweight threading.Lock.
+        self._cache: dict[str, VitalsSample] = {}
+        from threading import Lock as _Lock
+        self._cache_write_lock = _Lock()
+
+    # ------------------------------------------------------------------
+    # Cache management (called by runtime after each tick)
+    # ------------------------------------------------------------------
+
+    def update_vitals_cache(self, device_id: str, sample: VitalsSample) -> None:
+        """Update the in-memory vitals cache. O(1), minimal contention."""
+        with self._cache_write_lock:
+            self._cache[device_id] = sample
+
+    def invalidate_cache(self, device_id: str) -> None:
+        """Remove device from cache (called on device stop/unbind)."""
+        self._cache.pop(device_id, None)
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def latest_vitals(self, device_id: str) -> VitalsSample:
+        # Fast path: return from cache (no global lock needed).
+        cached = self._cache.get(device_id)
+        if cached is not None:
+            return cached
+        # Fallback: scan session outputs (first call before any tick).
         with self._lock:
             for record in self.sessions.values():
                 for payload in reversed(record.last_tick_outputs):
                     if payload.get("device_id") == device_id:
-                        raw_vitals = payload.get("vitals") or {}
-                        payload_state = payload.get("state") or {}
-                        source_mode = str(record.source_modes.get(device_id, "synthetic") or "synthetic").strip().lower()
-                        has_bp = (
-                            raw_vitals.get("blood_pressure_sys") is not None
-                            and raw_vitals.get("blood_pressure_dia") is not None
-                        )
-                        bp_observation_age_sec, bp_is_stale = self._compute_bp_staleness(device_id, has_bp=has_bp)
-                        sample = self.to_vitals(
-                            raw_vitals,
-                            stale=record.status != "running",
-                            emitted_at=str(payload.get("emitted_at") or ""),
-                            activity_state=str(payload_state.get("activity_state") or "unknown"),
-                            is_sleeping=_is_sleeping_state(payload_state.get("activity_state")),
-                            source_mode=source_mode,
-                            device_id=device_id,
-                            bp_observation_age_sec=bp_observation_age_sec,
-                            bp_is_stale=bp_is_stale,
-                        )
-                        activity_state = str(payload_state.get("activity_state") or "").strip().lower()
-                        fall_variant = str(payload_state.get("fall_variant") or "").strip().lower()
-                        if activity_state == "fall" and fall_variant != "fall_brief":
-                            return sample.model_copy(update={"severity": "critical"})
+                        sample = self._build_sample_from_payload(payload, record, device_id)
+                        self.update_vitals_cache(device_id, sample)
                         return sample
             raise KeyError(f"No vitals found for device: {device_id}")
+
+    def _build_sample_from_payload(
+        self, payload: dict, record: "SessionRecord", device_id: str
+    ) -> VitalsSample:
+        raw_vitals = payload.get("vitals") or {}
+        payload_state = payload.get("state") or {}
+        source_mode = str(record.source_modes.get(device_id, "synthetic") or "synthetic").strip().lower()
+        has_bp = (
+            raw_vitals.get("blood_pressure_sys") is not None
+            and raw_vitals.get("blood_pressure_dia") is not None
+        )
+        bp_observation_age_sec, bp_is_stale = self._compute_bp_staleness(device_id, has_bp=has_bp)
+        sample = self.to_vitals(
+            raw_vitals,
+            stale=record.status != "running",
+            emitted_at=str(payload.get("emitted_at") or ""),
+            activity_state=str(payload_state.get("activity_state") or "unknown"),
+            is_sleeping=_is_sleeping_state(payload_state.get("activity_state")),
+            source_mode=source_mode,
+            device_id=device_id,
+            bp_observation_age_sec=bp_observation_age_sec,
+            bp_is_stale=bp_is_stale,
+        )
+        activity_state = str(payload_state.get("activity_state") or "").strip().lower()
+        fall_variant = str(payload_state.get("fall_variant") or "").strip().lower()
+        if activity_state == "fall" and fall_variant != "fall_brief":
+            return sample.model_copy(update={"severity": "critical"})
+        return sample
 
     # ------------------------------------------------------------------
     # BP staleness tracking

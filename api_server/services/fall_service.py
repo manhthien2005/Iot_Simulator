@@ -516,8 +516,25 @@ class FallService:
     # -----------------------------------------------------------------------
 
     def inject_event(self, device_id: str, event_type: str, variant: str | None) -> None:
+        """Inject event into simulator. AI inference runs OUTSIDE the global lock.
+
+        Architecture (fall_detected path):
+        Phase 1 [lock]: simulator state changes, canonical event pre-record, tick
+        Phase 2 [no lock]: HTTP AI inference (blocking I/O, can take 100ms-1s)
+        Phase 3 [lock]: store AI verdict, update device state, build alert effects
+        """
         from api_server.models import SessionSideEffects, PendingAlertCall
         effects = SessionSideEffects()
+        # Data collected in Phase 1 for use in Phase 2/3
+        _p2_device_id: str = device_id
+        _p2_motion: dict | None = None
+        _p2_variant: str = variant or ""
+        _p2_canonical_event: "EventRecord | None" = None
+        _p2_policy: _FallVariantPolicy | None = None
+        _p2_need_ai = False
+        _p2_payload: dict | None = None
+        _p2_record_id: str | None = None
+        _p2_persona_variant: str | None = None
         with self._lock:
             for record in self.sessions.values():
                 if device_id not in record.device_ids:
@@ -591,59 +608,27 @@ class FallService:
                 if record.status == "running":
                     effects.extend(self._tick_session_locked(record, force=True))
 
-                # ---- AI verdict + variant policy application (fall only) ----
+                # ---- Collect data for Phase 2 (AI call, outside lock) ----
                 ai_verdict: AIPrediction | None = None
                 motion_ref: MotionWindowRef | None = None
                 pre_trigger_evidence: PreTriggerEvidence | None = None
                 severity = "warning"
                 if event_type == "fall_detected" and policy is not None:
-                    payload = self._latest_motion_payload_locked(record, device_id)
-                    motion = (payload or {}).get("motion") or {}
-                    # Phase 2 — capture pre-trigger evidence on the same
-                    # motion window the AI sees, so the FE Fall Lab
-                    # pipeline strip (Section B stage 2) renders BE truth.
-                    pre_trigger_evidence = self._compute_pre_trigger_evidence(motion)
-                    if pre_trigger_evidence is not None:
-                        self._fall_pre_trigger_results[device_id] = pre_trigger_evidence
-                    ai_verdict = self._call_fall_ai_locked(
-                        motion, device_id, variant or ""
-                    )
-                    motion_ref = self._build_motion_window_ref(payload, variant or "")
-                    self._fall_predictions[device_id] = ai_verdict
-                    if motion_ref is not None:
-                        self._fall_motion_refs[device_id] = motion_ref
+                    _p2_payload = self._latest_motion_payload_locked(record, device_id)
+                    _p2_motion = (_p2_payload or {}).get("motion") or {}
+                    _p2_policy = policy
+                    _p2_canonical_event = canonical_fall_event
+                    _p2_need_ai = True
+                    _p2_record_id = record.id
+                    _p2_persona_variant = persona_variant
+                    # Set device state immediately (before AI — keeps FE responsive)
+                    if device_id in self.devices:
+                        self.devices[device_id].state = policy.device_state_on_inject  # type: ignore[assignment]
                     self._fall_countdown_policies[device_id] = CountdownPolicy(
                         totalSec=int(policy.countdown_sec),
                         autoResolve=bool(policy.auto_resolve),
                         allowsCancel=bool(policy.allows_cancel),
                     )
-                    if device_id in self.devices:
-                        self.devices[device_id].state = policy.device_state_on_inject  # type: ignore[assignment]
-                    severity = self._override_severity_from_verdict(policy, ai_verdict)
-                    # Mutate the canonical event we pre-recorded with the
-                    # final severity + AI metadata so the FE / Recent Events
-                    # feed shows a single coherent record.
-                    if canonical_fall_event is not None:
-                        canonical_fall_event.severity = severity
-                        canonical_fall_event.metadata["ai_label"] = ai_verdict.label
-                        canonical_fall_event.metadata["ai_probability"] = (
-                            f"{ai_verdict.probability:.4f}"
-                        )
-                        canonical_fall_event.metadata["ai_band"] = ai_verdict.riskBand
-                        canonical_fall_event.metadata["ai_status"] = (
-                            ai_verdict.modelStatus
-                        )
-                    # ADR-024 S14: emit imu_predict flow event.
-                    self._publish_flow_event(record.id, {
-                        "step": "imu_predict",
-                        "device_id": device_id,
-                        "status": "done" if ai_verdict.modelStatus == "ok" else "error",
-                        "payload": {
-                            "label": ai_verdict.label,
-                            "confidence": round(ai_verdict.confidence, 3),
-                            "model_status": ai_verdict.modelStatus,
-                        },
-                    })
 
                 # ---- Non-fall event recording (single source of truth) ----
                 if event_type != "fall_detected":
@@ -666,69 +651,72 @@ class FallService:
                         metadata={"variant": variant or ""},
                     )
 
-                # ---- Backend alert webhook (conditional on policy + AI) ----
-                if event_type == "fall_detected" and policy is not None:
-                    should_push = policy.push_alert
-                    if ai_verdict is not None and ai_verdict.highPriorityAlert:
-                        # AI escalation overrides a non-pushing policy.
-                        should_push = True
-                    if should_push:
-                        # Confidence bridge (Module FA-2 fix): the BE's
-                        # `_pick_float(metadata, "confidence")` gate keys
-                        # off this single field.  We send
-                        # ``max(ai_probability, simulated_confidence)``
-                        # so:
-                        #   - The AI verdict is honoured when it's high
-                        #     enough to clear the BE threshold (0.7),
-                        #   - Each variant has a deterministic floor so
-                        #     test scenarios reach the right BE branch
-                        #     (soft-alert / SOS / SOS-no-cancel)
-                        #     regardless of the model's mood that day.
-                        ai_prob = (
-                            float(ai_verdict.probability) if ai_verdict else 0.0
-                        )
-                        confidence_value = max(
-                            ai_prob, float(policy.simulated_confidence)
-                        )
-                        effects.pending_alerts.append(
-                            PendingAlertCall(
-                                sim_device_id=device_id,
-                                event_type="fall_detected",
-                                severity=severity,
-                                metadata={
-                                    "variant": variant or "",
-                                    "persona_variant": persona_variant or "",
-                                    "source": "inject_event",
-                                    "timestamp": _utc_now_iso(),
-                                    "ai_label": ai_verdict.label if ai_verdict else "unknown",
-                                    "ai_probability": (
-                                        f"{ai_verdict.probability:.4f}" if ai_verdict else "0.0"
-                                    ),
-                                    "ai_band": ai_verdict.riskBand if ai_verdict else "normal",
-                                    # The canonical field the BE reads.
-                                    "confidence": f"{confidence_value:.4f}",
-                                    "simulated_confidence": (
-                                        f"{policy.simulated_confidence:.4f}"
-                                    ),
-                                    # P0-4: forward BE-side IDs so /telemetry/alert
-                                    # dedups against the row /imu-window already
-                                    # persisted instead of inserting a duplicate.
-                                    **(
-                                        {"fall_event_id": str(ai_verdict.fallEventId)}
-                                        if ai_verdict and ai_verdict.fallEventId is not None
-                                        else {}
-                                    ),
-                                    **(
-                                        {"model_request_id": ai_verdict.modelRequestId}
-                                        if ai_verdict and ai_verdict.modelRequestId
-                                        else {}
-                                    ),
-                                },
-                            )
-                        )
                 break
             else:
                 raise KeyError(f"Device not found in active sessions: {device_id}")
+
+        # ── Phase 2: AI inference (OUTSIDE lock) ─────────────────────────
+        # HTTP call to mobile BE — can take 100ms-1s. Must NOT hold global lock.
+        if _p2_need_ai and _p2_policy is not None:
+            pre_trigger_evidence = self._compute_pre_trigger_evidence(_p2_motion)
+            ai_verdict = self._call_fall_ai_locked(_p2_motion, _p2_device_id, _p2_variant)
+            motion_ref = self._build_motion_window_ref(_p2_payload, _p2_variant)
+
+            # ── Phase 3: Store results (re-acquire lock) ──────────────────
+            with self._lock:
+                if pre_trigger_evidence is not None:
+                    self._fall_pre_trigger_results[_p2_device_id] = pre_trigger_evidence
+                self._fall_predictions[_p2_device_id] = ai_verdict
+                if motion_ref is not None:
+                    self._fall_motion_refs[_p2_device_id] = motion_ref
+                severity = self._override_severity_from_verdict(_p2_policy, ai_verdict)
+                if _p2_canonical_event is not None:
+                    _p2_canonical_event.severity = severity
+                    _p2_canonical_event.metadata["ai_label"] = ai_verdict.label
+                    _p2_canonical_event.metadata["ai_probability"] = f"{ai_verdict.probability:.4f}"
+                    _p2_canonical_event.metadata["ai_band"] = ai_verdict.riskBand
+                    _p2_canonical_event.metadata["ai_status"] = ai_verdict.modelStatus
+
+            if _p2_record_id:
+                self._publish_flow_event(_p2_record_id, {
+                    "step": "imu_predict",
+                    "device_id": _p2_device_id,
+                    "status": "done" if ai_verdict.modelStatus == "ok" else "error",
+                    "payload": {
+                        "label": ai_verdict.label,
+                        "confidence": round(ai_verdict.confidence, 3),
+                        "model_status": ai_verdict.modelStatus,
+                    },
+                })
+
+            # Build alert effects with AI verdict (outside lock — just list construction)
+            should_push = _p2_policy.push_alert
+            if ai_verdict.highPriorityAlert:
+                should_push = True
+            if should_push:
+                ai_prob = float(ai_verdict.probability) if ai_verdict else 0.0
+                confidence_value = max(ai_prob, float(_p2_policy.simulated_confidence))
+                effects.pending_alerts.append(
+                    PendingAlertCall(
+                        sim_device_id=_p2_device_id,
+                        event_type="fall_detected",
+                        severity=severity,
+                        metadata={
+                            "variant": _p2_variant,
+                            "persona_variant": _p2_persona_variant or "",
+                            "source": "inject_event",
+                            "timestamp": _utc_now_iso(),
+                            "ai_label": ai_verdict.label,
+                            "ai_probability": f"{ai_verdict.probability:.4f}",
+                            "ai_band": ai_verdict.riskBand,
+                            "confidence": f"{confidence_value:.4f}",
+                            "simulated_confidence": f"{_p2_policy.simulated_confidence:.4f}",
+                            **({"fall_event_id": str(ai_verdict.fallEventId)} if ai_verdict.fallEventId else {}),
+                            **({"model_request_id": ai_verdict.modelRequestId} if ai_verdict.modelRequestId else {}),
+                        },
+                    )
+                )
+
         self._run_session_side_effects(effects)
 
     def fall_state(self, session_id: str, device_id: str) -> FallState:

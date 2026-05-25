@@ -1470,6 +1470,8 @@ class SimulatorRuntime:
                 source_mode=str(vitals_payload.get("source_mode") or record.source_modes.get(str(device_id), "synthetic")),
                 device_id=str(device_id),
             )
+            # Push to cache: latest_vitals reads from here without acquiring global lock
+            self.vitals_service.update_vitals_cache(str(device_id), vitals_sample)
             is_sleeping = _is_sleeping_state(state.get("activity_state"))
             if is_sleeping:
                 spo2 = vitals_sample.spo2 or 99.0
