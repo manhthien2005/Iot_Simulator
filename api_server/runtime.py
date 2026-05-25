@@ -22,6 +22,13 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import httpx
+
+# Shared persistent HTTP client for outbound calls (alert push, IMU window, etc.)
+# Reuses TCP connections to prevent Windows socket port exhaustion.
+_shared_http_client = httpx.Client(
+    timeout=httpx.Timeout(connect=3.0, read=8.0, write=8.0, pool=3.0),
+    limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+)
 from sqlalchemy import text
 
 from api_server.config import load_sleep_scenarios
@@ -679,11 +686,10 @@ class SimulatorRuntime:
         if headers:
             request_headers.update(headers)
         try:
-            response = httpx.post(
+            response = _shared_http_client.post(
                 endpoint,
                 content=payload.encode("utf-8"),
                 headers=request_headers,
-                timeout=5,  # Fail fast — backend not available → don't block
             )
             return response.status_code
         except httpx.HTTPStatusError as exc:
@@ -709,11 +715,10 @@ class SimulatorRuntime:
         if headers:
             request_headers.update(headers)
         try:
-            response = httpx.post(
+            response = _shared_http_client.post(
                 endpoint,
                 content=payload.encode("utf-8"),
                 headers=request_headers,
-                timeout=min(timeout, 5.0),  # Cap at 5s for fail-fast behavior
             )
             return response.status_code, response.text
         except httpx.HTTPStatusError as exc:

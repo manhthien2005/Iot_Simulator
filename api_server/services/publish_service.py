@@ -24,11 +24,19 @@ from threading import RLock
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Callable
 
+import httpx
+
+# Shared persistent HTTP client — reuses TCP connections (keep-alive).
+# Prevents Windows socket port exhaustion from per-request connections.
+# Thread-safe: httpx.Client uses connection pooling internally.
+_http_client = httpx.Client(
+    timeout=httpx.Timeout(connect=3.0, read=8.0, write=8.0, pool=3.0),
+    limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+)
+
 # Max worker threads for parallel per-device HTTP publish.
 # Each device gets its own thread so N-device fleets publish in ~1× latency.
 _PUBLISH_WORKER_THREADS = int(os.environ.get("SIM_PUBLISH_WORKERS", "8"))
-
-import httpx
 
 from api_server.db import session_scope
 from api_server.models import (
@@ -158,11 +166,10 @@ class PublishService:
             request_headers["X-Internal-Secret"] = secret
 
         try:
-            response = httpx.post(
+            response = _http_client.post(
                 endpoint,
                 content=payload_json.encode("utf-8"),
                 headers=request_headers,
-                timeout=10,
             )
         except Exception as exc:
             logger.warning("HTTP vitals publish failed", exc_info=True)
