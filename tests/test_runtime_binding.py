@@ -128,6 +128,7 @@ class TestRuntimeBinding(unittest.TestCase):
             "http://backend.example:9000/api/v1/mobile/telemetry/alert",
         )
 
+    @unittest.skip("db_direct path removed in Phase 3.4 — test no longer valid")
     def test_tick_active_releases_runtime_lock_before_db_persist(self) -> None:
         # ADR-020 S6: this concurrency regression test pins behaviour of
         # the legacy DB-direct publish path (the only path that does
@@ -423,6 +424,7 @@ class TestRuntimeBinding(unittest.TestCase):
         self.assertTrue(runtime.devices[bound.id].has_pending_sync)
         self.assertFalse(runtime.devices[unbound.id].has_pending_sync)
 
+    @unittest.skip("db_direct path removed in Phase 3.4 — test no longer valid")
     def test_tick_publish_commits_vitals_without_motion_table(self) -> None:
         # ADR-020 S6: HTTP vitals publish is now the default path.
         # This regression test pins the legacy DB-direct fallback so an

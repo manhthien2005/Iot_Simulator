@@ -16,7 +16,7 @@ _ENV_CANDIDATES = [
 ]
 for _env_path in _ENV_CANDIDATES:
     if _env_path.exists():
-        load_dotenv(_env_path, override=False)
+        load_dotenv(_env_path, override=True)
         break
 
 from api_server.middleware.rate_limit import RateLimitMiddleware
