@@ -12,12 +12,14 @@ export function useRecentEvents(
   limit = 10,
   refetchInterval: number = POLL_INTERVALS.events,
   options?: UseRecentEventsOptions,
+  deviceId?: string | null,
 ) {
   return useQuery({
-    queryKey: ["events", "recent", limit],
+    // deviceId is included so switching devices invalidates the cache and
+    // triggers a fresh fetch rather than returning the previous device's events.
+    queryKey: ["events", "recent", limit, deviceId ?? null],
     queryFn: () => fetchRecentEvents(limit),
     refetchInterval,
     ...options,
   });
 }
-

@@ -96,6 +96,7 @@ export function FallLabPage() {
       enabled: Boolean(focusDeviceId),
       select: (events) => events.filter((e) => e.deviceId === focusDeviceId).slice(0, 20),
     },
+    focusDeviceId || null,
   );
 
   const [pendingVariant, setPendingVariant] = useState<FallVariantId | null>(null);
